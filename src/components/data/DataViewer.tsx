@@ -13,6 +13,7 @@ import {
 import { EntityMetadata, FieldMetadata } from '../../../shared/types';
 import { RecordDetailDrawer } from './RecordDetailDrawer';
 import { ImageFieldComponent, isImageField } from './ImageFieldComponent';
+import { EntitySearchSelect } from './EntitySearchSelect';
 
 interface DataViewerProps {
   entities: EntityMetadata[];
@@ -174,20 +175,12 @@ export const DataViewer: React.FC<DataViewerProps> = ({
             <Search className="w-4 h-4 text-sky-600" />
             <h3 className="text-sm font-semibold text-slate-900">单条数据精准钻取与多维查询</h3>
           </div>
-          <div className="flex items-center space-x-1.5 text-xs bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200">
-            <span className="text-slate-500">所属对象:</span>
-            <select
-              value={selectedEntityApiKey}
-              onChange={(e) => setSelectedEntityApiKey(e.target.value)}
-              className="bg-transparent text-sky-700 font-mono font-medium focus:outline-none"
-            >
-              {entities.map((e) => (
-                <option key={e.apiKey} value={e.apiKey}>
-                  {e.label} ({e.apiKey})
-                </option>
-              ))}
-            </select>
-          </div>
+          <EntitySearchSelect
+            entities={entities}
+            value={selectedEntityApiKey}
+            onChange={(newKey) => setSelectedEntityApiKey(newKey)}
+            labelPrefix="所属对象:"
+          />
         </div>
 
         {/* 智能输入框 */}

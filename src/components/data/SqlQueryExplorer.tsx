@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { EntityMetadata, QueryResultData, ScrollProgress } from '../../../shared/types';
+import { EntitySearchSelect } from './EntitySearchSelect';
 
 interface SqlQueryExplorerProps {
   entities: EntityMetadata[];
@@ -169,21 +170,13 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
               <h3 className="text-base font-semibold text-slate-900">SQL 数据查询与探索器</h3>
             </div>
 
-            {/* 实体快速切换 */}
-            <div className="flex items-center space-x-1.5 text-xs bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200">
-              <span className="text-slate-500">快速对齐对象:</span>
-              <select
-                value={selectedEntityApiKey}
-                onChange={(e) => handleEntityChange(e.target.value)}
-                className="bg-transparent text-sky-700 font-mono font-medium focus:outline-none cursor-pointer"
-              >
-                {entities.map((e) => (
-                  <option key={e.apiKey} value={e.apiKey}>
-                    {e.label} ({e.apiKey})
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* 实体快速切换 (支持实时搜索) */}
+            <EntitySearchSelect
+              entities={entities}
+              value={selectedEntityApiKey}
+              onChange={handleEntityChange}
+              labelPrefix="快速对齐对象:"
+            />
           </div>
 
           {/* 模式选择与功能按键 */}

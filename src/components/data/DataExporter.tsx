@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { EntityMetadata, FieldMetadata, ScrollProgress } from '../../../shared/types';
+import { EntitySearchSelect } from './EntitySearchSelect';
 
 interface DataExporterProps {
   entities: EntityMetadata[];
@@ -158,20 +159,12 @@ export const DataExporter: React.FC<DataExporterProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 text-xs bg-slate-50 px-3 py-1 rounded-xl border border-slate-200">
-            <span className="text-slate-500">导出对象:</span>
-            <select
-              value={selectedEntityApiKey}
-              onChange={(e) => setSelectedEntityApiKey(e.target.value)}
-              className="bg-transparent text-sky-700 font-mono font-medium focus:outline-none"
-            >
-              {entities.map((e) => (
-                <option key={e.apiKey} value={e.apiKey}>
-                  {e.label} ({e.apiKey})
-                </option>
-              ))}
-            </select>
-          </div>
+          <EntitySearchSelect
+            entities={entities}
+            value={selectedEntityApiKey}
+            onChange={(newKey) => setSelectedEntityApiKey(newKey)}
+            labelPrefix="导出对象:"
+          />
         </div>
 
         {/* 字段勾选区域 */}

@@ -13,6 +13,7 @@ import { EntityMetadata, FieldMetadata } from '../../../shared/types';
 import { ReferenceLookupInput } from './ReferenceLookupInput';
 import { ImageFieldComponent, isImageField } from './ImageFieldComponent';
 import { BatchDataImportModal } from './BatchDataImportModal';
+import { EntitySearchSelect } from './EntitySearchSelect';
 import { FileSpreadsheet } from 'lucide-react';
 
 interface DataEditorProps {
@@ -348,25 +349,17 @@ export const DataEditor: React.FC<DataEditorProps> = ({
               </button>
             </div>
 
-            {/* 对象选择 */}
-            <div className="flex items-center space-x-1.5 text-xs bg-slate-50 px-3 py-1 rounded-xl border border-slate-200">
-              <span className="text-slate-500">操作对象:</span>
-              <select
-                value={selectedEntityApiKey}
-                onChange={(e) => {
-                  setSelectedEntityApiKey(e.target.value);
-                  setFormData({});
-                  setLookupNames({});
-                }}
-                className="bg-transparent text-sky-700 font-mono font-medium focus:outline-none cursor-pointer"
-              >
-                {entities.map((e) => (
-                  <option key={e.apiKey} value={e.apiKey}>
-                    {e.label} ({e.apiKey})
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* 操作对象 (带搜索框) */}
+            <EntitySearchSelect
+              entities={entities}
+              value={selectedEntityApiKey}
+              onChange={(newKey) => {
+                setSelectedEntityApiKey(newKey);
+                setFormData({});
+                setLookupNames({});
+              }}
+              labelPrefix="操作对象:"
+            />
           </div>
 
           {/* 视图切换 */}
