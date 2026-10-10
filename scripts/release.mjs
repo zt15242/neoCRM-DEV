@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 
 const pkgPath = new URL('../package.json', import.meta.url);
+const headerPath = new URL('../src/components/Header.tsx', import.meta.url);
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
 
 const args = process.argv.slice(2);
@@ -20,14 +21,20 @@ if (bumpType && ['patch', 'minor', 'major'].includes(bumpType)) {
   console.log(`[Release] 版本号自动升级: v${pkg.version} -> v${newVer}`);
   pkg.version = newVer;
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8');
-  execSync(`git add package.json && git commit -m "chore(release): bump version to v${newVer}"`, { stdio: 'inherit' });
+
+  if (fs.existsSync(headerPath)) {
+    let headerContent = fs.readFileSync(headerPath, 'utf-8');
+    headerContent = headerContent.replace(/<span>v\d+\.\d+\.\d+<\/span>/, `<span>v${newVer}</span>`);
+    fs.writeFileSync(headerPath, headerContent, 'utf-8');
+  }
+
+  execSync(`git add package.json src/components/Header.tsx && git commit -m "chore(release): bump version to v${newVer}"`, { stdio: 'inherit' });
 }
 
 const tag = `v${pkg.version}`;
 console.log(`[Release] 正在创建并推送 Git 标签 ${tag} 以触发云端自动打包...`);
 
 try {
-  // 如果本地已有同名 tag 则先删除再重建
   try {
     execSync(`git tag -d ${tag}`, { stdio: 'ignore' });
   } catch {}
