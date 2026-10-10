@@ -73,3 +73,31 @@ npm run dev
   ```bash
   npm run dist:win
   ```
+
+---
+
+## 自动打包与持续集成 (CI/CD)
+
+项目已内置 GitHub Actions 自动化多平台流水线（`.github/workflows/release.yml`）：
+
+### 1. 自动触发打包发布
+当需要发布新版本并自动打包 macOS 与 Windows 安装包时，在本地终端运行：
+```bash
+# 方式 1: 直接基于当前版本创建 Tag 并推送触发构建
+npm run release
+
+# 方式 2: 自动将版本提升一个修订号 (如 1.2.0 -> 1.2.1) 并推送触发
+npm run release:patch
+
+# 方式 3: 自动提升次版本号 (如 1.2.0 -> 1.3.0) 并推送触发
+npm run release:minor
+```
+
+### 2. GitHub 自动化流水线行为
+* **双平台并行云端构建**：
+  * **macOS Runner**：自动构建 Apple Silicon 与 Intel 芯片架构的 `.dmg` 和 `.zip`；
+  * **Windows Runner**：自动构建 `.exe`（包含 NSIS 安装版与绿色便携版）。
+* **自动化资产归档与发布**：
+  * 自动将各平台编译好的安装包上传归档至 GitHub Releases；
+  * 自动生成更新版本说明与 SHA 校验；
+  * 客户端内“检查更新”功能将自动感知该 Release，支持在应用内直接流式下载更新包！

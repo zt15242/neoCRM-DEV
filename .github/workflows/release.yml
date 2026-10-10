@@ -1,0 +1,87 @@
+name: Build and Release NeoCRM Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (例如 v1.2.0，留空则仅构建不发布)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Use Global Registry on Cloud Runner
+        run: node -e "const fs=require('fs'); if(fs.existsSync('.npmrc')) fs.unlinkSync('.npmrc');"
+
+      - name: Install Dependencies
+        run: npm install
+
+      # macOS 构建
+      - name: Build macOS Application (.dmg & .zip)
+        if: matrix.os == 'macos-latest'
+        run: npm run dist:mac -- --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Windows 构建
+      - name: Build Windows Application (.exe)
+        if: matrix.os == 'windows-latest'
+        run: npm run dist:win -- --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 上传构建产物至 GitHub Artifacts (可在 Actions 运行记录中直接下载)
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeoCRM-Desktop-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.yml
+          retention-days: 14
+
+      # 发布到 GitHub Releases (当有 tag 触发或手动指定了 release_tag 时)
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: NeoCRM Desktop ${{ github.event.inputs.release_tag || github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

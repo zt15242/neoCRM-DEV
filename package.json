@@ -9,7 +9,10 @@
     "start": "electron .",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
-    "dist:all": "npm run build && electron-builder -mw"
+    "dist:all": "npm run build && electron-builder -mw",
+    "release": "node scripts/release.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor"
   },
   "keywords": [
     "neocrm",
