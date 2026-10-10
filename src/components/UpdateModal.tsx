@@ -170,6 +170,11 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             </div>
           </div>
 
+          <div className="flex items-center space-x-1.5 text-[11px] text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>已启用国内高速镜像加速下载 (智能故障切换)，无需科学上网</span>
+          </div>
+
           {/* 下载进度条 */}
           {downloading && progress && (
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
