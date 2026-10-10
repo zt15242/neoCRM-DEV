@@ -3,11 +3,9 @@ import {
   X, 
   Sparkles, 
   Download, 
-  ExternalLink, 
   CheckCircle2, 
   AlertCircle, 
   RefreshCw, 
-  GitBranch, 
   ArrowUpCircle,
   FileBox
 } from 'lucide-react';
@@ -42,7 +40,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       return;
     }
 
-    // 监听主进程推流的下载进度
     const cleanup = window.neoApi?.onDownloadProgress?.((p) => {
       setProgress(p);
     });
@@ -54,7 +51,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   if (!isOpen || !updateInfo) return null;
 
-  // 格式化字节数
   const formatBytes = (bytes: number) => {
     if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
@@ -63,55 +59,48 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  // 开始下载安装包
-  const handleDownload = async () => {
-    if (!updateInfo.downloadUrl) {
-      // 若无直接资源，跳转至 Release 页面
-      window.neoApi.openExternal(updateInfo.releasePageUrl || 'https://github.com/zt15242/neoCRM-DEV/releases');
-      return;
-    }
-
-    setDownloading(true);
-    setErrorMsg('');
-    try {
-      const fileName = updateInfo.assetName || `NeoCRM_Desktop_v${updateInfo.latestVersion}.${navigator.userAgent.includes('Mac') ? 'dmg' : 'exe'}`;
-      const res = await window.neoApi.downloadUpdate(updateInfo.downloadUrl, fileName);
-      if (res.success) {
-        setDownloadSuccess(true);
-        showToast('success', '安装包下载完成！');
-      } else {
-        setErrorMsg(res.error || '下载失败');
+  // 执行更新 (优先下载安装包，无安装包时执行在线热更新同步)
+  const handleUpdate = async () => {
+    if (updateInfo.downloadUrl) {
+      setDownloading(true);
+      setErrorMsg('');
+      try {
+        const fileName = updateInfo.assetName || `NeoCRM_Desktop_v${updateInfo.latestVersion}.${navigator.userAgent.includes('Mac') ? 'dmg' : 'exe'}`;
+        const res = await window.neoApi.downloadUpdate(updateInfo.downloadUrl, fileName);
+        if (res.success) {
+          setDownloadSuccess(true);
+          showToast('success', '更新包下载完成！');
+        } else {
+          setErrorMsg(res.error || '下载失败');
+        }
+      } catch (e: any) {
+        setErrorMsg(`下载异常: ${e.message}`);
+      } finally {
+        setDownloading(false);
       }
-    } catch (e: any) {
-      setErrorMsg(`下载异常: ${e.message}`);
-    } finally {
-      setDownloading(false);
+    } else {
+      // 执行在线代码同步更新
+      setPulling(true);
+      setErrorMsg('');
+      try {
+        const res = await window.neoApi.gitPullUpdate();
+        if (res.success) {
+          showToast('success', '已自动更新至最新版本！重启应用后生效。');
+          onClose();
+        } else {
+          setErrorMsg(`更新失败: ${res.output}`);
+        }
+      } catch (e: any) {
+        setErrorMsg(`更新异常: ${e.message}`);
+      } finally {
+        setPulling(false);
+      }
     }
   };
 
-  // 打开安装包
   const handleOpenInstaller = async () => {
     await window.neoApi.openInstaller();
     onClose();
-  };
-
-  // Git Pull 热更新
-  const handleGitPull = async () => {
-    setPulling(true);
-    setErrorMsg('');
-    try {
-      const res = await window.neoApi.gitPullUpdate();
-      if (res.success) {
-        showToast('success', '代码已通过 Git 同步至最新版本！请重启或刷新应用生效。');
-        onClose();
-      } else {
-        setErrorMsg(`Git 拉取失败: ${res.output}`);
-      }
-    } catch (e: any) {
-      setErrorMsg(`更新异常: ${e.message}`);
-    } finally {
-      setPulling(false);
-    }
   };
 
   return (
@@ -149,7 +138,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             </div>
           )}
 
-          {/* 版本差异状态 */}
           {updateInfo.hasUpdate ? (
             <div className="p-3 bg-sky-50/70 border border-sky-200/80 rounded-xl space-y-1">
               <div className="flex items-center space-x-2">
@@ -159,7 +147,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500">
-                发布时间: {updateInfo.publishedAt ? new Date(updateInfo.publishedAt).toLocaleString() : '最近推送'}
+                发布时间: {updateInfo.publishedAt ? new Date(updateInfo.publishedAt).toLocaleString() : '最近更新'}
               </p>
             </div>
           ) : (
@@ -167,15 +155,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
               <div>
                 <p className="font-semibold text-emerald-950">已是最新版本 (v{updateInfo.currentVersion})</p>
-                <p className="text-emerald-700 mt-0.5">本地代码与远端仓库保持完全一致，无需更新。</p>
+                <p className="text-emerald-700 mt-0.5">当前客户端版本已是最新状态，无需更新。</p>
               </div>
             </div>
           )}
 
-          {/* 更新日志/说明 */}
+          {/* 更新日志 */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              更新内容与提交日志 (Changelog)
+              版本更新说明 (Changelog)
             </label>
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-700 whitespace-pre-wrap font-sans leading-relaxed max-h-36 overflow-y-auto">
               {updateInfo.releaseNotes || '性能提升、UI 优化以及稳定性增强'}
@@ -186,7 +174,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           {downloading && progress && (
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between text-xs">
-                <span className="font-medium text-slate-700">正在下载安装包...</span>
+                <span className="font-medium text-slate-700">正在下载更新包...</span>
                 <span className="font-mono text-sky-600 font-bold">{progress.percent}%</span>
               </div>
               <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
@@ -203,65 +191,40 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           )}
         </div>
 
-        {/* 底部操作栏 */}
-        <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => window.neoApi.openExternal(updateInfo.releasePageUrl || 'https://github.com/zt15242/neoCRM-DEV')}
-              className="text-xs text-slate-500 hover:text-slate-800 flex items-center space-x-1 transition-colors"
-            >
-              <span>查看 GitHub 仓库</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
-          </div>
+        {/* 底部操作栏 (已移除 GitHub 仓库入口，干净纯粹) */}
+        <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end space-x-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-1.5 bg-white hover:bg-slate-100 text-slate-600 text-xs font-medium rounded-lg border border-slate-200 transition-colors"
+          >
+            关闭
+          </button>
 
-          <div className="flex items-center space-x-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-600 text-xs font-medium rounded-lg border border-slate-200 transition-colors"
-            >
-              关闭
-            </button>
-
-            {updateInfo.hasUpdate && (
-              <>
-                {/* 选项 1: Git 代码拉取同步 */}
+          {updateInfo.hasUpdate && (
+            <>
+              {downloadSuccess ? (
                 <button
                   type="button"
-                  onClick={handleGitPull}
-                  disabled={pulling}
-                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 transition-colors flex items-center space-x-1.5"
-                  title="使用 git pull origin main 直接同步最新代码"
+                  onClick={handleOpenInstaller}
+                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-emerald-600/20 transition-all flex items-center space-x-1.5"
                 >
-                  <GitBranch className={`w-3.5 h-3.5 ${pulling ? 'animate-spin text-sky-600' : ''}`} />
-                  <span>{pulling ? '正在拉取...' : 'Git 同步代码'}</span>
+                  <FileBox className="w-3.5 h-3.5" />
+                  <span>立即打开并安装</span>
                 </button>
-
-                {/* 选项 2: 下载安装包或打开 */}
-                {downloadSuccess ? (
-                  <button
-                    type="button"
-                    onClick={handleOpenInstaller}
-                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-emerald-600/20 transition-all flex items-center space-x-1.5"
-                  >
-                    <FileBox className="w-3.5 h-3.5" />
-                    <span>立即打开并安装</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleDownload}
-                    disabled={downloading}
-                    className="px-4 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all flex items-center space-x-1.5 disabled:opacity-50"
-                  >
-                    <Download className={`w-3.5 h-3.5 ${downloading ? 'animate-spin' : ''}`} />
-                    <span>{downloading ? '正在下载...' : '下载安装包更新'}</span>
-                  </button>
-                )}
-              </>
-            )}
-          </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleUpdate}
+                  disabled={downloading || pulling}
+                  className="px-4 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all flex items-center space-x-1.5 disabled:opacity-50"
+                >
+                  <Download className={`w-3.5 h-3.5 ${downloading || pulling ? 'animate-spin' : ''}`} />
+                  <span>{downloading || pulling ? '正在更新...' : '立即更新'}</span>
+                </button>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
