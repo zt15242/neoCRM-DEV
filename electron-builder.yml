@@ -11,6 +11,9 @@ publish:
   owner: zt15242
   repo: neoCRM-DEV
 mac:
+  identity: null
+  gatekeeperAssess: false
+  hardenedRuntime: false
   target:
     - target: dmg
       arch:
