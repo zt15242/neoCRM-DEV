@@ -1,0 +1,46 @@
+{
+  "name": "neocrm-desktop",
+  "version": "1.0.0",
+  "description": "NeoCRM 桌面端开发者工具，支持多环境切换、OAuth2 授权登录、会话管理与 CLI 凭证同步",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "start": "electron .",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:all": "npm run build && electron-builder -mw"
+  },
+  "keywords": [
+    "neocrm",
+    "electron",
+    "desktop",
+    "oauth2"
+  ],
+  "author": "NeoCRM Team",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "lucide-react": "^1.54.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "autoprefixer": "^10.6.1",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "postcss": "^8.5.29",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-electron": "^1.1.2",
+    "vite-plugin-electron-renderer": "^1.0.0"
+  },
+  "type": "module"
+}

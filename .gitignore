@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Production build outputs
+dist/
+dist-electron/
+release/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment & Local tokens
+.env
+.env.local
+.neo-cli/
+*.local
+
+# System files
+.DS_Store
+Thumbs.db
