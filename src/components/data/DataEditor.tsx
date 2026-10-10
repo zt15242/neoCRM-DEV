@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { EntityMetadata, FieldMetadata } from '../../../shared/types';
 import { ReferenceLookupInput } from './ReferenceLookupInput';
+import { BatchDataImportModal } from './BatchDataImportModal';
+import { FileSpreadsheet } from 'lucide-react';
 
 interface DataEditorProps {
   entities: EntityMetadata[];
@@ -40,6 +42,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
 
   // 模式切换: 表单视图 vs JSON 代码视图
   const [viewMode, setViewMode] = useState<'form' | 'json'>('form');
+  const [isBatchImportOpen, setIsBatchImportOpen] = useState(false);
   const [jsonCode, setJsonCode] = useState('{}');
 
   const [loading, setLoading] = useState(false);
@@ -240,6 +243,8 @@ export const DataEditor: React.FC<DataEditorProps> = ({
     }
   };
 
+  const currentEntityObj = entities.find((e) => e.apiKey === selectedEntityApiKey);
+
   return (
     <div className="space-y-4">
       {/* 头部控制栏 (浅色风格) */}
@@ -296,6 +301,16 @@ export const DataEditor: React.FC<DataEditorProps> = ({
           {/* 视图切换 */}
           <div className="flex items-center space-x-2 text-xs">
             <button
+              type="button"
+              onClick={() => setIsBatchImportOpen(true)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-medium rounded-lg transition-all shadow-2xs"
+              title="上传 Excel 表格批量新增或更新业务数据"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Excel 批量导入数据</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setViewMode(viewMode === 'form' ? 'json' : 'form')}
               className="flex items-center space-x-1 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-lg transition-colors border border-slate-200"
             >
@@ -460,6 +475,15 @@ export const DataEditor: React.FC<DataEditorProps> = ({
           </button>
         </div>
       </form>
+      {/* Excel 批量数据导入弹窗 */}
+      <BatchDataImportModal
+        isOpen={isBatchImportOpen}
+        entityApiKey={selectedEntityApiKey}
+        entityLabel={currentEntityObj?.label || selectedEntityApiKey}
+        fields={fields}
+        onClose={() => setIsBatchImportOpen(false)}
+        showToast={showToast}
+      />
     </div>
   );
 };

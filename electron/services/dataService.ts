@@ -19,6 +19,19 @@ export class DataService {
   }
 
   /**
+   * 数据新增与更新专用请求头 (带 xsy-execoption 与 xsy-criteria)
+   */
+  private getDmlHeaders(tokenData: TokenData) {
+    return {
+      Authorization: `Bearer ${tokenData.access_token}`,
+      'Content-Type': 'application/json',
+      'xsy-inner-source': 'bff',
+      'xsy-execoption': '-1025',
+      'xsy-criteria': '10',
+    };
+  }
+
+  /**
    * 从记录对象中按优先级提取人类可读的名称 (Name)
    */
   public extractRecordName(record: Record<string, any>): string {
@@ -107,7 +120,6 @@ export class DataService {
       const res = await axios.get(url, { headers, timeout: 15000 });
       if (res.data?.data || res.data?.result || res.data) {
         const rec = res.data?.data || res.data?.result || res.data;
-        // 顺便写入缓存
         const extractedName = this.extractRecordName(rec);
         if (extractedName) {
           this.nameCache.set(`${entityApiKey}_${id}`, extractedName);
@@ -116,7 +128,6 @@ export class DataService {
       }
       return { success: false, error: '未返回有效记录数据' };
     } catch (e: any) {
-      // 降级通过 SQL 查询
       try {
         const fallbackSql = `SELECT id FROM ${entityApiKey} WHERE id = ${id}`;
         const qRes = await this.executeQuery(env, tokenData, fallbackSql);
@@ -133,7 +144,7 @@ export class DataService {
   }
 
   /**
-   * 智能获取单条记录的显示名称 (包含缓存和智能查找)
+   * 智能获取单条记录的显示名称
    */
   public async getRecordName(
     env: NeoEnvironment,
@@ -162,7 +173,7 @@ export class DataService {
   }
 
   /**
-   * 批量获取指定记录的显示名称 (带并发控制和缓存)
+   * 批量获取指定记录的显示名称
    */
   public async getBatchNames(
     env: NeoEnvironment,
@@ -189,7 +200,6 @@ export class DataService {
       return nameMap;
     }
 
-    // 针对未缓存的记录，进行快速并发单条或查询
     await Promise.all(
       unCachedIds.map(async (id) => {
         try {
@@ -205,7 +215,7 @@ export class DataService {
   }
 
   /**
-   * 搜索实体记录 (用于 Lookup 选择器)
+   * 搜索实体记录
    */
   public async searchRecords(
     env: NeoEnvironment,
@@ -215,7 +225,6 @@ export class DataService {
     limit = 25
   ): Promise<{ success: boolean; records: Record<string, any>[]; error?: string }> {
     const cleanKeyword = keyword.trim();
-    // 优先通过常用字段列表拉取
     let sql = `SELECT id FROM ${entityApiKey} WHERE id > 0 LIMIT ${limit}`;
     if (cleanKeyword && /^\d+$/.test(cleanKeyword)) {
       sql = `SELECT id FROM ${entityApiKey} WHERE id = ${cleanKeyword} LIMIT ${limit}`;
@@ -227,7 +236,6 @@ export class DataService {
     }
 
     const records = res.data.records;
-    // 为返回的每条记录并发补全名称 (如果只有 id)
     await Promise.all(
       records.map(async (r) => {
         let name = this.extractRecordName(r);
@@ -243,6 +251,7 @@ export class DataService {
 
   /**
    * 创建数据记录 (Insert)
+   * 请求头严格携带 xsy-execoption: -1025 与 xsy-criteria: 10
    */
   public async createRecord(
     env: NeoEnvironment,
@@ -251,11 +260,11 @@ export class DataService {
     recordData: Record<string, any>
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const baseUrl = this.getBaseUrl(env, tokenData);
-    const headers = this.getHeaders(tokenData);
+    const headers = this.getDmlHeaders(tokenData);
     const url = `${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}`;
 
     try {
-      const res = await axios.post(url, { data: recordData }, { headers, timeout: 15000 });
+      const res = await axios.post(url, { data: recordData }, { headers, timeout: 20000 });
       if (res.data?.code === 200 || res.data?.code === '200' || res.data?.id || res.data?.data?.id) {
         return { success: true, data: res.data?.data || res.data };
       }
@@ -273,6 +282,7 @@ export class DataService {
 
   /**
    * 更新数据记录 (Update / Patch)
+   * 请求头严格携带 xsy-execoption: -1025 与 xsy-criteria: 10
    */
   public async updateRecord(
     env: NeoEnvironment,
@@ -282,11 +292,11 @@ export class DataService {
     recordData: Record<string, any>
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const baseUrl = this.getBaseUrl(env, tokenData);
-    const headers = this.getHeaders(tokenData);
+    const headers = this.getDmlHeaders(tokenData);
     const url = `${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}/${id}`;
 
     try {
-      const res = await axios.patch(url, { data: recordData }, { headers, timeout: 15000 });
+      const res = await axios.patch(url, { data: recordData }, { headers, timeout: 20000 });
       if (res.data?.code === 200 || res.data?.code === '200' || res.data?.success || res.status === 200) {
         return { success: true, data: res.data?.data || res.data };
       }
