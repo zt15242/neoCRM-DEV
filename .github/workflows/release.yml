@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag (例如 v1.2.0，留空则仅构建不发布)'
+        description: 'Release Tag (例如 v1.2.2，留空则仅构建不发布)'
         required: false
         default: ''
 
@@ -56,7 +56,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 上传构建产物至 GitHub Artifacts (可在 Actions 运行记录中直接下载)
+      # 上传构建产物至 GitHub Artifacts
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -65,23 +65,53 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
-            release/*.yml
+            release/latest*.yml
           retention-days: 14
 
-      # 发布到 GitHub Releases (当有 tag 触发或手动指定了 release_tag 时)
-      - name: Publish to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_tag != ''
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Organize release files
+        run: |
+          mkdir -p release-assets
+          find downloaded-artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "latest*.yml" \) -exec cp {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Prepare Release Notes
+        id: notes
+        run: |
+          if [ -f "RELEASE_NOTES.md" ]; then
+            echo "has_notes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           name: NeoCRM Desktop ${{ github.event.inputs.release_tag || github.ref_name }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: ${{ steps.notes.outputs.has_notes == 'true' && 'RELEASE_NOTES.md' || '' }}
           files: |
-            release/*.dmg
-            release/*.zip
-            release/*.exe
-            release/latest*.yml
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.exe
+            release-assets/latest*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

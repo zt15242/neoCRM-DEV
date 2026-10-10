@@ -18,6 +18,25 @@ interface UpdateModalProps {
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
+/**
+ * 清洗和格式化更新说明，过滤裸链接与重复日志
+ */
+function cleanReleaseNotes(raw?: string): string {
+  if (!raw || typeof raw !== "string") return "性能提升、UI 优化以及稳定性增强";
+  
+  // 过滤 Full Changelog 链接行
+  const lines = raw.split("\n").map(l => l.trim()).filter(l => {
+    return Boolean(l) && !l.toLowerCase().includes("full changelog") && !l.startsWith("http");
+  });
+
+  if (lines.length === 0) {
+    return "性能提升、UI 优化以及稳定性增强";
+  }
+
+  // 去重并拼接
+  return Array.from(new Set(lines)).join("\n");
+}
+
 export const UpdateModal: React.FC<UpdateModalProps> = ({
   isOpen,
   updateInfo,
@@ -166,7 +185,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               版本更新说明 (Changelog)
             </label>
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-700 whitespace-pre-wrap font-sans leading-relaxed max-h-36 overflow-y-auto">
-              {updateInfo.releaseNotes || '性能提升、UI 优化以及稳定性增强'}
+              {cleanReleaseNotes(updateInfo.releaseNotes)}
             </div>
           </div>
 
