@@ -138,6 +138,7 @@ ipcMain.handle('auth:refreshToken', async () => {
 
 ipcMain.handle('auth:logout', async () => {
   authService.cancelActiveAuth();
+  await authService.clearBrowserSession();
   return sessionStore.clearSession();
 });
 

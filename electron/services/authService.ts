@@ -2,7 +2,7 @@ import http from 'node:http';
 import url from 'node:url';
 import net from 'node:net';
 import axios from 'axios';
-import { BrowserWindow, shell } from 'electron';
+import { BrowserWindow, shell, session } from 'electron';
 import { NeoEnvironment, TokenData, UserInfo } from '../types';
 
 export class AuthService {
@@ -284,6 +284,9 @@ export class AuthService {
     return new Promise<TokenData>((resolve, reject) => {
       let isSettled = false;
 
+      // 使用每次全新的独立内存分区 (不带 persist: 前缀)，确保不残留上次账号的 SSO Cookie
+      const cleanPartition = `neocrm_auth_${Date.now()}`;
+
       const authWin = new BrowserWindow({
         width: 820,
         height: 740,
@@ -294,6 +297,7 @@ export class AuthService {
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
+          partition: cleanPartition,
         },
       });
 
@@ -437,6 +441,20 @@ export class AuthService {
   /**
    * 取消当前正在等待的登录请求
    */
+  /**
+   * 清理内嵌浏览器中残留的所有 Cookies 与缓存
+   */
+  public async clearBrowserSession() {
+    try {
+      await session.defaultSession.clearStorageData({
+        storages: ["cookies", "localstorage", "sessionstorage", "cachestorage"],
+      });
+      await session.defaultSession.clearCache();
+    } catch (e) {
+      console.warn("清理浏览器 Session 异常:", e);
+    }
+  }
+
   public cancelActiveAuth() {
     if (this.activeServer) {
       try {
