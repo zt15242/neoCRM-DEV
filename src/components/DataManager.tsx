@@ -27,6 +27,7 @@ export const DataManager: React.FC<DataManagerProps> = ({
 
   const [editRecordId, setEditRecordId] = useState<string | number | undefined>();
   const [editRecordData, setEditRecordData] = useState<Record<string, any> | null>(null);
+  const [viewRecordId, setViewRecordId] = useState<string | number | undefined>();
 
   useEffect(() => {
     window.neoApi?.getEntities?.().then((list) => {
@@ -116,6 +117,7 @@ export const DataManager: React.FC<DataManagerProps> = ({
           <DataViewer
             entities={entities}
             defaultEntityApiKey={activeEntityApiKey}
+            initialRecordId={viewRecordId}
             onNavigateToEdit={handleNavigateToEdit}
             showToast={showToast}
           />

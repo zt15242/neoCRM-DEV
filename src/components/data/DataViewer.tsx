@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, 
   Link2, 
@@ -17,6 +17,7 @@ import { ImageFieldComponent, isImageField } from './ImageFieldComponent';
 interface DataViewerProps {
   entities: EntityMetadata[];
   defaultEntityApiKey: string;
+  initialRecordId?: string | number;
   onNavigateToEdit: (entityApiKey: string, recordId: string | number, recordData: Record<string, any>) => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
@@ -24,6 +25,7 @@ interface DataViewerProps {
 export const DataViewer: React.FC<DataViewerProps> = ({
   entities,
   defaultEntityApiKey,
+  initialRecordId,
   onNavigateToEdit,
   showToast,
 }) => {
@@ -40,6 +42,13 @@ export const DataViewer: React.FC<DataViewerProps> = ({
   const [drawerEntity, setDrawerEntity] = useState('');
   const [drawerId, setDrawerId] = useState<string | number>('');
   const [candidateList, setCandidateList] = useState<Record<string, any>[]>([]);
+
+  useEffect(() => {
+    if (initialRecordId) {
+      setQueryInput(String(initialRecordId));
+      executeQueryById(defaultEntityApiKey || selectedEntityApiKey, initialRecordId);
+    }
+  }, [initialRecordId]);
 
   const parseInput = (raw: string) => {
     const text = raw.trim();

@@ -193,10 +193,10 @@ export class AuthService {
       let isSettled = false;
 
       const server = http.createServer(async (req, res) => {
-        const parsedUrl = url.parse(req.url || "", true);
+        const requestUrl = new URL(req.url || "", `http://localhost:${port}`);
 
         // 忽略 favicon 等非回调请求
-        if (parsedUrl.pathname === "/favicon.ico") {
+        if (requestUrl.pathname === "/favicon.ico") {
           res.writeHead(204);
           return res.end();
         }
@@ -206,7 +206,9 @@ export class AuthService {
           return res.end("OK");
         }
 
-        const { code, error, error_description } = parsedUrl.query;
+        const code = requestUrl.searchParams.get("code");
+        const error = requestUrl.searchParams.get("error");
+        const error_description = requestUrl.searchParams.get("error_description");
 
         if (error) {
           isSettled = true;
@@ -284,8 +286,12 @@ export class AuthService {
     return new Promise<TokenData>((resolve, reject) => {
       let isSettled = false;
 
-      // 使用每次全新的独立内存分区 (不带 persist: 前缀)，确保不残留上次账号的 SSO Cookie
-      const cleanPartition = `neocrm_auth_${Date.now()}`;
+      const authPartition = "neocrm_auth_session";
+      const authSession = session.fromPartition(authPartition);
+      // 弹窗前清空此独立会话的所有历史 Cookies，避免自动用旧账号静默登录
+      authSession.clearStorageData({
+        storages: ["cookies", "sessionstorage", "localstorage"]
+      }).catch(() => {});
 
       const authWin = new BrowserWindow({
         width: 820,
@@ -297,7 +303,7 @@ export class AuthService {
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
-          partition: cleanPartition,
+          partition: authPartition,
         },
       });
 
