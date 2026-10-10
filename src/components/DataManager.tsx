@@ -3,14 +3,16 @@ import {
   Database, 
   Search, 
   Edit3, 
-  FileDown
+  FileDown,
+  Terminal
 } from 'lucide-react';
 import { EntityMetadata } from '../../shared/types';
 import { DataViewer } from './data/DataViewer';
 import { DataEditor } from './data/DataEditor';
 import { DataExporter } from './data/DataExporter';
+import { SqlQueryExplorer } from './data/SqlQueryExplorer';
 
-export type DataSubTab = 'viewer' | 'editor' | 'exporter';
+export type DataSubTab = 'viewer' | 'editor' | 'sql' | 'exporter';
 
 interface DataManagerProps {
   initialEntityApiKey?: string;
@@ -50,6 +52,7 @@ export const DataManager: React.FC<DataManagerProps> = ({
 
   const handleNavigateToView = (entityKey: string, recordId: string | number) => {
     setActiveEntityApiKey(entityKey);
+    setViewRecordId(recordId);
     setSubTab('viewer');
   };
 
@@ -62,12 +65,12 @@ export const DataManager: React.FC<DataManagerProps> = ({
             <Database className="w-5 h-5 text-sky-600" />
             <h2 className="text-sm font-semibold text-slate-900">数据中心与全功能工作台</h2>
           </div>
-          <span className="text-[11px] text-slate-500 hidden sm:inline">
-            精准钻取 • 关联名称穿透 • Lookup 录入 • 批量导出
+          <span className="text-[11px] text-slate-500 hidden lg:inline">
+            精准钻取 • 关联穿透 • Lookup 录入 • SQL 检索 • 批量导出
           </span>
         </div>
 
-        {/* 3 大核心功能子模块切换 */}
+        {/* 4 大核心功能子模块切换 */}
         <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
           <button
             onClick={() => setSubTab('viewer')}
@@ -95,6 +98,18 @@ export const DataManager: React.FC<DataManagerProps> = ({
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>数据插入 / 更新 (Lookup)</span>
+          </button>
+
+          <button
+            onClick={() => setSubTab('sql')}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg transition-all ${
+              subTab === 'sql'
+                ? 'bg-white text-sky-600 font-semibold shadow-xs border border-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            <span>SQL 查询</span>
           </button>
 
           <button
@@ -130,6 +145,16 @@ export const DataManager: React.FC<DataManagerProps> = ({
             initialRecordId={editRecordId}
             initialRecordData={editRecordData}
             onNavigateToView={handleNavigateToView}
+            showToast={showToast}
+          />
+        )}
+
+        {subTab === 'sql' && (
+          <SqlQueryExplorer
+            entities={entities}
+            defaultEntityApiKey={activeEntityApiKey}
+            onNavigateToView={handleNavigateToView}
+            onNavigateToEdit={handleNavigateToEdit}
             showToast={showToast}
           />
         )}
