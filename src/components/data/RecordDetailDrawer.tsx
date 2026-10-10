@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, ExternalLink, RefreshCw, Copy, Check, Layers, AlertCircle } from 'lucide-react';
 import { FieldMetadata } from '../../../shared/types';
+import { ImageFieldComponent, isImageField } from './ImageFieldComponent';
 
 interface RecordDetailDrawerProps {
   isOpen: boolean;
@@ -133,9 +134,20 @@ export const RecordDetailDrawer: React.FC<RecordDetailDrawerProps> = ({
                         </button>
                       </div>
                     </div>
-                    <div className="text-xs font-mono text-slate-700 break-all select-all">
-                      {valStr || <span className="text-slate-400">null</span>}
-                    </div>
+                    {isImageField({ itemType: meta?.itemType, apiKey: key }, value) ? (
+                      <div className="pt-1">
+                        <ImageFieldComponent
+                          fieldApiKey={key}
+                          fieldLabel={label}
+                          value={value}
+                          disabled={true}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-xs font-mono text-slate-700 break-all select-all">
+                        {valStr || <span className="text-slate-400">null</span>}
+                      </div>
+                    )}
                   </div>
                 );
               })}

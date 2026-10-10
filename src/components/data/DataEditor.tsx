@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { EntityMetadata, FieldMetadata } from '../../../shared/types';
 import { ReferenceLookupInput } from './ReferenceLookupInput';
+import { ImageFieldComponent, isImageField } from './ImageFieldComponent';
 import { BatchDataImportModal } from './BatchDataImportModal';
 import { FileSpreadsheet } from 'lucide-react';
 
@@ -400,8 +401,17 @@ export const DataEditor: React.FC<DataEditorProps> = ({
                     </div>
                   </div>
 
-                  {/* 关联字段：专用 ReferenceLookupInput 组件 */}
-                  {isRefer ? (
+                  
+                  {/* 图片字段：专用 ImageFieldComponent 缩略图与上传组件 */}
+                  {isImageField(f, val) ? (
+                    <ImageFieldComponent
+                      fieldApiKey={f.apiKey}
+                      fieldLabel={f.label}
+                      value={val}
+                      disabled={isReadOnly}
+                      onChange={(newVal) => handleFieldChange(f.apiKey, newVal)}
+                    />
+                  ) : isRefer ? (
                     <ReferenceLookupInput
                       fieldApiKey={f.apiKey}
                       fieldLabel={f.label}

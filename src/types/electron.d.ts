@@ -40,6 +40,9 @@ declare global {
       openDesigner: (type: 'web' | 'h5') => Promise<void>;
       getPlatform: () => Promise<string>;
 
+      // 图片操作
+      fetchImageDataUrl: (fileId: string | number) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+      uploadImage: (base64Data: string, fileName: string, mimeType?: string) => Promise<{ success: boolean; fileId?: number | string; fileName?: string; error?: string }>;
       // 自动更新
       checkForUpdates: () => Promise<UpdateInfo>;
       downloadUpdate: (downloadUrl: string, fileName: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;

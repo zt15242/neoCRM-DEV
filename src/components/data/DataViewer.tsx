@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { EntityMetadata, FieldMetadata } from '../../../shared/types';
 import { RecordDetailDrawer } from './RecordDetailDrawer';
+import { ImageFieldComponent, isImageField } from './ImageFieldComponent';
 
 interface DataViewerProps {
   entities: EntityMetadata[];
@@ -289,8 +290,15 @@ export const DataViewer: React.FC<DataViewerProps> = ({
                     <span className="text-[10px] font-mono text-slate-400">{key}</span>
                   </div>
 
-                  {/* 关联字段：大号展示真实名称并提供穿透按钮 */}
-                  {isRefer && value ? (
+                  {/* 图片字段：展示真实缩略图与大图预览 */}
+                  {isImageField({ itemType: meta?.itemType, apiKey: key }, value) ? (
+                    <ImageFieldComponent
+                      fieldApiKey={key}
+                      fieldLabel={label}
+                      value={value}
+                      disabled={true}
+                    />
+                  ) : isRefer && value ? (
                     <div className="flex items-center justify-between bg-sky-50 border border-sky-200 rounded-lg p-2">
                       <div className="min-w-0 pr-1">
                         <span className="text-xs font-semibold text-slate-900 block truncate">

@@ -8,6 +8,7 @@ import { ApiService } from './services/apiService';
 import { MetadataService } from './services/metadataService';
 import { DataService } from './services/dataService';
 import { UpdateService } from './services/updateService';
+import { ImageService } from './services/imageService';
 import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
 
 const currentDir = typeof __dirname !== 'undefined' 
@@ -25,6 +26,7 @@ const apiService = new ApiService();
 const metadataService = new MetadataService();
 const dataService = new DataService();
 const updateService = new UpdateService();
+const imageService = new ImageService();
 
 function createWindow() {
   win = new BrowserWindow({
@@ -193,6 +195,20 @@ ipcMain.handle('updater:openInstaller', async () => {
 
 ipcMain.handle('updater:gitPull', async () => {
   return updateService.gitPullUpdate();
+});
+
+
+// ================= 图片服务 (获取/上传) =================
+ipcMain.handle('image:fetchDataUrl', async (_, fileId: string | number) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) throw new Error('请先登录租户');
+  return imageService.fetchImageDataUrl(current.environment, current.tokenData, fileId);
+});
+
+ipcMain.handle('image:upload', async (_, base64Data: string, fileName: string, mimeType?: string) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) throw new Error('请先登录租户');
+  return imageService.uploadImage(current.environment, current.tokenData, base64Data, fileName, mimeType);
 });
 
 // ================= 元数据管理 (对象与字段) =================
