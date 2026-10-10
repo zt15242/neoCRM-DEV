@@ -24,6 +24,40 @@ interface DataEditorProps {
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
+/**
+ * 严格比对两个字段值是否一致 (支持空值归一化、数字/字符串转换、对象/JSON等价比对)
+ */
+function isValueEqual(a: any, b: any): boolean {
+  const isEmptyA = a === null || a === undefined || a === "";
+  const isEmptyB = b === null || b === undefined || b === "";
+  if (isEmptyA && isEmptyB) return true;
+  if (isEmptyA !== isEmptyB) return false;
+
+  if (a === b) return true;
+
+  // 数字与数字字符串
+  if (typeof a === "number" && typeof b === "string" && String(a) === b.trim()) return true;
+  if (typeof a === "string" && typeof b === "number" && a.trim() === String(b)) return true;
+
+  // 布尔
+  if (typeof a === "boolean" || typeof b === "boolean") {
+    const boolA = a === true || a === "true" || a === 1;
+    const boolB = b === true || b === "true" || b === 1;
+    return boolA === boolB;
+  }
+
+  // 数组或对象或 JSON 字符串
+  try {
+    const objA = typeof a === "string" && (a.startsWith("{") || a.startsWith("[")) ? JSON.parse(a) : a;
+    const objB = typeof b === "string" && (b.startsWith("{") || b.startsWith("[")) ? JSON.parse(b) : b;
+    if (typeof objA === "object" && typeof objB === "object") {
+      return JSON.stringify(objA) === JSON.stringify(objB);
+    }
+  } catch {}
+
+  return String(a).trim() === String(b).trim();
+}
+
 export const DataEditor: React.FC<DataEditorProps> = ({
   entities,
   initialEntityApiKey,
@@ -37,6 +71,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
   const [targetRecordId, setTargetRecordId] = useState<string>(initialRecordId ? String(initialRecordId) : '');
   const [fields, setFields] = useState<FieldMetadata[]>([]);
   const [formData, setFormData] = useState<Record<string, any>>({});
+  const [initialSnapshot, setInitialSnapshot] = useState<Record<string, any>>({});
   
   // 关联字段名称缓存映射: { [fieldName]: "选中的真实名称" }
   const [lookupNames, setLookupNames] = useState<Record<string, string>>({});
@@ -123,6 +158,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
       setMode('update');
       setTargetRecordId(String(initialRecordData.id || ''));
       setFormData(initialRecordData);
+      setInitialSnapshot({ ...initialRecordData });
       setJsonCode(JSON.stringify(initialRecordData, null, 2));
 
       loadFields(selectedEntityApiKey).then((fList) => {
@@ -145,6 +181,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
       const res = await window.neoApi.getRecordDetail(selectedEntityApiKey, targetRecordId.trim());
       if (res.success && res.data) {
         setFormData(res.data);
+        setInitialSnapshot({ ...res.data });
         setJsonCode(JSON.stringify(res.data, null, 2));
         showToast('success', `成功加载数据记录`);
         autoResolveAllLookupNames(res.data, fields);
@@ -215,7 +252,28 @@ export const DataEditor: React.FC<DataEditorProps> = ({
       }
     });
 
-    payload = cleanPayload;
+    // 核心优化：更新模式下只发送发生修改的字段 (Dirty Checking)，未变动的字段绝不发送
+    if (mode === "update") {
+      const diffPayload: Record<string, any> = {};
+      Object.entries(cleanPayload).forEach(([k, v]) => {
+        const oldVal = initialSnapshot[k];
+        if (!isValueEqual(v, oldVal)) {
+          diffPayload[k] = v;
+        }
+      });
+
+      const changedKeys = Object.keys(diffPayload);
+      if (changedKeys.length === 0) {
+        showToast("info", "当前数据未发生任何修改，无需重复提交");
+        setSubmitting(false);
+        return;
+      }
+
+      console.log("[DataEditor] 本次更新字段:", changedKeys);
+      payload = diffPayload;
+    } else {
+      payload = cleanPayload;
+    }
 
     try {
       if (mode === 'create') {
@@ -249,6 +307,12 @@ export const DataEditor: React.FC<DataEditorProps> = ({
       setSubmitting(false);
     }
   };
+
+  // 动态计算已修改的脏字段数量
+  const changedFieldCount = mode === "update" ? Object.keys(formData).filter((k) => {
+    if (k.includes("-") || k.endsWith("_compound") || k.endsWith("_data")) return false;
+    return !isValueEqual(formData[k], initialSnapshot[k]);
+  }).length : 0;
 
   const currentEntityObj = entities.find((e) => e.apiKey === selectedEntityApiKey);
 
@@ -487,7 +551,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
             className="px-6 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-medium rounded-xl shadow-md shadow-sky-600/20 transition-all flex items-center space-x-1.5 disabled:opacity-50"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>{submitting ? '正在提交...' : mode === 'create' ? '立即创建记录 (Insert)' : '立即更新记录 (Update)'}</span>
+            <span>{submitting ? '正在提交...' : mode === 'create' ? '立即创建记录 (Insert)' : changedFieldCount > 0 ? `立即更新变更字段 (${changedFieldCount} 项)` : '立即更新记录 (Update)'}</span>
           </button>
         </div>
       </form>
