@@ -187,19 +187,30 @@ export class AuthService {
 
     const port = await this.getAvailablePort(targetPort);
     const redirectUri = `http://localhost:${port}`;
-
     const authUrl = this.buildAuthUrl(env, redirectUri);
 
-    const getCodePromise = new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
+    return new Promise<TokenData>((resolve, reject) => {
       let isSettled = false;
 
       const server = http.createServer(async (req, res) => {
-        const parsedUrl = url.parse(req.url || '', true);
+        const parsedUrl = url.parse(req.url || "", true);
+
+        // 忽略 favicon 等非回调请求
+        if (parsedUrl.pathname === "/favicon.ico") {
+          res.writeHead(204);
+          return res.end();
+        }
+
+        if (isSettled) {
+          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+          return res.end("OK");
+        }
+
         const { code, error, error_description } = parsedUrl.query;
 
         if (error) {
           isSettled = true;
-          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
           res.end(this.getAuthErrorHtml(String(error_description || error)));
           server.close();
           this.activeServer = null;
@@ -208,21 +219,21 @@ export class AuthService {
 
         if (code) {
           isSettled = true;
-          // 先挂起响应，等换取 token 成功后再渲染
           try {
+            // 仅在此处换取一次 Token (OAuth2 Code 只能单次消费)
             const tokenData = await this.fetchTokenByCode(env, String(code), redirectUri);
             const tenantDesc = tokenData.userInfo?.tenantName
               ? `${tokenData.userInfo.tenantName} (${tokenData.tenant_id})`
-              : `${tokenData.tenant_id || '未返回'}`;
+              : `${tokenData.tenant_id || "未返回"}`;
             const instanceUri = tokenData.instance_uri || env.neoBaseURL;
 
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
             res.end(this.getAuthSuccessHtml(tenantDesc, instanceUri));
             server.close();
             this.activeServer = null;
-            return resolve({ code: String(code), redirectUri });
+            return resolve(tokenData);
           } catch (fetchErr: any) {
-            res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
             res.end(this.getAuthErrorHtml(`换取 Token 失败: ${fetchErr.message}`));
             server.close();
             this.activeServer = null;
@@ -230,11 +241,11 @@ export class AuthService {
           }
         }
 
-        res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not Found");
       });
 
-      server.on('error', (err) => {
+      server.on("error", (err) => {
         if (!isSettled) {
           this.activeServer = null;
           reject(new Error(`回调服务启动失败: ${err.message}`));
@@ -255,13 +266,10 @@ export class AuthService {
         if (!isSettled) {
           server.close();
           this.activeServer = null;
-          reject(new Error('授权超时（5分钟未完成登录操作）'));
+          reject(new Error("授权超时（5分钟未完成登录操作）"));
         }
       }, 300000);
     });
-
-    const { code } = await getCodePromise;
-    return await this.fetchTokenByCode(env, code, redirectUri);
   }
 
   /**
@@ -270,7 +278,7 @@ export class AuthService {
   public async loginWithEmbeddedWindow(env: NeoEnvironment, parentWindow?: BrowserWindow): Promise<TokenData> {
     this.cancelActiveAuth();
 
-    const redirectUri = env.redirectUri || 'http://localhost:1028';
+    const redirectUri = env.redirectUri || "http://localhost:1028";
     const authUrl = this.buildAuthUrl(env, redirectUri);
 
     return new Promise<TokenData>((resolve, reject) => {
@@ -292,11 +300,12 @@ export class AuthService {
       this.embeddedAuthWindow = authWin;
 
       const checkUrl = async (targetUrl: string) => {
+        if (isSettled) return;
         try {
           const u = new URL(targetUrl);
-          if (targetUrl.startsWith(redirectUri) || u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
-            const code = u.searchParams.get('code');
-            const error = u.searchParams.get('error');
+          if (targetUrl.startsWith(redirectUri) || u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+            const code = u.searchParams.get("code");
+            const error = u.searchParams.get("error");
 
             if (error) {
               isSettled = true;
@@ -320,23 +329,23 @@ export class AuthService {
         } catch {}
       };
 
-      authWin.webContents.on('will-navigate', (_, navUrl) => {
+      authWin.webContents.on("will-navigate", (_, navUrl) => {
         checkUrl(navUrl);
       });
 
-      authWin.webContents.on('will-redirect', (_, redirectUrl) => {
+      authWin.webContents.on("will-redirect", (_, redirectUrl) => {
         checkUrl(redirectUrl);
       });
 
-      authWin.webContents.session.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
+      authWin.webContents.session.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
         checkUrl(details.url);
         callback({});
       });
 
-      authWin.on('closed', () => {
+      authWin.on("closed", () => {
         this.embeddedAuthWindow = null;
         if (!isSettled) {
-          reject(new Error('用户取消了登录'));
+          reject(new Error("用户取消了登录"));
         }
       });
 
