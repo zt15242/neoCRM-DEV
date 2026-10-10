@@ -198,18 +198,24 @@ export const DataEditor: React.FC<DataEditorProps> = ({
       payload = { ...formData };
     }
 
-    // 剔除所有只读字段 (自动编号、计算字段、系统审计属性)
-    fields.forEach((f) => {
-      if (getReadOnlyReason(f)) {
-        delete payload[f.apiKey];
+    // 精确清洗提交载荷：剔除系统衍生辅助字段(如 _compound, -label, -icon)与只读计算字段
+    const cleanPayload: Record<string, any> = {};
+    const validFieldMap = new Map(fields.map((f) => [f.apiKey, f]));
+
+    Object.entries(payload).forEach(([key, val]) => {
+      // 过滤接口返回的展示用衍生字段
+      if (key.includes("-") || key.endsWith("_compound") || key.endsWith("_data")) return;
+      if (["id", "createdAt", "updatedAt", "createdBy", "updatedBy", "deleteFlag", "deleteFlg", "tenantId", "groupId", "innerGroupId", "version"].includes(key)) return;
+
+      const f = validFieldMap.get(key);
+      if (f && getReadOnlyReason(f)) return;
+
+      if (f || key.endsWith("__c") || isImageField({ apiKey: key }, val)) {
+        cleanPayload[key] = val;
       }
     });
-    delete payload.id;
-    delete payload.createdAt;
-    delete payload.updatedAt;
-    delete payload.createdBy;
-    delete payload.updatedBy;
-    delete payload.deleteFlag;
+
+    payload = cleanPayload;
 
     try {
       if (mode === 'create') {

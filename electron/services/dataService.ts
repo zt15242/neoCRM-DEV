@@ -265,7 +265,8 @@ export class DataService {
 
     try {
       const res = await axios.post(url, { data: recordData }, { headers, timeout: 20000 });
-      if (res.data?.code === 200 || res.data?.code === '200' || res.data?.id || res.data?.data?.id) {
+      const isSuccess = (res.data?.code === 200 || res.data?.code === '200' || res.data?.msg === 'OK' || !!res.data?.id || !!res.data?.data?.id) && !res.data?.errorInfo && !String(res.data?.code).startsWith('5');
+      if (isSuccess) {
         return { success: true, data: res.data?.data || res.data };
       }
       return { 
@@ -297,7 +298,8 @@ export class DataService {
 
     try {
       const res = await axios.patch(url, { data: recordData }, { headers, timeout: 20000 });
-      if (res.data?.code === 200 || res.data?.code === '200' || res.data?.success || res.status === 200) {
+      const isSuccess = (res.data?.code === 200 || res.data?.code === '200' || res.data?.msg === 'OK' || !!res.data?.success) && !res.data?.errorInfo && !String(res.data?.code).startsWith('5');
+      if (isSuccess) {
         return { success: true, data: res.data?.data || res.data };
       }
       return { 
