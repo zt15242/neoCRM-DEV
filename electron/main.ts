@@ -272,6 +272,23 @@ ipcMain.handle('data:getBatchNames', async (_, entityApiKey: string, ids: (strin
   return dataService.getBatchNames(current.environment, current.tokenData, entityApiKey, ids);
 });
 
+ipcMain.handle('data:scrollQuery', async (_, sql: string, batchCount?: number, maxLimit?: number) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) throw new Error('请先登录租户');
+  return dataService.executeScrollQuery(
+    current.environment,
+    current.tokenData,
+    sql,
+    batchCount || 1000,
+    maxLimit || 50000,
+    (progress) => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('data:scrollProgress', progress);
+      }
+    }
+  );
+});
+
 ipcMain.handle('data:query', async (_, sql: string) => {
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) throw new Error('请先登录租户');

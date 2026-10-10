@@ -188,3 +188,10 @@ export interface DownloadProgress {
   total: number;
   bytesPerSecond: number;
 }
+
+export interface ScrollProgress {
+  current: number;
+  total: number;
+  percent: number;
+  page: number;
+}

@@ -103,6 +103,107 @@ export class DataService {
     }
   }
 
+
+  /**
+   * 将用户的 SQL 语句清洗转换为符合销售易 /rest/data/v2/query/scroll 规范的语句
+   * (滚动查询底层自动拼接 WHERE id > maxId ORDER BY id LIMIT batchCount，因此不能含有 LIMIT、ORDER BY 以及 id 条件)
+   */
+  public normalizeSqlForScroll(rawSql: string): string {
+    let sql = rawSql.trim().replace(/;+$/, "");
+    // 移除末尾的 LIMIT
+    sql = sql.replace(/\s+LIMIT\s+\d+(?:\s*,\s*\d+)?$/i, "");
+    // 移除末尾的 ORDER BY
+    sql = sql.replace(/\s+ORDER\s+BY\s+[a-zA-Z0-9_.,\s]+?(?=\s*$)/i, "");
+    // 移除 WHERE id > 0
+    sql = sql.replace(/\s+WHERE\s+id\s*>\s*0\s+AND\s+/i, " WHERE ");
+    sql = sql.replace(/\s+AND\s+id\s*>\s*0\b/i, "");
+    sql = sql.replace(/\s+WHERE\s+id\s*>\s*0\s*$/i, "");
+    return sql.trim();
+  }
+
+  /**
+   * 执行大数据量滚动查询 (Scroll Query Mode)，自动翻页获取所有数据记录
+   */
+  public async executeScrollQuery(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    rawSql: string,
+    batchCount = 1000,
+    maxLimit = 50000,
+    onProgress?: (progress: { current: number; total: number; percent: number; page: number }) => void
+  ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const headers = this.getHeaders(tokenData);
+    const q = this.normalizeSqlForScroll(rawSql);
+    const url = `${baseUrl}/rest/data/v2/query/scroll`;
+
+    const allRecords: Record<string, any>[] = [];
+    let queryLocator = "";
+    let hasMore = true;
+    let page = 1;
+    let serverTotalSize = 0;
+
+    try {
+      while (hasMore) {
+        const body: Record<string, any> = {
+          q,
+          batchCount: Math.min(1000, Math.max(10, batchCount)),
+          scrollParam: true,
+        };
+        if (queryLocator) {
+          body.queryLocator = queryLocator;
+        }
+
+        const res = await axios.post(url, body, { headers, timeout: 45000 });
+        const result = res.data?.result || res.data?.data || {};
+        const records: Record<string, any>[] = result.records || [];
+        serverTotalSize = result.totalSize !== undefined ? result.totalSize : serverTotalSize;
+
+        allRecords.push(...records);
+
+        if (onProgress && serverTotalSize > 0) {
+          onProgress({
+            current: allRecords.length,
+            total: serverTotalSize,
+            percent: Math.min(100, Math.round((allRecords.length / serverTotalSize) * 100)),
+            page,
+          });
+        }
+
+        hasMore = !!result.hasMore && records.length > 0 && allRecords.length < maxLimit;
+        queryLocator = result.queryLocator || "";
+        page++;
+
+        // 避免无限死循环安全上限 (最多拉 100 页，10万条)
+        if (page > 100) break;
+      }
+
+      let fields: string[] = [];
+      if (allRecords.length > 0) {
+        fields = Object.keys(allRecords[0]);
+      } else {
+        const match = q.match(/SELECT\s+(.*?)\s+FROM/i);
+        if (match && match[1]) {
+          fields = match[1].split(",").map((f) => f.trim().split(/\s+/).pop() || f.trim());
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          records: allRecords,
+          totalSize: serverTotalSize || allRecords.length,
+          fields,
+        },
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: e.response?.data?.msg || e.response?.data?.message || e.message,
+      };
+    }
+  }
+
   /**
    * 获取单条记录完整详细信息
    */

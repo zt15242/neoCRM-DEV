@@ -60,6 +60,12 @@ export const neoApi = {
   getRecordDetail: (entityApiKey: string, id: string | number) => ipcRenderer.invoke('data:getRecordDetail', entityApiKey, id),
   searchRecords: (entityApiKey: string, keyword: string, limit?: number) => ipcRenderer.invoke('data:searchRecords', entityApiKey, keyword, limit),
   getBatchNames: (entityApiKey: string, ids: (string | number)[]) => ipcRenderer.invoke('data:getBatchNames', entityApiKey, ids),
+  executeScrollQuery: (sql: string, batchCount?: number, maxLimit?: number) => ipcRenderer.invoke('data:scrollQuery', sql, batchCount, maxLimit),
+  onScrollProgress: (callback: (progress: any) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('data:scrollProgress', handler);
+    return () => ipcRenderer.removeListener('data:scrollProgress', handler);
+  },
   executeQuery: (sql: string) => ipcRenderer.invoke('data:query', sql),
   createRecord: (entityApiKey: string, data: Record<string, any>) => ipcRenderer.invoke('data:createRecord', entityApiKey, data),
   updateRecord: (entityApiKey: string, id: string | number, data: Record<string, any>) => ipcRenderer.invoke('data:updateRecord', entityApiKey, id, data),

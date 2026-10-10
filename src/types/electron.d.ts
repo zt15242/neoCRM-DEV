@@ -10,7 +10,8 @@ import {
   CreateFieldPayload,
   QueryResultData,
   UpdateInfo,
-  DownloadProgress
+  DownloadProgress,
+  ScrollProgress
 } from '../../shared/types';
 
 declare global {
@@ -64,6 +65,8 @@ declare global {
       getRecordDetail: (entityApiKey: string, id: string | number) => Promise<{ success: boolean; data?: Record<string, any>; error?: string }>;
       searchRecords: (entityApiKey: string, keyword: string, limit?: number) => Promise<{ success: boolean; records: Record<string, any>[]; error?: string }>;
       getBatchNames: (entityApiKey: string, ids: (string | number)[]) => Promise<Record<string, string>>;
+      executeScrollQuery: (sql: string, batchCount?: number, maxLimit?: number) => Promise<{ success: boolean; data?: QueryResultData; error?: string }>;
+      onScrollProgress: (callback: (progress: ScrollProgress) => void) => () => void;
       executeQuery: (sql: string) => Promise<{ success: boolean; data?: QueryResultData; error?: string }>;
       createRecord: (entityApiKey: string, data: Record<string, any>) => Promise<{ success: boolean; data?: any; error?: string }>;
       updateRecord: (entityApiKey: string, id: string | number, data: Record<string, any>) => Promise<{ success: boolean; data?: any; error?: string }>;
