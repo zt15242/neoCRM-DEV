@@ -8,6 +8,8 @@ import { DataManager } from './components/DataManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
+import { UpdateModal } from './components/UpdateModal';
+import { UpdateInfo } from '../shared/types';
 import { NeoEnvironment, SessionState, AccountRecord } from '../shared/types';
 import { ShieldAlert, LogIn } from 'lucide-react';
 
@@ -17,6 +19,28 @@ export const App: React.FC = () => {
   const [selectedEnvId, setSelectedEnvId] = useState<string>('production');
   const [session, setSession] = useState<SessionState>({ isLoggedIn: false });
   const [accountHistory, setAccountHistory] = useState<AccountRecord[]>([]);
+
+  // 自动更新状态
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+
+  const handleCheckUpdate = async (manual = false) => {
+    try {
+      if (window.neoApi?.checkForUpdates) {
+        const info = await window.neoApi.checkForUpdates();
+        setUpdateInfo(info);
+        if (info.hasUpdate) {
+          setIsUpdateModalOpen(true);
+        } else if (manual) {
+          setIsUpdateModalOpen(true);
+        }
+      }
+    } catch (e: any) {
+      if (manual) {
+        showToast('error', e.message || '检查更新失败');
+      }
+    }
+  };
 
   // 页面导航 Tab
   const [activeTab, setActiveTab] = useState<AppNavTab>('dashboard');
@@ -64,6 +88,7 @@ export const App: React.FC = () => {
 
         const history = await window.neoApi.getAccountHistory();
         setAccountHistory(history);
+        handleCheckUpdate(false);
       }
     } catch (e: any) {
       console.error('初始化数据加载异常:', e);
@@ -250,6 +275,8 @@ export const App: React.FC = () => {
         onTabChange={handleTabChange}
         onOpenHistory={() => setIsHistoryOpen(true)}
         onOpenDocs={() => window.neoApi.openExternal('https://crm.xiaoshouyi.com')}
+        hasUpdate={!!updateInfo?.hasUpdate}
+        onCheckUpdate={() => handleCheckUpdate(true)}
       />
 
       {/* 主界面内容区 */}
@@ -369,6 +396,12 @@ export const App: React.FC = () => {
       />
 
       {/* 全局 Toast 通知 */}
+      <UpdateModal
+        isOpen={isUpdateModalOpen}
+        updateInfo={updateInfo}
+        onClose={() => setIsUpdateModalOpen(false)}
+        showToast={showToast}
+      />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

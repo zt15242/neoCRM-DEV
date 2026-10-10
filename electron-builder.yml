@@ -6,6 +6,10 @@ directories:
 files:
   - dist
   - dist-electron
+publish:
+  provider: github
+  owner: zt15242
+  repo: neoCRM-DEV
 mac:
   target:
     - target: dmg

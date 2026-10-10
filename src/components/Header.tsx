@@ -20,6 +20,8 @@ interface HeaderProps {
   onTabChange: (tab: AppNavTab) => void;
   onOpenHistory: () => void;
   onOpenDocs: () => void;
+  hasUpdate?: boolean;
+  onCheckUpdate: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -28,7 +30,9 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab, 
   onTabChange, 
   onOpenHistory, 
-  onOpenDocs 
+  onOpenDocs, 
+  hasUpdate = false, 
+  onCheckUpdate 
 }) => {
   const isMac = platform === 'darwin';
 
@@ -51,9 +55,16 @@ export const Header: React.FC<HeaderProps> = ({
         <div>
           <div className="flex items-center space-x-2">
             <span className="font-semibold text-slate-800 text-sm tracking-wide">NeoCRM 开发者工作台</span>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-50 text-sky-600 border border-sky-200 window-no-drag font-medium">
-              v1.2.0
-            </span>
+            <button
+              onClick={onCheckUpdate}
+              title="点击检查最新版本"
+              className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 window-no-drag font-medium transition-colors flex items-center space-x-1"
+            >
+              <span>v1.2.0</span>
+              {hasUpdate ? (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+              ) : null}
+            </button>
           </div>
           <p className="text-[11px] text-slate-500">元数据管理 • 业务数据中心 • OAuth2</p>
         </div>

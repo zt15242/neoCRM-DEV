@@ -7,6 +7,7 @@ import { AuthService } from './services/authService';
 import { ApiService } from './services/apiService';
 import { MetadataService } from './services/metadataService';
 import { DataService } from './services/dataService';
+import { UpdateService } from './services/updateService';
 import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
 
 const currentDir = typeof __dirname !== 'undefined' 
@@ -23,6 +24,7 @@ const authService = new AuthService();
 const apiService = new ApiService();
 const metadataService = new MetadataService();
 const dataService = new DataService();
+const updateService = new UpdateService();
 
 function createWindow() {
   win = new BrowserWindow({
@@ -174,6 +176,24 @@ ipcMain.handle('app:openDesigner', async (_, type: 'web' | 'h5') => {
 
 ipcMain.handle('shell:openExternal', async (_, url: string) => shell.openExternal(url));
 ipcMain.handle('app:getPlatform', async () => process.platform);
+
+
+// ================= 自动更新管理 =================
+ipcMain.handle('updater:check', async () => {
+  return updateService.checkForUpdates();
+});
+
+ipcMain.handle('updater:download', async (_, downloadUrl: string, fileName: string) => {
+  return updateService.downloadUpdate(downloadUrl, fileName, win);
+});
+
+ipcMain.handle('updater:openInstaller', async () => {
+  return updateService.openDownloadedInstaller();
+});
+
+ipcMain.handle('updater:gitPull', async () => {
+  return updateService.gitPullUpdate();
+});
 
 // ================= 元数据管理 (对象与字段) =================
 

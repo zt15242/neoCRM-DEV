@@ -167,3 +167,24 @@ export interface BatchCreateProgress {
   failCount: number;
   currentField?: string;
 }
+
+// ================= 自动更新类型 =================
+export interface UpdateInfo {
+  hasUpdate: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  releaseName?: string;
+  releaseNotes?: string;
+  publishedAt?: string;
+  downloadUrl?: string;
+  assetName?: string;
+  size?: number;
+  releasePageUrl?: string;
+}
+
+export interface DownloadProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}

@@ -8,7 +8,9 @@ import {
   FieldMetadata,
   CreateEntityPayload,
   CreateFieldPayload,
-  QueryResultData
+  QueryResultData,
+  UpdateInfo,
+  DownloadProgress
 } from '../../shared/types';
 
 declare global {
@@ -38,6 +40,12 @@ declare global {
       openDesigner: (type: 'web' | 'h5') => Promise<void>;
       getPlatform: () => Promise<string>;
 
+      // 自动更新
+      checkForUpdates: () => Promise<UpdateInfo>;
+      downloadUpdate: (downloadUrl: string, fileName: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+      openInstaller: () => Promise<boolean>;
+      gitPullUpdate: () => Promise<{ success: boolean; output: string }>;
+      onDownloadProgress: (callback: (progress: DownloadProgress) => void) => () => void;
       minimizeWindow: () => Promise<void>;
       maximizeWindow: () => Promise<void>;
       closeWindow: () => Promise<void>;

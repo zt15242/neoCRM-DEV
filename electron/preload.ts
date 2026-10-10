@@ -31,6 +31,16 @@ export const neoApi = {
   openDesigner: (type: 'web' | 'h5') => ipcRenderer.invoke('app:openDesigner', type),
   getPlatform: () => ipcRenderer.invoke('app:getPlatform'),
 
+  // 自动更新
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: (downloadUrl: string, fileName: string) => ipcRenderer.invoke('updater:download', downloadUrl, fileName),
+  openInstaller: () => ipcRenderer.invoke('updater:openInstaller'),
+  gitPullUpdate: () => ipcRenderer.invoke('updater:gitPull'),
+  onDownloadProgress: (callback: (progress: any) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('updater:downloadProgress', handler);
+    return () => ipcRenderer.removeListener('updater:downloadProgress', handler);
+  },
   // 窗口控制
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
