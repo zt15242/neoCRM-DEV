@@ -87,6 +87,7 @@ export const neoApi = {
   aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke('file:parseBuffer', fileName, buffer),
   aiSaveMcpServer: (server: any) => ipcRenderer.invoke('ai:saveMcpServer', server),
   aiDeleteMcpServer: (id: string) => ipcRenderer.invoke('ai:deleteMcpServer', id),
+  aiSyncMcpTools: (serverId: string) => ipcRenderer.invoke('ai:syncMcpTools', serverId),
   aiSaveSkill: (skill: any) => ipcRenderer.invoke('ai:saveSkill', skill),
   aiDeleteSkill: (id: string) => ipcRenderer.invoke('ai:deleteSkill', id),
   aiCompactSession: (sessionId: string) => ipcRenderer.invoke("ai:compactSession", sessionId),

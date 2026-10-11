@@ -13,13 +13,16 @@ import {
   Lock,
   KeyRound,
   Eye,
-  EyeOff
+  EyeOff,
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 
 interface McpSettingsProps {
   mcpServers: McpServerConfig[];
   onSaveMcpServer: (server: McpServerConfig) => Promise<void>;
   onDeleteMcpServer: (id: string) => Promise<void>;
+  onMcpServersChange?: (servers: McpServerConfig[]) => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
@@ -32,8 +35,10 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
   mcpServers,
   onSaveMcpServer,
   onDeleteMcpServer,
+  onMcpServersChange,
   showToast,
 }) => {
+  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
 
@@ -119,6 +124,33 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
   const handleToggleEnabled = async (srv: McpServerConfig) => {
     await onSaveMcpServer({ ...srv, enabled: !srv.enabled });
     showToast('info', `${srv.name} 已${!srv.enabled ? '启用' : '停用'}`);
+  };
+
+  const handleSyncTools = async (srv: McpServerConfig) => {
+    if (!window.neoApi?.aiSyncMcpTools) return;
+    setSyncingId(srv.id);
+    try {
+      const res = await window.neoApi.aiSyncMcpTools(srv.id);
+      if (!res.success) {
+        showToast("error", `同步失败: ${res.error || "未能获取工具列表"}`);
+        return;
+      }
+      if (res.server && onMcpServersChange) {
+        onMcpServersChange(
+          mcpServers.map((s) => (s.id === res.server!.id ? res.server! : s))
+        );
+      }
+      const toolCount = res.tools?.length || 0;
+      const toolNames = (res.tools || []).slice(0, 3).map((t) => t.name).join(", ");
+      showToast(
+        "success",
+        `已成功同步 ${toolCount} 个工具${toolNames ? `: [${toolNames}]` : ""}`
+      );
+    } catch (e: any) {
+      showToast("error", `同步异常: ${e.message}`);
+    } finally {
+      setSyncingId(null);
+    }
   };
 
   const handleDelete = async (srv: McpServerConfig) => {
@@ -355,6 +387,18 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
 
                   {!isBuiltin ? (
                     <>
+                      <button
+                        onClick={() => handleSyncTools(srv)}
+                        disabled={syncingId === srv.id}
+                        className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg cursor-pointer transition-colors"
+                        title="连接并同步真实工具列表 (tools/list)"
+                      >
+                        {syncingId === srv.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-600" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                       <button
                         onClick={() => handleOpenEdit(srv)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer"

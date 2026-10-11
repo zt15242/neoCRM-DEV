@@ -82,6 +82,19 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const handleSaveMcpServer = async (srv: McpServerConfig) => {
     const list = await window.neoApi.aiSaveMcpServer(srv);
     setMcpServers(list);
+    if (srv.type !== "builtin" && srv.id !== "neocrm-paas-mcp" && srv.enabled && window.neoApi.aiSyncMcpTools) {
+      window.neoApi
+        .aiSyncMcpTools(srv.id)
+        .then((res) => {
+          if (res.success && res.server) {
+            setMcpServers((prev) => prev.map((s) => (s.id === res.server!.id ? res.server! : s)));
+            if (res.tools && res.tools.length > 0) {
+              showToast("success", `已自动从 [${srv.name}] 探测到 ${res.tools.length} 个 MCP 工具`);
+            }
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   const handleDeleteMcpServer = async (id: string) => {
@@ -217,6 +230,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             mcpServers={mcpServers}
             onSaveMcpServer={handleSaveMcpServer}
             onDeleteMcpServer={handleDeleteMcpServer}
+            onMcpServersChange={setMcpServers}
             showToast={showToast}
           />
         )}

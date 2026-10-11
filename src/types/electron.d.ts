@@ -101,6 +101,7 @@ declare global {
         messages: any[];
         enableTools?: boolean;
         activeSkillIds?: string[];
+        activeMcpServerIds?: string[];
         compactionSummary?: any;
       }) => Promise<boolean>;
       aiAbortChatStream: (requestId: string) => Promise<boolean>;
@@ -108,6 +109,7 @@ declare global {
       aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => Promise<AiFileAttachment>;
       aiSaveMcpServer: (server: McpServerConfig) => Promise<McpServerConfig[]>;
       aiDeleteMcpServer: (id: string) => Promise<McpServerConfig[]>;
+      aiSyncMcpTools: (serverId: string) => Promise<{ success: boolean; server?: McpServerConfig; tools?: McpToolItem[]; error?: string }>;
       aiSaveSkill: (skill: AiSkillItem) => Promise<AiSkillItem[]>;
       aiDeleteSkill: (id: string) => Promise<AiSkillItem[]>;
       aiCompactSession: (sessionId: string) => Promise<AiChatSession | null>;

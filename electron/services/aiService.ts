@@ -1,3 +1,21 @@
+function cleanGeminiSchema(schema: any): any {
+  if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
+  const copy = JSON.parse(JSON.stringify(schema));
+  delete copy.$schema;
+  delete copy.$id;
+  delete copy.$defs;
+  delete copy.definitions;
+  delete copy.additionalProperties;
+  if (!copy.type) copy.type = "object";
+  if (copy.properties && typeof copy.properties === "object") {
+    for (const k of Object.keys(copy.properties)) {
+      copy.properties[k] = cleanGeminiSchema(copy.properties[k]);
+    }
+  }
+  return copy;
+}
+
+import { McpClientService } from "./mcpClientService";
 import { SkillPackageService } from "./skillPackageService";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +31,10 @@ import {
   AiToolCallRecord, 
   AiModelItem,
   NeoEnvironment,
-  TokenData
+  TokenData,
+  McpServerConfig,
+  McpToolItem,
+  AiSkillItem
 } from '../../shared/types';
 import { 
   BUILTIN_AI_PROVIDERS, 
@@ -34,6 +55,7 @@ export class AiService {
   private activeControllers = new Map<string, AbortController>();
 
   private skillPackageService = new SkillPackageService();
+  private mcpClientService = new McpClientService();
 
   constructor(
     private sessionStore: SessionStore,
@@ -785,11 +807,12 @@ ${dialogHistoryText}`;
       messages: AiChatMessage[];
       enableTools?: boolean;
       activeSkillIds?: string[];
+      activeMcpServerIds?: string[];
       compactionSummary?: any;
     },
     sendEvent: (event: AiStreamEvent) => void
   ): Promise<void> {
-    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, compactionSummary } = params;
+    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary } = params;
 
     const config = this.getAiConfig();
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
@@ -820,6 +843,57 @@ ${dialogHistoryText}`;
     this.activeControllers.set(requestId, controller);
 
     try {
+      // 筛选当前对话激活的外部自定义 MCP 服务
+      const allCustomMcp = (config.mcpServers || []).filter(
+        (m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp" && m.enabled
+      );
+      const activeCustomMcp =
+        activeMcpServerIds && activeMcpServerIds.length > 0
+          ? allCustomMcp.filter((m) => activeMcpServerIds.includes(m.id))
+          : allCustomMcp;
+
+      // 若自定义 MCP 尚未探测工具列表，在对话前快速探测一次
+      for (const srv of activeCustomMcp) {
+        const hasOnlyDefault =
+          !srv.tools ||
+          srv.tools.length === 0 ||
+          (srv.tools.length === 1 && srv.tools[0].name.endsWith("_invoke") && !srv.tools[0].inputSchema);
+        if (hasOnlyDefault) {
+          try {
+            const discoverRes = await this.mcpClientService.discoverTools(srv);
+            if (discoverRes.success && discoverRes.tools.length > 0) {
+              srv.tools = discoverRes.tools;
+              this.saveMcpServer(srv);
+            }
+          } catch {}
+        }
+      }
+
+      // 组装当前可用的全量 Function Calling 工具列表 (CRM 内核工具 + 外部 MCP 扩展工具)
+      const builtinMcpEnabled =
+        (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp")?.enabled !== false;
+
+      const activeToolsSpec: any[] = [];
+      if (config.settings.enableCrmTools && builtinMcpEnabled) {
+        activeToolsSpec.push(...CRM_HARNESS_TOOLS_SPEC);
+      }
+
+      for (const mcpSrv of activeCustomMcp) {
+        for (const t of mcpSrv.tools || []) {
+          const safeName = t.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+          if (!activeToolsSpec.some((existing) => existing.function?.name === safeName)) {
+            activeToolsSpec.push({
+              type: "function",
+              function: {
+                name: safeName,
+                description: `[外部MCP服务: ${mcpSrv.name}] ${t.description || t.name}`,
+                parameters: t.inputSchema || { type: "object", properties: {} },
+              },
+            });
+          }
+        }
+      }
+
       // 1. 组装 System Prompt
       const systemParts: string[] = [];
       if (presetPrompt) {
@@ -862,6 +936,20 @@ ${dialogHistoryText}`;
         }
       }
 
+      // 注入已挂载的外部 MCP 扩展服务说明与引导
+      if (activeCustomMcp.length > 0) {
+        const mcpInfoText = activeCustomMcp
+          .map((srv) => {
+            const toolList = (srv.tools || []).map((t) => `${t.name}(${t.description || ""})`).join("; ");
+            return `- 外部 MCP 服务 [${srv.name}] (${srv.type.toUpperCase()}): ${srv.description || ""} | 可用工具: [${toolList || "无"}]`;
+          })
+          .join("\n");
+
+        systemParts.push(`【当前已连接并激活的外部 MCP 扩展服务 (Model Context Protocol)】
+${mcpInfoText}
+重要提示：当用户询问外部知识库、查看 MCP 知识库、检索外部文档或使用上述 MCP 扩展功能时，请务必优先主动调用上述外部 MCP 服务提供的工具（而不是查询销售易 CRM 实体对象表）！`);
+      }
+
       // 注入历史对话压缩记忆
       if (compactionSummary?.summary) {
         systemParts.push(`【前期历史对话精简记忆摘要】\n${compactionSummary.summary}`);
@@ -886,7 +974,9 @@ ${dialogHistoryText}`;
           modelId,
           systemPromptText,
           recentMessages,
-          enableTools: (enableTools !== false) && config.settings.enableCrmTools,
+          enableTools: (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
+          activeToolsSpec,
+          activeCustomMcp,
           settings: config.settings,
           currentSession,
           controller,
@@ -955,7 +1045,7 @@ ${dialogHistoryText}`;
         };
 
         if (canUseTools) {
-          requestBody.tools = CRM_HARNESS_TOOLS_SPEC;
+          requestBody.tools = activeToolsSpec;
           requestBody.tool_choice = 'auto';
         }
 
@@ -1187,7 +1277,7 @@ ${dialogHistoryText}`;
             let isError = false;
 
             try {
-              const res = await this.executeCrmTool(tc.name, args, currentSession.environment, currentSession.tokenData);
+              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData);
               toolResult = res.data;
               resultSummary = res.summary;
               executedToolsLog.push({
@@ -1396,6 +1486,8 @@ ${toolDataContext}
     systemPromptText: string;
     recentMessages: AiChatMessage[];
     enableTools: boolean;
+    activeToolsSpec?: any[];
+    activeCustomMcp?: McpServerConfig[];
     settings: AiHarnessSettings;
     currentSession: any;
     controller: AbortController;
@@ -1410,6 +1502,8 @@ ${toolDataContext}
       systemPromptText,
       recentMessages,
       enableTools,
+      activeToolsSpec = [],
+      activeCustomMcp = [],
       settings,
       currentSession,
       controller,
@@ -1452,14 +1546,16 @@ ${toolDataContext}
     const isThinkingExp = cleanModelId.toLowerCase().includes('thinking');
     const canUseTools = enableTools && !isThinkingExp;
 
-    // 转换 OpenAI tools 为 Gemini functionDeclarations
-    const geminiFunctionDeclarations = CRM_HARNESS_TOOLS_SPEC.map((spec) => {
+    // 转换全量激活工具为 Gemini functionDeclarations (带 JSON Schema 安全清理)
+    const effectiveTools = activeToolsSpec && activeToolsSpec.length > 0 ? activeToolsSpec : CRM_HARNESS_TOOLS_SPEC;
+    const geminiFunctionDeclarations = effectiveTools.map((spec) => {
       const fn = spec.function;
-      const hasProps = fn.parameters?.properties && Object.keys(fn.parameters.properties).length > 0;
+      const cleanedParams = cleanGeminiSchema(fn.parameters);
+      const hasProps = cleanedParams?.properties && Object.keys(cleanedParams.properties).length > 0;
       return {
         name: fn.name,
         description: fn.description,
-        ...(hasProps ? { parameters: fn.parameters } : {}),
+        ...(hasProps ? { parameters: cleanedParams } : {}),
       };
     });
 
@@ -1613,9 +1709,10 @@ ${toolDataContext}
           let isError = false;
 
           try {
-            const res = await this.executeCrmTool(
+            const res = await this.executeUnifiedTool(
               fc.name,
               fc.args,
+              activeCustomMcp,
               currentSession.environment,
               currentSession.tokenData
             );
@@ -1667,6 +1764,77 @@ ${toolDataContext}
       messageId,
       type: 'done',
     });
+  }
+
+  /**
+   * 同步外部 MCP 服务的可用工具列表 (tools/list)
+   */
+  public async syncMcpTools(serverId: string): Promise<{
+    success: boolean;
+    server?: McpServerConfig;
+    tools?: McpToolItem[];
+    error?: string;
+  }> {
+    const config = this.getAiConfig();
+    const srv = (config.mcpServers || []).find((m) => m.id === serverId);
+    if (!srv) {
+      return { success: false, error: "未找到指定的 MCP 服务" };
+    }
+    if (srv.type === "builtin" || srv.id === "neocrm-paas-mcp") {
+      return { success: true, server: srv, tools: [] };
+    }
+
+    const res = await this.mcpClientService.discoverTools(srv);
+    if (!res.success || !res.tools) {
+      return { success: false, error: res.error || "探测 MCP 工具失败" };
+    }
+
+    srv.tools = res.tools;
+    this.saveMcpServer(srv);
+    return {
+      success: true,
+      server: srv,
+      tools: res.tools,
+    };
+  }
+
+  /**
+   * 统一工具调用调度器 (自动分发到销售易本地内核工具或外部 MCP 服务)
+   */
+  private async executeUnifiedTool(
+    name: string,
+    args: any,
+    activeMcpServers: McpServerConfig[],
+    env?: NeoEnvironment,
+    tokenData?: TokenData
+  ): Promise<{ data: any; summary: string }> {
+    // 1. 判断是否为销售易本地 Harness 工具
+    const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
+    if (isCrmTool) {
+      return await this.executeCrmTool(name, args, env, tokenData);
+    }
+
+    // 2. 匹配外部 MCP 服务
+    let targetServer = activeMcpServers.find((s) => s.tools?.some((t) => t.name === name));
+    if (!targetServer) {
+      targetServer = activeMcpServers.find((s) =>
+        name.toLowerCase().includes(s.name.toLowerCase().replace(/[^a-z0-9]/g, ""))
+      ) || (activeMcpServers.length === 1 ? activeMcpServers[0] : undefined);
+    }
+
+    if (!targetServer) {
+      throw new Error(`未找到能够处理工具 [${name}] 的 MCP 服务或本地驱动`);
+    }
+
+    const res = await this.mcpClientService.callTool(targetServer, name, args);
+    if (!res.success) {
+      throw new Error(res.error || res.summary || `调用 MCP 工具 ${name} 失败`);
+    }
+
+    return {
+      data: res.data,
+      summary: res.summary || `成功执行 MCP 工具: ${name}`,
+    };
   }
 
   /**

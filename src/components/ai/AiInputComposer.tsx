@@ -13,13 +13,22 @@ import {
   FileText,
   FileCode,
   Loader2,
-  Check
+  Check,
+  Plug,
+  ExternalLink,
+  Settings
 } from 'lucide-react';
-import { AiContextEntityRef, AiFileAttachment, AiSkillItem } from '../../../shared/types';
+import { AiContextEntityRef, AiFileAttachment, AiSkillItem, McpServerConfig } from '../../../shared/types';
 
 interface AiInputComposerProps {
   isStreaming: boolean;
-  onSend: (text: string, entityRefs?: AiContextEntityRef[], attachments?: AiFileAttachment[], skillIds?: string[]) => void;
+  onSend: (
+    text: string, 
+    entityRefs?: AiContextEntityRef[], 
+    attachments?: AiFileAttachment[], 
+    skillIds?: string[],
+    mcpServerIds?: string[]
+  ) => void;
   onStop: () => void;
   entityRefs: AiContextEntityRef[];
   onRemoveEntityRef: (apiKey: string) => void;
@@ -29,6 +38,10 @@ interface AiInputComposerProps {
   availableSkills?: AiSkillItem[];
   activeSkillIds?: string[];
   onToggleSkill?: (skillId: string) => void;
+  availableMcpServers?: McpServerConfig[];
+  activeMcpServerIds?: string[];
+  onToggleMcpServer?: (serverId: string) => void;
+  onOpenMcpSettings?: () => void;
   placeholder?: string;
   quickPrompts?: string[];
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
@@ -46,6 +59,10 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   availableSkills = [],
   activeSkillIds = [],
   onToggleSkill,
+  availableMcpServers = [],
+  activeMcpServerIds = [],
+  onToggleMcpServer,
+  onOpenMcpSettings,
   placeholder = '输入消息，向 AI 助手提问，支持拖入 Excel/文件进行深度分析...',
   quickPrompts = [],
   showToast,
@@ -54,8 +71,8 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [attachments, setAttachments] = useState<AiFileAttachment[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [skillPopoverOpen, setSkillPopoverOpen] = useState(false);
+  const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -78,7 +95,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
-    onSend(trimmed, entityRefs, attachments, activeSkillIds);
+    onSend(trimmed, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
     setText('');
     setAttachments([]);
     if (textareaRef.current) {
@@ -133,7 +150,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
   };
 
-  const getFileIcon = (mime: string, name: string) => {
+  const getFileIcon = (name: string) => {
     if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')) {
       return FileSpreadsheet;
     }
@@ -142,6 +159,8 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
     return FileText;
   };
+
+  const activeMcpCount = activeMcpServerIds.length;
 
   return (
     <div
@@ -163,7 +182,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                 setText(qp);
                 textareaRef.current?.focus();
               }}
-              className="px-2.5 py-1 rounded-full bg-slate-100 hover:bg-sky-50 hover:text-sky-700 text-slate-600 shrink-0 transition-colors border border-transparent hover:border-sky-200 cursor-pointer"
+              className="px-2.5 py-1 rounded-full bg-slate-50 hover:bg-sky-50 hover:text-sky-600 text-slate-600 border border-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {qp}
             </button>
@@ -171,112 +190,82 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         </div>
       )}
 
-      {/* 挂载的上下文胶囊：实体对象、已上传文件、已激活技能 */}
-      {(entityRefs.length > 0 || attachments.length > 0 || activeSkillIds.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
-          {/* 上传的文件胶囊 */}
-          {attachments.map((att) => {
-            const Icon = getFileIcon(att.mimeType, att.name);
-            return (
-              <span
-                key={att.id}
-                title={att.summaryText || att.name}
-                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-medium shadow-2xs"
-              >
-                <Icon className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="truncate max-w-[160px]">{att.name}</span>
-                <span className="text-[10px] text-emerald-500 font-mono">
-                  ({(att.size / 1024).toFixed(0)}KB)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                  className="hover:text-rose-600 rounded-full p-0.5 cursor-pointer ml-0.5"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            );
-          })}
-
-          {/* 挂载的实体元数据 */}
+      {/* 已挂载实体胶囊与文件附件 */}
+      {(entityRefs.length > 0 || attachments.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 pb-1">
           {entityRefs.map((ref) => (
-            <span
+            <div
               key={ref.apiKey}
-              className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-sky-50 text-sky-700 border border-sky-200 text-[11px] font-medium"
+              className="inline-flex items-center space-x-1.5 pl-2 pr-1.5 py-0.5 rounded-lg bg-sky-50 text-sky-800 border border-sky-200 text-xs font-medium"
             >
-              <Box className="w-3.5 h-3.5 text-sky-500" />
-              <span>@{ref.label} ({ref.apiKey})</span>
+              <Box className="w-3 h-3 text-sky-600" />
+              <span>{ref.label} ({ref.apiKey})</span>
               <button
                 type="button"
                 onClick={() => onRemoveEntityRef(ref.apiKey)}
-                className="hover:text-rose-600 rounded-full p-0.5 cursor-pointer"
+                className="hover:text-rose-600 p-0.5"
               >
-                <X className="w-2.5 h-2.5" />
+                <X className="w-3 h-3" />
               </button>
-            </span>
+            </div>
           ))}
 
-          {/* 挂载的技能胶囊 */}
-          {activeSkillIds.map((sid) => {
-            const skill = availableSkills.find((s) => s.id === sid);
-            if (!skill) return null;
+          {attachments.map((file) => {
+            const Icon = getFileIcon(file.name);
             return (
-              <span
-                key={sid}
-                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-medium"
+              <div
+                key={file.id}
+                className="inline-flex items-center space-x-1.5 pl-2 pr-1.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-medium"
               >
-                <Lightbulb className="w-3.5 h-3.5 text-indigo-500" />
-                <span>💡 {skill.name}</span>
-                {onToggleSkill && (
-                  <button
-                    type="button"
-                    onClick={() => onToggleSkill(sid)}
-                    className="hover:text-rose-600 rounded-full p-0.5 cursor-pointer"
-                  >
-                    <X className="w-2.5 h-2.5" />
-                  </button>
-                )}
-              </span>
+                <Icon className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="max-w-[140px] truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== file.id))}
+                  className="hover:text-rose-600 p-0.5"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
             );
           })}
         </div>
       )}
 
-      {/* 文本输入区域 */}
-      <div className="relative">
-        <textarea
-          ref={textareaRef}
-          rows={2}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          disabled={isStreaming}
-          className="w-full resize-none text-xs md:text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none max-h-44 overflow-y-auto leading-relaxed bg-transparent"
-        />
-      </div>
+      {/* 多行输入框 */}
+      <textarea
+        ref={textareaRef}
+        rows={2}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        className="w-full bg-transparent resize-none text-xs text-slate-800 placeholder-slate-400 focus:outline-none leading-relaxed min-h-[50px]"
+      />
 
-      {/* 底部工具操作条 */}
+      {/* 底部控制与操作栏 */}
       <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-        <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
-          {/* 文件上传按钮 */}
+        <div className="flex items-center space-x-2">
+          {/* 上传文件按钮 */}
           <button
             type="button"
             onClick={handleSelectFile}
             disabled={isUploading}
-            title="选择或拖拽本地 Excel / CSV / 代码 / 文本文件让 AI 深度解析"
             className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 transition-colors cursor-pointer"
+            title="选择并上传 Excel、JSON、SQL 或文档文件进行深度分析"
           >
-            {isUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" /> : <Paperclip className="w-3.5 h-3.5 text-emerald-600" />}
+            {isUploading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+            ) : (
+              <Paperclip className="w-3.5 h-3.5 text-emerald-600" />
+            )}
             <span>上传文件/表格</span>
           </button>
 
-          {/* 挂载对象元数据按钮 */}
+          {/* 引用对象字典按钮 */}
           <button
             type="button"
             onClick={onOpenEntityPicker}
-            title="选择租户对象将其字段元数据挂载到本次对话"
             className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-sky-700 hover:bg-sky-50 border border-slate-200 hover:border-sky-200 transition-colors cursor-pointer"
           >
             <Box className="w-3.5 h-3.5 text-sky-600" />
@@ -288,7 +277,10 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setSkillPopoverOpen(!skillPopoverOpen)}
+                onClick={() => {
+                  setSkillPopoverOpen(!skillPopoverOpen);
+                  setMcpPopoverOpen(false);
+                }}
                 title="选择要挂载的专业技能 (分系统内置与个人技能)"
                 className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 transition-colors cursor-pointer"
               >
@@ -304,7 +296,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                       <Lightbulb className="w-4 h-4 text-indigo-600" />
                       <span>挂载专业技能 (Skills)</span>
                     </span>
-                    <button onClick={() => setSkillPopoverOpen(false)} className="text-slate-400 hover:text-slate-600">
+                    <button onClick={() => setSkillPopoverOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -339,6 +331,105 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                       );
                     })}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 挂载 MCP 扩展服务按钮 */}
+          {availableMcpServers.length > 0 && onToggleMcpServer && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setMcpPopoverOpen(!mcpPopoverOpen);
+                  setSkillPopoverOpen(false);
+                }}
+                title="选择要在对话中激活的 MCP 扩展服务 (如远程知识库、文件系统等)"
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                  activeMcpCount > 0
+                    ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                    : 'text-slate-600 hover:text-purple-700 hover:bg-purple-50 border-slate-200 hover:border-purple-200'
+                }`}
+              >
+                <Plug className="w-3.5 h-3.5 text-purple-600" />
+                <span>MCP 扩展 ({activeMcpCount})</span>
+              </button>
+
+              {/* MCP 服务选择浮层 */}
+              {mcpPopoverOpen && (
+                <div className="absolute left-0 bottom-full mb-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-3 z-30 space-y-2 text-xs">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 font-semibold text-slate-800">
+                    <span className="flex items-center space-x-1.5">
+                      <Plug className="w-4 h-4 text-purple-600" />
+                      <span>挂载 MCP 扩展服务</span>
+                    </span>
+                    <button onClick={() => setMcpPopoverOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400">
+                    勾选后 AI 将自动感知该服务并优先调用其知识库或扩展工具
+                  </p>
+
+                  <div className="max-h-56 overflow-y-auto space-y-1 divide-y divide-slate-50">
+                    {availableMcpServers.map((srv) => {
+                      const isActive = activeMcpServerIds.includes(srv.id);
+                      const isBuiltin = srv.type === 'builtin' || srv.id === 'neocrm-paas-mcp';
+                      const toolCount = srv.tools?.length || 0;
+
+                      return (
+                        <div
+                          key={srv.id}
+                          onClick={() => onToggleMcpServer(srv.id)}
+                          className={`p-2 rounded-xl flex items-center justify-between cursor-pointer transition-colors ${
+                            isActive ? 'bg-purple-50/80 text-purple-900 font-medium' : 'hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <div className="truncate mr-2">
+                            <div className="flex items-center space-x-1.5 truncate">
+                              <span className="truncate">{srv.name}</span>
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
+                                {isBuiltin ? '内置' : srv.type.toUpperCase()}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                              {isBuiltin ? 'PaaS 内核实体与只读 SQL 驱动' : srv.description || srv.url || '自定义扩展服务'}
+                            </p>
+                            {!isBuiltin && toolCount > 0 && (
+                              <div className="text-[10px] text-purple-600 mt-0.5 flex items-center space-x-1">
+                                <span>包含 {toolCount} 个可用工具</span>
+                              </div>
+                            )}
+                          </div>
+                          <div
+                            className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${
+                              isActive ? 'bg-purple-600 border-purple-600 text-white' : 'border-slate-300 bg-white'
+                            }`}
+                          >
+                            {isActive && <Check className="w-3 h-3" />}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {onOpenMcpSettings && (
+                    <div className="pt-1.5 border-t border-slate-100 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMcpPopoverOpen(false);
+                          onOpenMcpSettings();
+                        }}
+                        className="text-[11px] text-sky-600 hover:text-sky-700 font-semibold flex items-center space-x-1 cursor-pointer"
+                      >
+                        <Settings className="w-3 h-3" />
+                        <span>前往系统设置配置 MCP</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

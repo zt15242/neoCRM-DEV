@@ -7,6 +7,7 @@ import {
   AiContextEntityRef,
   AiFileAttachment,
   AiSkillItem,
+  McpServerConfig,
   SessionState,
   SchemaPlanPayload
 } from '../../../shared/types';
@@ -51,6 +52,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
   const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
   const [activeSkillIds, setActiveSkillIds] = useState<string[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
+  const [activeMcpServerIds, setActiveMcpServerIds] = useState<string[]>([]);
   const [sessions, setSessions] = useState<AiChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
@@ -87,6 +90,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         setProviders(cfg.providers);
         setSettings(cfg.settings);
         if (cfg.skills) setSkills(cfg.skills);
+        if (cfg.mcpServers) {
+          setMcpServers(cfg.mcpServers);
+          const enabledCustom = cfg.mcpServers
+            .filter((m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp" && m.enabled)
+            .map((m) => m.id);
+          setActiveMcpServerIds(enabledCustom);
+        }
         setCurrentProviderId(cfg.settings.defaultProviderId || 'deepseek');
         setCurrentModelId(cfg.settings.defaultModelId || 'deepseek-chat');
         setEnableTools(cfg.settings.enableCrmTools);
@@ -299,7 +309,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     text: string,
     refs?: AiContextEntityRef[],
     attachments?: AiFileAttachment[],
-    skillIds?: string[]
+    skillIds?: string[],
+    mcpIds?: string[]
   ) => {
     let targetSession = activeSession;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
@@ -365,6 +376,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     setStreamingMessageId(assistantMsgId);
     reasoningStartTimeRef.current = null;
 
+    const effectiveMcpIds = mcpIds !== undefined ? mcpIds : activeMcpServerIds;
     await window.neoApi.aiStartChatStream({
       requestId,
       sessionId: updatedSession.id,
@@ -375,6 +387,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       messages: [...targetSession.messages, userMsg],
       enableTools,
       activeSkillIds: skillIds || activeSkillIds,
+      activeMcpServerIds: effectiveMcpIds,
       compactionSummary: targetSession.compactionSummary,
     });
   };
@@ -708,6 +721,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
                 )
               }
+              availableMcpServers={mcpServers.filter((m) => m.enabled)}
+              activeMcpServerIds={activeMcpServerIds}
+              onToggleMcpServer={(srvId) =>
+                setActiveMcpServerIds((prev) =>
+                  prev.includes(srvId) ? prev.filter((x) => x !== srvId) : [...prev, srvId]
+                )
+              }
+              onOpenMcpSettings={onNavigateToSettings}
               quickPrompts={currentPreset.quickPrompts}
               showToast={showToast}
             />

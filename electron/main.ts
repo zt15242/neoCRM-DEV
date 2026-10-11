@@ -407,6 +407,7 @@ ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: Array
 // ================= MCP 与 Skill 技能管理 =================
 ipcMain.handle('ai:saveMcpServer', async (_, server) => aiService.saveMcpServer(server));
 ipcMain.handle('ai:deleteMcpServer', async (_, id: string) => aiService.deleteMcpServer(id));
+ipcMain.handle('ai:syncMcpTools', async (_, id: string) => aiService.syncMcpTools(id));
 ipcMain.handle('ai:saveSkill', async (_, skill) => aiService.saveSkill(skill));
 ipcMain.handle('ai:deleteSkill', async (_, id: string) => aiService.deleteSkill(id));
 ipcMain.handle("ai:compactSession", async (_, sessionId: string) => aiService.compactSession(sessionId));

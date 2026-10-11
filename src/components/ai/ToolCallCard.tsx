@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AiToolCallRecord } from '../../../shared/types';
 import { 
   Wrench, 
@@ -8,7 +8,10 @@ import {
   Database,
   Box,
   FileCode,
-  ShieldCheck
+  ShieldCheck,
+  Plug,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -16,6 +19,8 @@ interface ToolCallCardProps {
 }
 
 export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
+  const [expanded, setExpanded] = useState(false);
+
   const getToolMeta = (name: string) => {
     switch (name) {
       case 'get_tenant_info':
@@ -48,10 +53,10 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
         };
       default:
         return {
-          title: '执行智能体扩展工具',
-          icon: Wrench,
-          badge: '安全沙箱',
-          color: 'text-slate-600 bg-slate-50 border-slate-200',
+          title: `调用 MCP 扩展工具: ${name}`,
+          icon: Plug,
+          badge: 'MCP 知识库/扩展',
+          color: 'text-purple-600 bg-purple-50 border-purple-200',
         };
     }
   };
@@ -59,9 +64,14 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query'].includes(toolCall.name);
+
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
-      <div className="flex items-center justify-between px-3 py-2 text-xs">
+      <div 
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center justify-between px-3 py-2 text-xs cursor-pointer hover:bg-slate-50/80 transition-colors"
+      >
         <div className="flex items-center space-x-2">
           <div className={`p-1 rounded-md border ${meta.color}`}>
             <Icon className="w-3.5 h-3.5" />
@@ -100,8 +110,34 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
               <span>失败</span>
             </div>
           )}
+          {expanded ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
         </div>
       </div>
+
+      {expanded && (
+        <div className="p-3 bg-slate-50 border-t border-slate-100 space-y-2 text-[11px] font-mono">
+          <div>
+            <div className="text-slate-400 mb-1 font-semibold uppercase text-[10px]">调用入参 (Arguments)</div>
+            <pre className="p-2 rounded bg-slate-900 text-slate-200 overflow-x-auto max-h-40">
+              {JSON.stringify(toolCall.arguments || {}, null, 2)}
+            </pre>
+          </div>
+          {toolCall.resultData && (
+            <div>
+              <div className="text-slate-400 mb-1 font-semibold uppercase text-[10px]">
+                {isExternalMcp ? 'MCP 知识库响应数据 (Result)' : '返回结果摘要'}
+              </div>
+              <pre className="p-2 rounded bg-slate-900 text-slate-200 overflow-x-auto max-h-56 whitespace-pre-wrap">
+                {typeof toolCall.resultData === 'string'
+                  ? toolCall.resultData
+                  : toolCall.resultData?.content
+                  ? toolCall.resultData.content
+                  : JSON.stringify(toolCall.resultData, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
