@@ -1370,7 +1370,8 @@ ${toolDataContext}
       }
       const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
       if (!queryRes.success || !queryRes.data) {
-        throw new Error(queryRes.error || 'SQL 执行返回失败');
+        const rawErr = queryRes.error || 'SQL 执行返回失败';
+        throw new Error(`${rawErr} (提示: 销售易标准客户对象的名称字段为 name 而非 accountName，若不确定字段请先调用 get_entity_fields 确认字段 API Key)`);
       }
       const records = queryRes.data.records || [];
       const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);

@@ -96,9 +96,18 @@ export class DataService {
         },
       };
     } catch (e: any) {
+      const errData = e.response?.data;
+      const errMsg =
+        errData?.msg ||
+        errData?.message ||
+        errData?.error?.message ||
+        errData?.error ||
+        (typeof errData === 'string' ? errData : null) ||
+        (errData ? JSON.stringify(errData) : null) ||
+        e.message;
       return {
         success: false,
-        error: e.response?.data?.msg || e.response?.data?.message || e.message,
+        error: errMsg,
       };
     }
   }
