@@ -121,6 +121,9 @@ export interface CreateFieldPayload {
   maxLength?: number;
   decimal?: number;
   pickOption?: { optionLabel: string; optionCode: number }[];
+  referObjectApiKey?: string;
+  cascadeDelete?: number;
+  linkLabel?: string;
   description?: string;
 }
 
@@ -152,6 +155,9 @@ export interface ExcelFieldRow {
   maxLength?: number;
   decimal?: number;
   optionsStr?: string; // 原始选项字符串
+  referObjectApiKey?: string;
+  cascadeDelete?: number;
+  linkLabel?: string;
   pickOption?: { optionLabel: string; optionCode: number }[];
   description?: string;
   status: 'pending' | 'valid' | 'invalid' | 'exists' | 'success' | 'failed' | 'skipped';

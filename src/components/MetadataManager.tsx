@@ -424,6 +424,7 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
       <CreateFieldModal
         isOpen={isCreateFieldOpen}
         entity={selectedEntity}
+        entities={entities}
         onClose={() => setIsCreateFieldOpen(false)}
         onSubmit={async (entityApiKey, payload) => {
           const res = await window.neoApi.createField(entityApiKey, payload);

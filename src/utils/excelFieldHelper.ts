@@ -59,6 +59,12 @@ export const TYPE_NAME_MAP: Record<string, number> = {
 
   '富文本': 40,
   'richtext': 40,
+  '关联关系': 10,
+  '关联': 10,
+  '引用': 10,
+  'reference': 10,
+  '图片': 29,
+  '文件': 39,
 };
 
 export const REVERSE_TYPE_NAME_MAP: Record<number, string> = {
@@ -69,6 +75,7 @@ export const REVERSE_TYPE_NAME_MAP: Record<number, string> = {
   5: '整数',
   6: '金额',
   7: '日期',
+  10: '关联关系',
   21: '日期时间',
   22: '电话',
   23: '邮箱',
@@ -161,6 +168,8 @@ export function parseExcelFile(
       const decimalKey = findColumnKey(row, ['小数', '小数位', 'decimal']);
       const optionsKey = findColumnKey(row, ['选项', '下拉', 'options', 'pickoption', '枚举']);
       const descKey = findColumnKey(row, ['描述', '说明', '备注', 'description', 'desc']);
+      const referObjKey = findColumnKey(row, ['关联对象', '引用对象', 'referObject', 'refer', 'targetEntity']);
+      const rawReferObj = referObjKey ? String(row[referObjKey]).trim() : '';
 
       const rawLabel = String(labelKey ? row[labelKey] : '').trim();
       let rawApiKey = String(apiKeyKey ? row[apiKeyKey] : '').trim().replace(/__c$/, '');
@@ -223,6 +232,8 @@ export function parseExcelFile(
         optionsStr: rawOptions,
         pickOption,
         description: rawDesc,
+        referObjectApiKey: rawReferObj,
+        cascadeDelete: 1,
         status,
         errorMessage,
         selected: status === 'valid', // 校验通过默认勾选

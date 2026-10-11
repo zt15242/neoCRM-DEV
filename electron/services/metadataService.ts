@@ -169,6 +169,14 @@ export class MetadataService {
     if (payload.itemType === 29) {
       body.maxLength = payload.maxLength || 1;
     }
+    // 关联关系字段 (itemType = 10)
+    if (payload.itemType === 10) {
+      body.referObjectApiKey = payload.referObjectApiKey?.trim();
+      body.cascadeDelete = payload.cascadeDelete !== undefined ? Number(payload.cascadeDelete) : 1; // 默认1=置空清理
+      if (payload.linkLabel?.trim()) {
+        body.linkLabel = payload.linkLabel.trim();
+      }
+    }
 
     try {
       const res = await axios.post(url, body, { headers, timeout: 20000 });

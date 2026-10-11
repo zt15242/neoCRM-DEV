@@ -151,6 +151,9 @@ export const BatchFieldImportModal: React.FC<BatchFieldImportModalProps> = ({
           maxLength: currentRow.maxLength,
           decimal: currentRow.decimal,
           pickOption: currentRow.pickOption,
+          referObjectApiKey: currentRow.referObjectApiKey,
+          cascadeDelete: currentRow.cascadeDelete !== undefined ? currentRow.cascadeDelete : 1,
+          linkLabel: currentRow.linkLabel || currentRow.label,
           description: currentRow.description,
         };
 
