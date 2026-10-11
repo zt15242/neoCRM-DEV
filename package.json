@@ -1,6 +1,6 @@
 {
   "name": "neocrm-desktop",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "NeoCRM 桌面端开发者工具，支持多环境切换、OAuth2 授权登录、会话管理与 CLI 凭证同步",
   "main": "dist-electron/main.js",
   "scripts": {
