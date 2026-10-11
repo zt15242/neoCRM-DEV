@@ -209,3 +209,14 @@ export function parseDataExcelFile(
     return { rows: [], totalCount: 0, createCount: 0, updateCount: 0, error: `解析 Excel 失败: ${err.message}` };
   }
 }
+
+/**
+ * 将 JSON 记录数组导出为 Excel 文件
+ */
+export function exportJsonToExcel(records: Record<string, any>[], fileName = 'export_data'): void {
+  if (!records || records.length === 0) return;
+  const worksheet = XLSX.utils.json_to_sheet(records);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
+  XLSX.writeFile(workbook, `${fileName}.xlsx`);
+}

@@ -70,6 +70,24 @@ export const neoApi = {
   createRecord: (entityApiKey: string, data: Record<string, any>) => ipcRenderer.invoke('data:createRecord', entityApiKey, data),
   updateRecord: (entityApiKey: string, id: string | number, data: Record<string, any>) => ipcRenderer.invoke('data:updateRecord', entityApiKey, id, data),
   deleteRecord: (entityApiKey: string, id: string | number) => ipcRenderer.invoke('data:deleteRecord', entityApiKey, id),
+// AI 对话平台与模型设置 (参考 DeepSeek Harness)
+  aiGetConfig: () => ipcRenderer.invoke('ai:getConfig'),
+  aiSaveSettings: (settings: any) => ipcRenderer.invoke('ai:saveSettings', settings),
+  aiSaveProvider: (provider: any) => ipcRenderer.invoke('ai:saveProvider', provider),
+  aiDeleteProvider: (id: string) => ipcRenderer.invoke('ai:deleteProvider', id),
+  aiTestProvider: (provider: any) => ipcRenderer.invoke('ai:testProvider', provider),
+  aiFetchModels: (provider: any) => ipcRenderer.invoke('ai:fetchModels', provider),
+  aiGetSessions: () => ipcRenderer.invoke('ai:getSessions'),
+  aiSaveSession: (session: any) => ipcRenderer.invoke('ai:saveSession', session),
+  aiDeleteSession: (sessionId: string) => ipcRenderer.invoke('ai:deleteSession', sessionId),
+  aiClearSessions: () => ipcRenderer.invoke('ai:clearSessions'),
+  aiStartChatStream: (params: any) => ipcRenderer.invoke('ai:startChatStream', params),
+  aiAbortChatStream: (requestId: string) => ipcRenderer.invoke('ai:abortChatStream', requestId),
+  onAiStreamEvent: (callback: (event: any) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('ai:streamEvent', handler);
+    return () => ipcRenderer.removeListener('ai:streamEvent', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('neoApi', neoApi);

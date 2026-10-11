@@ -5,6 +5,8 @@ import { LoginCard } from './components/LoginCard';
 import { SessionDashboard } from './components/SessionDashboard';
 import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
+import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
+import { SettingsManager } from './components/settings/SettingsManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
@@ -337,7 +339,7 @@ export const App: React.FC = () => {
           ) : (
             <div className="py-20 text-center space-y-3">
               <ShieldAlert className="w-10 h-10 text-amber-400 mx-auto" />
-              <h3 className="text-base font-semibold text-slate-200">请先登录租户</h3>
+              <h3 className="text-base font-semibold text-slate-800">请先登录租户</h3>
               <p className="text-xs text-slate-400">元数据管理需要当前租户有效的访问令牌 (Token)</p>
               <button
                 onClick={() => setActiveTab('dashboard')}
@@ -360,7 +362,7 @@ export const App: React.FC = () => {
           ) : (
             <div className="py-20 text-center space-y-3">
               <ShieldAlert className="w-10 h-10 text-amber-400 mx-auto" />
-              <h3 className="text-base font-semibold text-slate-200">请先登录租户</h3>
+              <h3 className="text-base font-semibold text-slate-800">请先登录租户</h3>
               <p className="text-xs text-slate-400">数据查询与 DML 需要当前租户有效的访问令牌 (Token)</p>
               <button
                 onClick={() => setActiveTab('dashboard')}
@@ -371,6 +373,24 @@ export const App: React.FC = () => {
               </button>
             </div>
           )
+        )}
+
+        {/* Tab 4: AI 对话平台 (DeepSeek Harness 风格) */}
+        {activeTab === 'ai' && (
+          <AiHarnessStudio
+            crmSession={session}
+            onNavigateToSettings={() => setActiveTab('settings')}
+            showToast={showToast}
+          />
+        )}
+
+        {/* Tab 5: 系统与 AI 设置中心 */}
+        {activeTab === 'settings' && (
+          <SettingsManager
+            onBackToAi={() => setActiveTab('ai')}
+            onCheckUpdate={() => handleCheckUpdate(true)}
+            showToast={showToast}
+          />
         )}
       </main>
 

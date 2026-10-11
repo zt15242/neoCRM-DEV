@@ -201,3 +201,120 @@ export interface ScrollProgress {
   percent: number;
   page: number;
 }
+
+// ================= AI 对话平台与设置相关类型 (参考 DeepSeek Harness) =================
+
+export type AiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
+
+export interface AiModelItem {
+  id: string;
+  name: string;
+  reasoning?: boolean; // 是否具备深度推理/思考模式（如 DeepSeek-R1 / o1 / o3）
+  tools?: boolean; // 是否支持 Function / Tool Calling
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+export interface AiProviderConfig {
+  id: string; // 唯一标识，如 deepseek, openai, siliconflow, custom_xxx
+  name: string; // 供应商名称，如 DeepSeek 官方平台
+  type: 'official-deepseek' | 'builtin-thirdparty' | 'custom';
+  protocol: AiProtocol;
+  baseUrl: string;
+  apiKey: string;
+  enabled: boolean;
+  models: AiModelItem[];
+  description?: string;
+  website?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface AiHarnessSettings {
+  defaultProviderId: string;
+  defaultModelId: string;
+  temperature: number;
+  maxTokens: number;
+  contextLimit: number; // 携带的历史轮数
+  stream: boolean;
+  enableCrmTools: boolean; // 是否允许 AI 自动调用销售易本地工具 (Agent Loop)
+  enableSqlTool: boolean; // 是否允许 AI 执行只读 SQL
+  injectTenantContext: boolean; // 是否自动注入当前租户环境上下文
+  customSystemPrompt: string; // 用户自定义追加的系统提示词
+  defaultStartupTab: 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings';
+  defaultSqlLimit: number;
+}
+
+export interface AiConfigData {
+  providers: AiProviderConfig[];
+  settings: AiHarnessSettings;
+}
+
+export interface AiToolCallRecord {
+  id: string;
+  name: string; // get_tenant_info | list_entities | get_entity_fields | execute_sql_query
+  arguments: Record<string, any>;
+  status: 'running' | 'success' | 'error';
+  resultSummary?: string;
+  resultData?: any;
+  durationMs?: number;
+  error?: string;
+}
+
+export interface AiContextEntityRef {
+  apiKey: string;
+  label: string;
+  isStandard?: boolean;
+  fieldsCount?: number;
+  fieldsSample?: { apiKey: string; label: string; typeName: string }[];
+}
+
+export interface AiChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  reasoningContent?: string; // 深度思考内容 (DeepSeek-R1 或 <think>)
+  reasoningDurationMs?: number;
+  isThinkingFinished?: boolean;
+  toolCalls?: AiToolCallRecord[];
+  entityRefs?: AiContextEntityRef[];
+  providerId?: string;
+  modelId?: string;
+  createdAt: number;
+  error?: string;
+}
+
+export interface AiChatSession {
+  id: string;
+  title: string;
+  presetId: string;
+  providerId: string;
+  modelId: string;
+  messages: AiChatMessage[];
+  entityRefs?: AiContextEntityRef[];
+  createdAt: number;
+  updatedAt: number;
+  pinned?: boolean;
+}
+
+export interface AiStreamEvent {
+  requestId: string;
+  sessionId: string;
+  messageId: string;
+  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error';
+  delta?: string;
+  toolCall?: AiToolCallRecord;
+  error?: string;
+}
+
+export interface AiAgentPreset {
+  id: string;
+  name: string;
+  description: string;
+  iconName: string;
+  badge?: string;
+  systemPrompt: string;
+  recommendedModel?: string;
+  enableCrmTools: boolean;
+  quickPrompts: string[];
+}

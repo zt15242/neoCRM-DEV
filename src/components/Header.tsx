@@ -7,11 +7,13 @@ import {
   X,
   Database,
   Box,
-  LayoutDashboard
+  LayoutDashboard,
+  Sparkles,
+  Settings
 } from 'lucide-react';
 import { SessionState } from '../../shared/types';
 
-export type AppNavTab = 'dashboard' | 'metadata' | 'data';
+export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings';
 
 interface HeaderProps {
   platform: string;
@@ -60,13 +62,13 @@ export const Header: React.FC<HeaderProps> = ({
               title="点击检查最新版本"
               className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 window-no-drag font-medium transition-colors flex items-center space-x-1"
             >
-              <span>v1.2.3</span>
+              <span>v1.2.4</span>
               {hasUpdate ? (
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
               ) : null}
             </button>
           </div>
-          <p className="text-[11px] text-slate-500">元数据管理 • 业务数据中心 • OAuth2</p>
+          <p className="text-[11px] text-slate-500">元数据管理 • 业务数据中心 • AI Harness</p>
         </div>
       </div>
 
@@ -74,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200 window-no-drag">
         <button
           onClick={() => onTabChange('dashboard')}
-          className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
             activeTab === 'dashboard'
               ? 'bg-white text-sky-600 shadow-sm border border-slate-200/80 font-semibold'
               : 'text-slate-600 hover:text-slate-900'
@@ -86,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         <button
           onClick={() => onTabChange('metadata')}
-          className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
             activeTab === 'metadata'
               ? 'bg-white text-sky-600 shadow-sm border border-slate-200/80 font-semibold'
               : 'text-slate-600 hover:text-slate-900'
@@ -98,7 +100,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         <button
           onClick={() => onTabChange('data')}
-          className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
             activeTab === 'data'
               ? 'bg-white text-sky-600 shadow-sm border border-slate-200/80 font-semibold'
               : 'text-slate-600 hover:text-slate-900'
@@ -106,6 +108,30 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <Database className="w-3.5 h-3.5" />
           <span>数据中心 (DML)</span>
+        </button>
+
+        <button
+          onClick={() => onTabChange('ai')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            activeTab === 'ai'
+              ? 'bg-white text-sky-600 shadow-sm border border-slate-200/80 font-semibold'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5 text-sky-600" />
+          <span>AI 对话平台</span>
+        </button>
+
+        <button
+          onClick={() => onTabChange('settings')}
+          className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            activeTab === 'settings'
+              ? 'bg-white text-sky-600 shadow-sm border border-slate-200/80 font-semibold'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Settings className="w-3.5 h-3.5" />
+          <span>系统设置</span>
         </button>
       </div>
 

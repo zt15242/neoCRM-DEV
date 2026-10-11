@@ -9,6 +9,7 @@ import { MetadataService } from './services/metadataService';
 import { DataService } from './services/dataService';
 import { UpdateService } from './services/updateService';
 import { ImageService } from './services/imageService';
+import { AiService } from './services/aiService';
 import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
 
 const currentDir = typeof __dirname !== 'undefined' 
@@ -27,6 +28,7 @@ const metadataService = new MetadataService();
 const dataService = new DataService();
 const updateService = new UpdateService();
 const imageService = new ImageService();
+const aiService = new AiService(sessionStore, metadataService, dataService);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -311,4 +313,31 @@ ipcMain.handle('data:deleteRecord', async (_, entityApiKey: string, id: string |
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) throw new Error('请先登录租户');
   return dataService.deleteRecord(current.environment, current.tokenData, entityApiKey, id);
+});
+
+// ================= AI 对话平台与模型设置 =================
+
+ipcMain.handle('ai:getConfig', async () => aiService.getAiConfig());
+ipcMain.handle('ai:saveSettings', async (_, settings) => aiService.saveAiSettings(settings));
+ipcMain.handle('ai:saveProvider', async (_, provider) => aiService.saveProvider(provider));
+ipcMain.handle('ai:deleteProvider', async (_, providerId: string) => aiService.deleteProvider(providerId));
+ipcMain.handle('ai:testProvider', async (_, provider) => aiService.testProvider(provider));
+ipcMain.handle('ai:fetchModels', async (_, provider) => aiService.fetchAvailableModels(provider));
+
+ipcMain.handle('ai:getSessions', async () => aiService.getSessions());
+ipcMain.handle('ai:saveSession', async (_, session) => aiService.saveSession(session));
+ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => aiService.deleteSession(sessionId));
+ipcMain.handle('ai:clearSessions', async () => aiService.clearSessions());
+
+ipcMain.handle('ai:startChatStream', async (_, params) => {
+  aiService.startChatStream(params, (event) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('ai:streamEvent', event);
+    }
+  });
+  return true;
+});
+
+ipcMain.handle('ai:abortChatStream', async (_, requestId: string) => {
+  return aiService.abortChatStream(requestId);
 });

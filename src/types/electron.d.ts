@@ -11,7 +11,13 @@ import {
   QueryResultData,
   UpdateInfo,
   DownloadProgress,
-  ScrollProgress
+  ScrollProgress,
+  AiConfigData,
+  AiHarnessSettings,
+  AiProviderConfig,
+  AiChatSession,
+  AiStreamEvent,
+  AiModelItem
 } from '../../shared/types';
 
 declare global {
@@ -71,6 +77,29 @@ declare global {
       createRecord: (entityApiKey: string, data: Record<string, any>) => Promise<{ success: boolean; data?: any; error?: string }>;
       updateRecord: (entityApiKey: string, id: string | number, data: Record<string, any>) => Promise<{ success: boolean; data?: any; error?: string }>;
       deleteRecord: (entityApiKey: string, id: string | number) => Promise<{ success: boolean; error?: string }>;
+// AI 对话平台与模型设置 (参考 DeepSeek Harness)
+      aiGetConfig: () => Promise<AiConfigData>;
+      aiSaveSettings: (settings: Partial<AiHarnessSettings>) => Promise<AiHarnessSettings>;
+      aiSaveProvider: (provider: AiProviderConfig) => Promise<AiProviderConfig[]>;
+      aiDeleteProvider: (id: string) => Promise<AiProviderConfig[]>;
+      aiTestProvider: (provider: AiProviderConfig) => Promise<{ success: boolean; message: string; responseTimeMs?: number }>;
+      aiFetchModels: (provider: AiProviderConfig) => Promise<{ success: boolean; models: AiModelItem[]; error?: string }>;
+      aiGetSessions: () => Promise<AiChatSession[]>;
+      aiSaveSession: (session: AiChatSession) => Promise<AiChatSession[]>;
+      aiDeleteSession: (sessionId: string) => Promise<AiChatSession[]>;
+      aiClearSessions: () => Promise<boolean>;
+      aiStartChatStream: (params: {
+        requestId: string;
+        sessionId: string;
+        messageId: string;
+        providerId: string;
+        modelId: string;
+        presetPrompt?: string;
+        messages: any[];
+        enableTools?: boolean;
+      }) => Promise<boolean>;
+      aiAbortChatStream: (requestId: string) => Promise<boolean>;
+      onAiStreamEvent: (callback: (event: AiStreamEvent) => void) => () => void;
     };
   }
 }
