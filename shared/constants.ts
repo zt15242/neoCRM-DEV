@@ -504,168 +504,62 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   },
 ];
 
-/**
- * 销售易 Agent Harness 本地工具列表 (给大模型 Function Calling)
- */
-export const CRM_HARNESS_TOOLS_SPEC = [
-  {
-    type: 'function',
-    function: {
-      name: 'get_tenant_info',
-      description: '获取当前用户在工作台中登录的销售易租户信息、环境名称、用户姓名及当前连接状态。',
-      parameters: {
-        type: 'object',
-        properties: {},
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'list_entities',
-      description: '获取当前租户下的所有实体业务对象（标准对象和自定义对象）。可用于查找某个对象是否存在、获取对象的 apiKey 与名称。',
-      parameters: {
-        type: 'object',
-        properties: {
-          keyword: {
-            type: 'string',
-            description: '可选搜索关键词，用于过滤对象名称或 apiKey，如 "客户" 或 "account"',
-          },
-          isCustomOnly: {
-            type: 'boolean',
-            description: '是否只查询自定义对象，默认 false 查询所有',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_entity_fields',
-      description: '获取指定业务实体的完整字段列表与元数据详情（包含字段中文名 label、API Key、类型代码 itemType、类型名称、是否必填、关联目标等）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          entityApiKey: {
-            type: 'string',
-            description: '实体对象的 API Key，例如 "account"（客户）、"opportunity"（商机）等',
-          },
-        },
-        required: ['entityApiKey'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'execute_sql_query',
-      description: '在当前租户数据库执行只读的销售易 SQL 查询（XOQL），用于检索真实业务数据样本。只允许 SELECT 语句，单次限制返回最多 50 条。',
-      parameters: {
-        type: 'object',
-        properties: {
-          sql: {
-            type: 'string',
-            description: '合法的销售易 SELECT 查询语句，例如 "SELECT id, name, createdAt FROM account LIMIT 10"',
-          },
-        },
-        required: ['sql'],
-      },
-    },
-  },
-];
-
-import { McpServerConfig, AiSkillItem } from './types';
+import { McpServerConfig, AiSkillItem } from "./types";
 
 /**
  * 默认预置的 MCP 服务器 (Model Context Protocol)
+ * 注意: 内置本地服务由桌面内核底层托管，不向前端暴露内部工具清单与调用签名
  */
 export const BUILTIN_MCP_SERVERS: McpServerConfig[] = [
   {
-    id: 'neocrm-paas-mcp',
-    name: 'NeoCRM 销售易 PaaS 本地服务 (内置)',
-    description: '提供当前已连接租户的事实感知、实体元数据检索、字段字典定义与只读 SQL 执行能力。',
-    type: 'builtin',
+    id: "neocrm-paas-mcp",
+    name: "NeoCRM 销售易 PaaS 本地服务 (内置)",
+    description: "提供当前已连接租户的事实感知、实体元数据检索、字段字典定义与只读 SQL 执行能力（已受桌面内核沙箱保护）。",
+    type: "builtin",
     enabled: true,
-    tools: [
-      {
-        name: 'get_tenant_info',
-        description: '获取当前用户在工作台中登录的销售易租户信息、环境名称与连接状态。',
-      },
-      {
-        name: 'list_entities',
-        description: '获取当前租户下的所有实体业务对象（标准对象和自定义对象）。',
-      },
-      {
-        name: 'get_entity_fields',
-        description: '获取指定业务实体的完整字段列表与元数据详情。',
-      },
-      {
-        name: 'execute_sql_query',
-        description: '在当前租户数据库执行只读的销售易 SQL 查询（XOQL），检索业务样本数据。',
-      },
-    ],
+    tools: [],
   },
 ];
 
 /**
  * 默认预置的系统技能 (Built-in Skills)
+ * 注意: 核心系统指令已移入桌面内核安全沙箱混淆保护，绝不向渲染进程或配置文件明文暴露
  */
 export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
   {
-    id: 'skill-schema-design',
-    name: '销售易数据建模与字段规范',
-    description: '严格遵循销售易 PaaS 命名规范与字段类型代码，规划主子表、关联关系与自动编号规则。',
-    category: 'builtin',
-    iconName: 'Box',
-    triggerKeywords: ['建模', '建表', '创建对象', '字段设计', '设计表'],
+    id: "skill-schema-design",
+    name: "销售易数据建模与字段规范",
+    description: "严格遵循销售易 PaaS 命名规范与字段类型代码，规划主子表、关联关系与自动编号规则。",
+    category: "builtin",
+    iconName: "Box",
+    triggerKeywords: ["建模", "建表", "创建对象", "字段设计", "设计表"],
     enabled: true,
-    systemInstruction: `【销售易数据建模 Skill 规范】:
-1. 对象 API Key 规范以小写驼峰或添加 __c 后缀（例如 serviceOrder__c）；
-2. 字段类型代码严格按照销售易规范：文本(1)、单选(3)、多选(4)、整数(5)、金额(6)、日期(7)、日期时间(8)、关联关系(10)、图片(14)、布尔(31)；
-3. 主子对象建议使用关联关系 (itemType: 10) 绑定，并明确级联删除策略；
-4. 完成方案后输出清晰规范的表格并附带结构化 schema 方案。`,
   },
   {
-    id: 'skill-xoql-expert',
-    name: '销售易 XOQL 查询与语法构建',
-    description: '专精销售易 SQL 语法，指导多表关联查询、字段别名、聚合统计及时间函数。',
-    category: 'builtin',
-    iconName: 'Database',
-    triggerKeywords: ['SQL', 'XOQL', '查数据', '统计', '查询'],
+    id: "skill-xoql-expert",
+    name: "销售易 XOQL 查询与语法构建",
+    description: "专精销售易 SQL 语法，指导多表关联查询、字段别名、聚合统计及时间函数。",
+    category: "builtin",
+    iconName: "Database",
+    triggerKeywords: ["SQL", "XOQL", "查数据", "统计", "查询"],
     enabled: true,
-    systemInstruction: `【销售易 XOQL 编写 Skill 规范】:
-1. 销售易查询只允许 SELECT 语句，杜绝 DML 操作；
-2. 关联字段通过 lookup 查询关联对象属性，如 accountId.name；
-3. 标准客户对象的名称字段为 name，联系人为 name，商机为 opportunityName；
-4. 始终建议在查询中附带合理的 LIMIT 限制以提高执行效率。`,
   },
   {
-    id: 'skill-paas-trigger',
-    name: '销售易 Trigger 触发器开发规范',
-    description: '精通销售易 Java/Groovy 后端触发器生命周期、事务控制、防死锁与 SDK 工具类。',
-    category: 'builtin',
-    iconName: 'Code2',
-    triggerKeywords: ['Trigger', '触发器', 'Groovy', 'PaaS代码', '后端开发'],
+    id: "skill-paas-trigger",
+    name: "销售易 Trigger 触发器开发规范",
+    description: "精通销售易 Java/Groovy 后端触发器生命周期、事务控制、防死锁与 SDK 工具类。",
+    category: "builtin",
+    iconName: "Code2",
+    triggerKeywords: ["Trigger", "触发器", "Groovy", "PaaS代码", "后端开发"],
     enabled: true,
-    systemInstruction: `【销售易 Trigger 开发 Skill 规范】:
-1. 正确选用 Trigger 事件：beforeInsert, afterInsert, beforeUpdate, afterUpdate 等；
-2. 批量处理防循环调用 (SOQL/DML 严禁放在 for 循环体内)；
-3. 规范捕获 BusinessException 异常并提供友好的前端错误提示；
-4. 规范使用 NeoCRM 平台提供的 SDK 工具类。`,
   },
   {
-    id: 'skill-data-quality',
-    name: 'CRM 业务数据质检与清洗',
-    description: '识别手机号、邮箱、信用代码等字段格式异常，排查重复数据与空值异常。',
-    category: 'builtin',
-    iconName: 'ShieldCheck',
-    triggerKeywords: ['质检', '清洗', '校验', '格式检查', '脏数据'],
+    id: "skill-data-quality",
+    name: "CRM 业务数据质检与清洗",
+    description: "识别手机号、邮箱、信用代码等字段格式异常，排查重复数据与空值异常。",
+    category: "builtin",
+    iconName: "ShieldCheck",
+    triggerKeywords: ["质检", "清洗", "校验", "格式检查", "脏数据"],
     enabled: true,
-    systemInstruction: `【CRM 数据质检 Skill 规范】:
-1. 手机号校验中国大陆 11 位 1[3-9]d{9} 正则；
-2. 统一社会信用代码校验 18 位格式与校验码规则；
-3. 检查必填项缺失、重复数据与无效关联外键；
-4. 给出清晰的问题严重等级分布报告与数据修复 SQL 建议。`,
   },
 ];

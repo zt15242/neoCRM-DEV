@@ -67,8 +67,27 @@ function createWindow() {
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
-    return { action: 'deny' };
+    return { action: "deny" };
   });
+
+  // 生产环境安全加固: 禁用开发者工具快捷键与右键审查，防止逆向破解探查
+  if (app.isPackaged) {
+    win.webContents.on("before-input-event", (event, input) => {
+      const isDevToolsKey =
+        input.key === "F12" ||
+        ((input.control || input.meta) &&
+          input.shift &&
+          ["I", "i", "C", "c", "J", "j"].includes(input.key)) ||
+        ((input.control || input.meta) && ["u", "U"].includes(input.key));
+      if (isDevToolsKey) {
+        event.preventDefault();
+      }
+    });
+
+    win.webContents.on("context-menu", (event) => {
+      event.preventDefault();
+    });
+  }
 }
 
 app.whenReady().then(() => {

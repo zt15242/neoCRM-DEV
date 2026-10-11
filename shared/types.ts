@@ -279,7 +279,7 @@ export interface AiSkillItem {
   description: string;
   category: 'builtin' | 'personal'; // 系统内置 vs 个人自定义
   iconName?: string;
-  systemInstruction: string;
+  systemInstruction?: string;
   triggerKeywords?: string[];
   enabled: boolean;
   createdAt?: number;

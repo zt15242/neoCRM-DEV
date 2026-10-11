@@ -6,16 +6,13 @@ import {
   Trash2, 
   Edit3, 
   CheckCircle2, 
-  Sparkles, 
-  Code2, 
-  Database, 
-  Box, 
   ShieldCheck, 
   X,
   ChevronDown,
   ChevronRight,
   User,
-  Shield
+  Shield,
+  Lock
 } from 'lucide-react';
 
 interface SkillSettingsProps {
@@ -54,11 +51,15 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
   };
 
   const handleOpenEdit = (skill: AiSkillItem) => {
+    if (skill.category === 'builtin') {
+      showToast('info', '系统内置技能受内核加密保护，不可直接编辑');
+      return;
+    }
     setEditingSkill(skill);
     setName(skill.name);
     setDescription(skill.description);
     setTriggerKeywordsStr((skill.triggerKeywords || []).join(', '));
-    setSystemInstruction(skill.systemInstruction);
+    setSystemInstruction(skill.systemInstruction || '');
     setModalOpen(true);
   };
 
@@ -113,7 +114,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
         <div>
           <h3 className="text-base font-bold text-slate-800">Skill 技能库 (Skills System)</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            分为「系统内置」与「个人专属」两层技能体系，在对话中可一键挂载特定专业知识与业务规则。
+            分为「系统内置」与「个人专属」两层体系。内置技能受内核加密保护，个人技能支持自定义业务规则与知识。
           </p>
         </div>
         <button
@@ -161,6 +162,16 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
         </button>
       </div>
 
+      {/* 安全保护提示横幅 */}
+      {activeTab === 'builtin' && (
+        <div className="p-3 bg-sky-50/70 border border-sky-100 rounded-xl flex items-center space-x-2.5 text-sky-900">
+          <ShieldCheck className="w-4 h-4 text-sky-600 shrink-0" />
+          <span className="text-xs">
+            系统内置专业技能已全面实施<strong>内核级加密沙箱保护</strong>，禁止明文提取、查阅与破解导出，可在对话中直接挂载生效。
+          </span>
+        </div>
+      )}
+
       {/* 技能卡片列表 */}
       <div className="space-y-3">
         {filteredSkills.map((skill) => {
@@ -190,19 +201,20 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                         : 'bg-indigo-600 text-white'
                     }`}
                   >
-                    <Lightbulb className="w-4 h-4" />
+                    {isBuiltin ? <Lock className="w-4 h-4" /> : <Lightbulb className="w-4 h-4" />}
                   </div>
                   <div>
                     <div className="flex items-center space-x-2">
                       <h4 className="text-sm font-bold text-slate-900">{skill.name}</h4>
                       <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border ${
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border flex items-center space-x-1 ${
                           isBuiltin
                             ? 'bg-sky-100 text-sky-800 border-sky-200'
                             : 'bg-indigo-50 text-indigo-700 border-indigo-200'
                         }`}
                       >
-                        {isBuiltin ? '系统内置' : '个人自定义'}
+                        {isBuiltin && <ShieldCheck className="w-2.5 h-2.5" />}
+                        <span>{isBuiltin ? '内核加密 · 系统内置' : '个人自定义'}</span>
                       </span>
                       {skill.enabled ? (
                         <span className="text-[10px] text-emerald-600 flex items-center space-x-0.5 font-medium">
@@ -234,31 +246,33 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
 
                 {/* 操作栏 */}
                 <div className="flex items-center space-x-2 shrink-0 ml-3" onClick={(e) => e.stopPropagation()}>
-                  <label className="inline-flex items-center cursor-pointer">
+                  <label className="inline-flex items-center cursor-pointer" title={skill.enabled ? '点击停用' : '点击启用'}>
                     <input
                       type="checkbox"
                       checked={skill.enabled}
                       onChange={() => handleToggleEnabled(skill)}
-                      className="w-4 h-4 rounded text-sky-600"
+                      className="w-4 h-4 rounded text-sky-600 cursor-pointer"
                     />
                   </label>
-                  {!isBuiltin && (
+                  {!isBuiltin ? (
                     <>
                       <button
                         onClick={() => handleOpenEdit(skill)}
-                        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
-                        title="编辑"
+                        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer"
+                        title="编辑个人技能"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => onDeleteSkill(skill.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
-                        title="删除"
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                        title="删除个人技能"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </>
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-medium px-1">安全锁定</span>
                   )}
                   {isExpanded ? (
                     <ChevronDown className="w-4 h-4 text-slate-400 cursor-pointer" onClick={() => setExpandedId(null)} />
@@ -268,15 +282,33 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                 </div>
               </div>
 
-              {/* 展开的 System Instruction 预览 */}
+              {/* 展开内容区 */}
               {isExpanded && (
-                <div className="p-4 bg-slate-50/80 border-t border-slate-100 space-y-1.5">
-                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                    注入的系统技能指令 (System Instruction)
-                  </div>
-                  <pre className="p-3 rounded-xl bg-slate-900 text-slate-200 font-sans text-xs leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto">
-                    {skill.systemInstruction}
-                  </pre>
+                <div className="p-4 border-t border-slate-100 transition-all">
+                  {isBuiltin ? (
+                    // 内置技能：坚决不展示明文指令，显示内核安全加密保护卡片
+                    <div className="p-3.5 bg-sky-50/60 rounded-xl border border-sky-100 flex items-start space-x-3 text-sky-950">
+                      <ShieldCheck className="w-4 h-4 text-sky-600 mt-0.5 shrink-0" />
+                      <div className="space-y-1">
+                        <div className="font-semibold text-xs text-sky-900">
+                          系统内置核心业务规范（已受内核底层安全沙箱保护）
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          该技能提示词及核心规则已深度编译并封装在桌面内核中，实施运行时混淆与防逆向保护，禁止明文查阅、复制与导出。在 AI 对话中一键勾选即可直接获得高精度的专家指导。
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    // 个人技能：展示用户自己编写的指令
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                        个人技能系统指令 (System Instruction)
+                      </div>
+                      <pre className="p-3 rounded-xl bg-slate-900 text-slate-200 font-sans text-xs leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto">
+                        {skill.systemInstruction || '(暂无指令内容)'}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -295,7 +327,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                   {editingSkill ? '编辑个人专属技能' : '新建个人专属技能 (Custom Skill)'}
                 </h3>
               </div>
-              <button onClick={() => setModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700">
+              <button onClick={() => setModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -357,13 +389,13 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-1.5 rounded-xl border border-slate-200 text-slate-600"
+                  className="px-4 py-1.5 rounded-xl border border-slate-200 text-slate-600 cursor-pointer"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold"
+                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold cursor-pointer"
                 >
                   保存个人技能
                 </button>

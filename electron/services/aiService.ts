@@ -17,10 +17,14 @@ import {
 import { 
   BUILTIN_AI_PROVIDERS, 
   DEFAULT_AI_SETTINGS, 
-  CRM_HARNESS_TOOLS_SPEC, 
   BUILTIN_MCP_SERVERS, 
   BUILTIN_AI_SKILLS 
 } from '../../shared/constants';
+import { 
+  CRM_HARNESS_TOOLS_SPEC, 
+  getProtectedSkillInstruction, 
+  isProtectedBuiltinSkill 
+} from '../security/protectedHarness';
 import { MetadataService } from './metadataService';
 import { DataService } from './dataService';
 import { SessionStore } from './sessionStore';
@@ -44,7 +48,7 @@ export class AiService {
     return path.join(userData, 'neocrm_ai_sessions.json');
   }
 
-  // ================= 配置管理 =================
+  // ================= 配置管理 (安全隔离与脱敏) =================
 
   public getAiConfig(): AiConfigData {
     const filePath = this.getConfigPath();
@@ -54,15 +58,19 @@ export class AiService {
         settings: DEFAULT_AI_SETTINGS,
       };
       this.saveAiConfig(initial);
-      return initial;
+      return {
+        ...initial,
+        mcpServers: BUILTIN_MCP_SERVERS,
+        skills: BUILTIN_AI_SKILLS.map((s) => ({ ...s, systemInstruction: undefined })),
+      };
     }
 
     try {
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
       const existingProviders: AiProviderConfig[] = data.providers || [];
       const mergedProviders: AiProviderConfig[] = [];
 
-      // 1. 先按 BUILTIN_AI_PROVIDERS 顺序对齐内置供应商，确保新增的内置供应商（如 Gemini）排在正确位置
+      // 1. 先按 BUILTIN_AI_PROVIDERS 顺序对齐内置供应商
       for (const builtin of BUILTIN_AI_PROVIDERS) {
         const found = existingProviders.find((p) => p.id === builtin.id);
         if (!found) {
@@ -87,22 +95,55 @@ export class AiService {
         ...(data.settings || {}),
       };
 
-      // 处理 MCP 服务器列表合并
-      const existingMcp: any[] = data.mcpServers || [];
-      const mergedMcp: any[] = [...existingMcp];
-      for (const bm of BUILTIN_MCP_SERVERS) {
-        if (!mergedMcp.some((m) => m.id === bm.id)) {
-          mergedMcp.unshift(bm);
+      // 3. 处理 MCP 服务器列表合并 (内置 MCP 绝不向前端暴露内部工具列表)
+      const customMcp: any[] = Array.isArray(data.customMcpServers)
+        ? data.customMcpServers
+        : Array.isArray(data.mcpServers)
+        ? data.mcpServers.filter((m: any) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp")
+        : [];
+      
+      const builtinMcpEnabled = typeof data.builtinMcpEnabled === "boolean"
+        ? data.builtinMcpEnabled
+        : (data.mcpServers?.find((m: any) => m.id === "neocrm-paas-mcp")?.enabled ?? true);
+
+      const mergedMcp: any[] = [
+        {
+          ...BUILTIN_MCP_SERVERS[0],
+          enabled: builtinMcpEnabled,
+          tools: [], // 绝不暴露内部工具定义
+        },
+        ...customMcp,
+      ];
+
+      // 4. 处理 Skill 技能列表合并 (内置系统技能脱敏，绝不向渲染进程发送明文指令)
+      const rawPersonalSkills: AiSkillItem[] = Array.isArray(data.personalSkills)
+        ? data.personalSkills
+        : Array.isArray(data.skills)
+        ? data.skills.filter((s: any) => s.category === "personal")
+        : [];
+
+      const builtinSkillStates: Record<string, boolean> = data.builtinSkillStates || {};
+      if (Array.isArray(data.skills)) {
+        for (const s of data.skills) {
+          if (s.category === "builtin" && typeof s.enabled === "boolean") {
+            builtinSkillStates[s.id] = s.enabled;
+          }
         }
       }
 
-      // 处理 Skill 技能列表合并 (内置 + 个人自定义)
-      const existingSkills: any[] = data.skills || [];
-      const mergedSkills: any[] = [...existingSkills];
+      const mergedSkills: AiSkillItem[] = [];
+      // (1) 内置技能：强制脱敏，不传输 systemInstruction
       for (const bs of BUILTIN_AI_SKILLS) {
-        if (!mergedSkills.some((s) => s.id === bs.id)) {
-          mergedSkills.push(bs);
-        }
+        const isEnabled = typeof builtinSkillStates[bs.id] === "boolean" ? builtinSkillStates[bs.id] : bs.enabled;
+        mergedSkills.push({
+          ...bs,
+          enabled: isEnabled,
+          systemInstruction: undefined, // 严格脱敏
+        });
+      }
+      // (2) 个人技能：保留用户自定义指令
+      for (const ps of rawPersonalSkills) {
+        mergedSkills.push(ps);
       }
 
       return {
@@ -112,20 +153,50 @@ export class AiService {
         skills: mergedSkills,
       };
     } catch (e) {
-      console.error('读取 AI 配置失败，恢复默认:', e);
+      console.error("读取 AI 配置失败，恢复默认:", e);
       return {
         providers: BUILTIN_AI_PROVIDERS,
         settings: DEFAULT_AI_SETTINGS,
+        mcpServers: BUILTIN_MCP_SERVERS,
+        skills: BUILTIN_AI_SKILLS.map((s) => ({ ...s, systemInstruction: undefined })),
       };
     }
   }
 
   public saveAiConfig(config: AiConfigData): boolean {
     try {
-      fs.writeFileSync(this.getConfigPath(), JSON.stringify(config, null, 2), 'utf-8');
+      // 1. 过滤只保留纯个人自定义技能，绝不落盘任何系统内置技能的 Prompt 指令
+      const personalSkills = (config.skills || []).filter((s) => s.category === "personal");
+
+      // 2. 提取内置技能的开关状态字典
+      const builtinSkillStates: Record<string, boolean> = {};
+      for (const s of (config.skills || [])) {
+        if (s.category === "builtin" || isProtectedBuiltinSkill(s.id)) {
+          builtinSkillStates[s.id] = Boolean(s.enabled);
+        }
+      }
+
+      // 3. 过滤只保留自定义外部 MCP，绝不落盘内置 MCP 服务
+      const customMcpServers = (config.mcpServers || []).filter(
+        (m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp"
+      );
+      const builtinMcp = (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp");
+      const builtinMcpEnabled = builtinMcp ? Boolean(builtinMcp.enabled) : true;
+
+      // 4. 组装干净的持久化数据结构落盘
+      const sanitizedData = {
+        providers: config.providers,
+        settings: config.settings,
+        personalSkills,
+        builtinSkillStates,
+        customMcpServers,
+        builtinMcpEnabled,
+      };
+
+      fs.writeFileSync(this.getConfigPath(), JSON.stringify(sanitizedData, null, 2), "utf-8");
       return true;
     } catch (e) {
-      console.error('保存 AI 配置失败:', e);
+      console.error("保存 AI 配置失败:", e);
       return false;
     }
   }
@@ -154,37 +225,64 @@ export class AiService {
     return config.providers;
   }
 
-  // ================= MCP 服务器管理 =================
+  // ================= MCP 服务器管理 (内核保护) =================
 
   public saveMcpServer(server: any): any[] {
     const config = this.getAiConfig();
-    const list = config.mcpServers || [];
+    if (server.id === "neocrm-paas-mcp" || server.type === "builtin") {
+      const found = (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp");
+      if (found) {
+        found.enabled = Boolean(server.enabled);
+      }
+      this.saveAiConfig(config);
+      return config.mcpServers || [];
+    }
+
+    const list = (config.mcpServers || []).filter((m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp");
     const idx = list.findIndex((m) => m.id === server.id);
     if (idx >= 0) {
       list[idx] = server;
     } else {
       list.push(server);
     }
-    config.mcpServers = list;
+    config.mcpServers = [
+      (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp") || BUILTIN_MCP_SERVERS[0],
+      ...list,
+    ];
     this.saveAiConfig(config);
-    return list;
+    return config.mcpServers;
   }
 
   public deleteMcpServer(serverId: string): any[] {
+    if (serverId === "neocrm-paas-mcp") {
+      // 内置 MCP 严禁删除
+      return this.getAiConfig().mcpServers || [];
+    }
     const config = this.getAiConfig();
     config.mcpServers = (config.mcpServers || []).filter((m) => m.id !== serverId);
     this.saveAiConfig(config);
     return config.mcpServers;
   }
 
-  // ================= Skill 技能管理 (系统内置 + 个人自定义) =================
+  // ================= Skill 技能管理 (系统内置严格受保护 + 个人自定义) =================
 
   public saveSkill(skill: any): any[] {
     const config = this.getAiConfig();
-    const list = config.skills || [];
+    if (skill.category === "builtin" || isProtectedBuiltinSkill(skill.id)) {
+      // 内置技能受保护，仅允许更新启停状态，绝不接受来自客户端的任何指令篡改
+      const found = (config.skills || []).find((s) => s.id === skill.id);
+      if (found) {
+        found.enabled = Boolean(skill.enabled);
+      }
+      this.saveAiConfig(config);
+      return config.skills || [];
+    }
+
+    // 个人自定义技能保存
+    const list = (config.skills || []).filter((s) => s.category === "personal");
     const idx = list.findIndex((s) => s.id === skill.id);
     const now = Date.now();
-    const item = { ...skill, updatedAt: now };
+    const item = { ...skill, category: "personal", updatedAt: now };
 
     if (idx >= 0) {
       list[idx] = item;
@@ -192,15 +290,21 @@ export class AiService {
       item.createdAt = now;
       list.push(item);
     }
-    config.skills = list;
+    config.skills = [
+      ...(config.skills || []).filter((s) => s.category === "builtin"),
+      ...list,
+    ];
     this.saveAiConfig(config);
-    return list;
+    return config.skills;
   }
 
   public deleteSkill(skillId: string): any[] {
+    if (isProtectedBuiltinSkill(skillId)) {
+      // 系统内置技能严禁删除
+      return this.getAiConfig().skills || [];
+    }
     const config = this.getAiConfig();
-    // 系统内置技能不允许删除
-    config.skills = (config.skills || []).filter((s) => s.id !== skillId || s.category === 'builtin');
+    config.skills = (config.skills || []).filter((s) => s.id !== skillId);
     this.saveAiConfig(config);
     return config.skills;
   }
@@ -625,13 +729,24 @@ ${dialogHistoryText}`;
         systemParts.push(`【用户自定义追加规范】\n${config.settings.customSystemPrompt.trim()}`);
       }
 
-      // 注入已挂载的 Skill 技能指令
+      // 注入已挂载的 Skill 技能指令 (内核安全解密注入，绝不经由渲染进程)
       if (activeSkillIds && activeSkillIds.length > 0) {
-        const allSkills = config.skills || [];
         for (const sid of activeSkillIds) {
-          const s = allSkills.find((item) => item.id === sid && item.enabled);
-          if (s) {
-            systemParts.push(`【已激活专业技能: ${s.name}】\n${s.systemInstruction}`);
+          // 1. 优先从内核受保护模块中获取加密内置指令
+          const protectedInst = getProtectedSkillInstruction(sid);
+          if (protectedInst) {
+            const meta = BUILTIN_AI_SKILLS.find((b) => b.id === sid);
+            const skillName = meta?.name || "销售易系统核心规范";
+            systemParts.push(`【已激活系统内置专业技能: ${skillName}】\n${protectedInst}`);
+            continue;
+          }
+
+          // 2. 用户个人自定义技能
+          const personal = (config.skills || []).find(
+            (item) => item.id === sid && item.category === "personal" && item.enabled
+          );
+          if (personal && personal.systemInstruction?.trim()) {
+            systemParts.push(`【已激活个人技能: ${personal.name}】\n${personal.systemInstruction.trim()}`);
           }
         }
       }
