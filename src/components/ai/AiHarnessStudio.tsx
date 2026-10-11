@@ -5,10 +5,12 @@ import {
   AiProviderConfig, 
   AiHarnessSettings, 
   AiContextEntityRef,
+  AiFileAttachment,
+  AiSkillItem,
   SessionState,
   SchemaPlanPayload
 } from '../../../shared/types';
-import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS } from '../../../shared/constants';
+import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI_SKILLS } from '../../../shared/constants';
 import { AiSidebar } from './AiSidebar';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
@@ -26,7 +28,10 @@ import {
   ChevronDown,
   Box,
   ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Minimize2,
+  Loader2,
+  Lightbulb
 } from 'lucide-react';
 
 interface AiHarnessStudioProps {
@@ -44,6 +49,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 }) => {
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
+  const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
+  const [activeSkillIds, setActiveSkillIds] = useState<string[]>([]);
   const [sessions, setSessions] = useState<AiChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
@@ -57,6 +64,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   // 实体与字段数据建模创建确认模态框状态
   const [pendingSchemaPlan, setPendingSchemaPlan] = useState<SchemaPlanPayload | null>(null);
+
+  // 上下文压缩状态
+  const [isCompacting, setIsCompacting] = useState(false);
+  const [showCompactionDetail, setShowCompactionDetail] = useState(false);
 
   // 快速配置 API Key 状态
   const [quickApiKey, setQuickApiKey] = useState<string>('');
@@ -75,13 +86,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         const cfg = await window.neoApi.aiGetConfig();
         setProviders(cfg.providers);
         setSettings(cfg.settings);
+        if (cfg.skills) setSkills(cfg.skills);
         setCurrentProviderId(cfg.settings.defaultProviderId || 'deepseek');
         setCurrentModelId(cfg.settings.defaultModelId || 'deepseek-chat');
         setEnableTools(cfg.settings.enableCrmTools);
       }
       if (window.neoApi?.aiGetSessions) {
         const list = await window.neoApi.aiGetSessions();
-        // 自动清理没有任何消息的历史空会话
         const validList = list.filter((s) => s.messages && s.messages.length > 0);
         setSessions(validList);
         if (validList.length > 0 && !activeSessionId) {
@@ -89,6 +100,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           setSelectedPresetId(validList[0].presetId || 'harness-agent');
           if (validList[0].providerId) setCurrentProviderId(validList[0].providerId);
           if (validList[0].modelId) setCurrentModelId(validList[0].modelId);
+          if (validList[0].activeSkillIds) setActiveSkillIds(validList[0].activeSkillIds);
         }
       }
     } catch (e: any) {
@@ -100,7 +112,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     loadData();
   }, []);
 
-  // 自动滚动到底部
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -201,7 +212,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     };
   }, []);
 
-  // 新建对话（仅将视图切换为新会话准备草稿，绝不预先向磁盘存入空会话）
+  // 新建对话草稿
   const handleNewChatDraft = () => {
     setActiveSessionId(null);
     const p = AI_AGENT_PRESETS.find((item) => item.id === selectedPresetId);
@@ -210,6 +221,25 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       if (p.recommendedModel && currentProviderId === 'deepseek') {
         setCurrentModelId(p.recommendedModel);
       }
+    }
+  };
+
+  // 一键执行上下文压缩 (Context Compaction)
+  const handleCompactSession = async () => {
+    if (!activeSession || activeSession.messages.length <= 4 || isCompacting) return;
+    setIsCompacting(true);
+    try {
+      if (window.neoApi?.aiCompactSession) {
+        const compacted = await window.neoApi.aiCompactSession(activeSession.id);
+        if (compacted) {
+          setSessions((prev) => prev.map((s) => (s.id === compacted.id ? compacted : s)));
+          showToast('success', `上下文压缩成功！已浓缩前 ${compacted.compactionSummary?.originalMessageCount} 轮对话，释放大量 Token。`);
+        }
+      }
+    } catch (e: any) {
+      showToast('error', `压缩失败: ${e.message}`);
+    } finally {
+      setIsCompacting(false);
     }
   };
 
@@ -239,7 +269,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     showToast('info', '已清空所有历史对话');
   };
 
-  // 快速保存当前供应商 API Key (支持 DeepSeek / Gemini / OpenAI 等)
+  // 快速保存当前供应商 API Key
   const handleSaveQuickApiKey = async () => {
     if (!quickApiKey.trim()) {
       showToast('error', `请输入有效的 API Key`);
@@ -265,26 +295,34 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   };
 
   // 发送消息
-  const handleSendMessage = async (text: string, refs?: AiContextEntityRef[]) => {
+  const handleSendMessage = async (
+    text: string,
+    refs?: AiContextEntityRef[],
+    attachments?: AiFileAttachment[],
+    skillIds?: string[]
+  ) => {
     let targetSession = activeSession;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
 
-    // 若当前是草稿状态或无活跃会话，才在真正发送第一条消息时正式创建会话
+    const effectiveTitle = text.slice(0, 22) + (text.length > 22 ? '...' : '') || (attachments?.[0]?.name ? `分析 ${attachments[0].name}` : '新对话');
+
     if (!targetSession) {
       targetSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        title: text.slice(0, 22) + (text.length > 22 ? '...' : ''),
+        title: effectiveTitle,
         presetId: preset.id,
         providerId: currentProviderId,
         modelId: currentModelId,
         messages: [],
+        activeSkillIds: skillIds || activeSkillIds,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
     } else if (targetSession.messages.length === 0) {
       targetSession = {
         ...targetSession,
-        title: text.slice(0, 22) + (text.length > 22 ? '...' : ''),
+        title: effectiveTitle,
+        activeSkillIds: skillIds || activeSkillIds,
       };
     }
 
@@ -293,6 +331,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       role: 'user',
       content: text,
       entityRefs: refs && refs.length > 0 ? [...refs] : undefined,
+      attachments: attachments && attachments.length > 0 ? [...attachments] : undefined,
+      skillIds: skillIds && skillIds.length > 0 ? [...skillIds] : undefined,
       createdAt: Date.now(),
     };
 
@@ -312,10 +352,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       providerId: currentProviderId,
       modelId: currentModelId,
       messages: updatedMessages,
+      activeSkillIds: skillIds || activeSkillIds,
       updatedAt: Date.now(),
     };
 
-    // 保存到磁盘并更新活跃状态
     const savedList = await window.neoApi.aiSaveSession(updatedSession);
     setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
     setActiveSessionId(updatedSession.id);
@@ -325,7 +365,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     setStreamingMessageId(assistantMsgId);
     reasoningStartTimeRef.current = null;
 
-    // 发起流式请求
     await window.neoApi.aiStartChatStream({
       requestId,
       sessionId: updatedSession.id,
@@ -335,6 +374,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       presetPrompt: preset.systemPrompt,
       messages: [...targetSession.messages, userMsg],
       enableTools,
+      activeSkillIds: skillIds || activeSkillIds,
+      compactionSummary: targetSession.compactionSummary,
     });
   };
 
@@ -355,6 +396,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       `> 导出时间: ${new Date().toLocaleString()} | 模型: ${activeSession.modelId}`,
       '',
     ];
+    if (activeSession.compactionSummary) {
+      lines.push(`> 历史压缩摘要: ${activeSession.compactionSummary.summary}\n`);
+    }
     for (const m of activeSession.messages) {
       if (m.role === 'user') {
         lines.push(`## 👤 用户\n\n${m.content}\n`);
@@ -398,6 +442,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             setSelectedPresetId(target.presetId || 'harness-agent');
             if (target.providerId) setCurrentProviderId(target.providerId);
             if (target.modelId) setCurrentModelId(target.modelId);
+            if (target.activeSkillIds) setActiveSkillIds(target.activeSkillIds);
           }
         }}
         onNewChatDraft={handleNewChatDraft}
@@ -412,7 +457,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             if (p.recommendedModel && currentProviderId === 'deepseek') {
               setCurrentModelId(p.recommendedModel);
             }
-            // 切换预设时仅切到草稿态，不创建空记录
             if (activeSession && activeSession.messages.length > 0) {
               setActiveSessionId(null);
             }
@@ -436,6 +480,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-medium shrink-0">
                   {currentPreset.badge || 'AI Harness'}
                 </span>
+                {activeSession && activeSession.messages.length > 0 && (
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {activeSession.messages.length} 轮消息
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-slate-400 truncate">
                 {currentPreset.description}
@@ -443,8 +492,25 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             </div>
           </div>
 
-          {/* 模型切换器 & 工具状态 */}
+          {/* 模型切换器 & 压缩 & 工具状态 */}
           <div className="flex items-center space-x-2 shrink-0">
+            {/* 上下文压缩按钮 */}
+            {activeSession && activeSession.messages.length >= 4 && (
+              <button
+                onClick={handleCompactSession}
+                disabled={isCompacting}
+                title="压缩提炼前序历史对话为结构化记忆，节省 Token 并提升模型专注度"
+                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/70 text-indigo-700 text-xs font-medium transition-colors cursor-pointer"
+              >
+                {isCompacting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                ) : (
+                  <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
+                )}
+                <span>{isCompacting ? '压缩中...' : '压缩上下文'}</span>
+              </button>
+            )}
+
             {/* 供应商与模型选择器 */}
             <div className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
               <select
@@ -581,7 +647,33 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               </div>
             </div>
           ) : (
-            <div className="max-w-4xl mx-auto">
+            <div className="max-w-4xl mx-auto space-y-4">
+              {/* 历史对话压缩记忆卡片 */}
+              {activeSession.compactionSummary && (
+                <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50/70 via-sky-50/40 to-white p-3.5 shadow-2xs text-xs">
+                  <div
+                    onClick={() => setShowCompactionDetail(!showCompactionDetail)}
+                    className="flex items-center justify-between cursor-pointer text-indigo-900 font-semibold"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>
+                        🗜️ 历史上下文已智能压缩 (已浓缩前 {activeSession.compactionSummary.originalMessageCount} 轮对话)
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-indigo-500 font-normal">
+                      {showCompactionDetail ? '收起摘要' : '查看压缩记忆'}
+                    </span>
+                  </div>
+                  {showCompactionDetail && (
+                    <div className="mt-2.5 pt-2.5 border-t border-indigo-100 text-slate-600 leading-relaxed whitespace-pre-wrap bg-white/70 p-2.5 rounded-xl border">
+                      {activeSession.compactionSummary.summary}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 消息列表 */}
               {activeSession.messages.map((msg) => (
                 <AiMessageItem
                   key={msg.id}
@@ -609,7 +701,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onOpenEntityPicker={() => setIsEntityModalOpen(true)}
               enableTools={enableTools}
               onToggleTools={() => setEnableTools(!enableTools)}
+              availableSkills={skills.filter((s) => s.enabled)}
+              activeSkillIds={activeSkillIds}
+              onToggleSkill={(sid) =>
+                setActiveSkillIds((prev) =>
+                  prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
+                )
+              }
               quickPrompts={currentPreset.quickPrompts}
+              showToast={showToast}
             />
           </div>
         </div>

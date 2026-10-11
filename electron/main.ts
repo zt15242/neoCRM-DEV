@@ -10,6 +10,7 @@ import { DataService } from './services/dataService';
 import { UpdateService } from './services/updateService';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
+import { FileService } from './services/fileService';
 import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
 
 const currentDir = typeof __dirname !== 'undefined' 
@@ -29,6 +30,7 @@ const dataService = new DataService();
 const updateService = new UpdateService();
 const imageService = new ImageService();
 const aiService = new AiService(sessionStore, metadataService, dataService);
+const fileService = new FileService();
 
 function createWindow() {
   win = new BrowserWindow({
@@ -341,3 +343,16 @@ ipcMain.handle('ai:startChatStream', async (_, params) => {
 ipcMain.handle('ai:abortChatStream', async (_, requestId: string) => {
   return aiService.abortChatStream(requestId);
 });
+
+// ================= 文件解析与分析 =================
+ipcMain.handle('file:selectAndParse', async () => fileService.selectAndParseFile(win));
+ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: ArrayBuffer) => {
+  return fileService.parseBuffer(fileName, Buffer.from(bufferData));
+});
+
+// ================= MCP 与 Skill 技能管理 =================
+ipcMain.handle('ai:saveMcpServer', async (_, server) => aiService.saveMcpServer(server));
+ipcMain.handle('ai:deleteMcpServer', async (_, id: string) => aiService.deleteMcpServer(id));
+ipcMain.handle('ai:saveSkill', async (_, skill) => aiService.saveSkill(skill));
+ipcMain.handle('ai:deleteSkill', async (_, id: string) => aiService.deleteSkill(id));
+ipcMain.handle('ai:compactSession', async (_, sessionId: string) => aiService.compactSession(sessionId));

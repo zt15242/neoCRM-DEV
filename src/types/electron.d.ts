@@ -17,7 +17,10 @@ import {
   AiProviderConfig,
   AiChatSession,
   AiStreamEvent,
-  AiModelItem
+  AiModelItem,
+  AiFileAttachment,
+  McpServerConfig,
+  AiSkillItem
 } from '../../shared/types';
 
 declare global {
@@ -97,8 +100,17 @@ declare global {
         presetPrompt?: string;
         messages: any[];
         enableTools?: boolean;
+        activeSkillIds?: string[];
+        compactionSummary?: any;
       }) => Promise<boolean>;
       aiAbortChatStream: (requestId: string) => Promise<boolean>;
+      aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;
+      aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => Promise<AiFileAttachment>;
+      aiSaveMcpServer: (server: McpServerConfig) => Promise<McpServerConfig[]>;
+      aiDeleteMcpServer: (id: string) => Promise<McpServerConfig[]>;
+      aiSaveSkill: (skill: AiSkillItem) => Promise<AiSkillItem[]>;
+      aiDeleteSkill: (id: string) => Promise<AiSkillItem[]>;
+      aiCompactSession: (sessionId: string) => Promise<AiChatSession | null>;
       onAiStreamEvent: (callback: (event: AiStreamEvent) => void) => () => void;
     };
   }

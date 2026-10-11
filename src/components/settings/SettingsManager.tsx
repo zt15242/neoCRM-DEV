@@ -1,11 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  AiConfigData, 
   AiProviderConfig, 
-  AiHarnessSettings 
+  AiHarnessSettings,
+  McpServerConfig,
+  AiSkillItem
 } from '../../../shared/types';
-import { BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS } from '../../../shared/constants';
+import { 
+  BUILTIN_AI_PROVIDERS, 
+  DEFAULT_AI_SETTINGS,
+  BUILTIN_MCP_SERVERS,
+  BUILTIN_AI_SKILLS
+} from '../../../shared/constants';
 import { ModelProviderSettings } from './ModelProviderSettings';
+import { McpSettings } from './McpSettings';
+import { SkillSettings } from './SkillSettings';
 import { AgentHarnessSettings } from './AgentHarnessSettings';
 import { GeneralSettings } from './GeneralSettings';
 import { 
@@ -13,11 +21,12 @@ import {
   Sparkles, 
   Sliders, 
   Settings as SettingsIcon,
-  Layers,
-  ArrowLeft
+  ArrowLeft,
+  Plug,
+  Lightbulb
 } from 'lucide-react';
 
-export type SettingsSubTab = 'models' | 'agent' | 'general';
+export type SettingsSubTab = 'models' | 'mcp' | 'skills' | 'agent' | 'general';
 
 interface SettingsManagerProps {
   onBackToAi?: () => void;
@@ -33,6 +42,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>('models');
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(BUILTIN_MCP_SERVERS);
+  const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
   const [loading, setLoading] = useState(true);
 
   const loadConfig = async () => {
@@ -42,6 +53,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         const cfg = await window.neoApi.aiGetConfig();
         setProviders(cfg.providers);
         setSettings(cfg.settings);
+        if (cfg.mcpServers) setMcpServers(cfg.mcpServers);
+        if (cfg.skills) setSkills(cfg.skills);
       }
     } catch (e: any) {
       showToast('error', `加载配置失败: ${e.message}`);
@@ -64,6 +77,30 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const list = await window.neoApi.aiDeleteProvider(id);
     setProviders(list);
     showToast('info', '已删除供应商');
+  };
+
+  const handleSaveMcpServer = async (srv: McpServerConfig) => {
+    const list = await window.neoApi.aiSaveMcpServer(srv);
+    setMcpServers(list);
+  };
+
+  const handleDeleteMcpServer = async (id: string) => {
+    if (!window.confirm('确定要删除该 MCP 服务吗？')) return;
+    const list = await window.neoApi.aiDeleteMcpServer(id);
+    setMcpServers(list);
+    showToast('info', '已删除 MCP 服务');
+  };
+
+  const handleSaveSkill = async (skill: AiSkillItem) => {
+    const list = await window.neoApi.aiSaveSkill(skill);
+    setSkills(list);
+  };
+
+  const handleDeleteSkill = async (id: string) => {
+    if (!window.confirm('确定要删除该个人技能吗？')) return;
+    const list = await window.neoApi.aiDeleteSkill(id);
+    setSkills(list);
+    showToast('info', '已删除个人技能');
   };
 
   const handleSaveSettings = async (patch: Partial<AiHarnessSettings>) => {
@@ -93,7 +130,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div className="space-y-1">
             <button
               onClick={() => setActiveSubTab('models')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all ${
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
                 activeSubTab === 'models'
                   ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
@@ -104,8 +141,32 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </button>
 
             <button
+              onClick={() => setActiveSubTab('mcp')}
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
+                activeSubTab === 'mcp'
+                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Plug className="w-4 h-4 shrink-0" />
+              <span>MCP 扩展服务 (MCP)</span>
+            </button>
+
+            <button
+              onClick={() => setActiveSubTab('skills')}
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
+                activeSubTab === 'skills'
+                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Lightbulb className="w-4 h-4 shrink-0" />
+              <span>Skill 技能库 (Skills)</span>
+            </button>
+
+            <button
               onClick={() => setActiveSubTab('agent')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all ${
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
                 activeSubTab === 'agent'
                   ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
@@ -117,7 +178,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
             <button
               onClick={() => setActiveSubTab('general')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all ${
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
                 activeSubTab === 'general'
                   ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
@@ -132,7 +193,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         {onBackToAi && (
           <button
             onClick={onBackToAi}
-            className="w-full py-2 px-3 rounded-xl border border-slate-200 hover:bg-white text-slate-600 text-xs font-medium flex items-center justify-center space-x-1.5 transition-colors shadow-2xs"
+            className="w-full py-2 px-3 rounded-xl border border-slate-200 hover:bg-white text-slate-600 text-xs font-medium flex items-center justify-center space-x-1.5 transition-colors shadow-2xs cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>返回 AI 对话工作台</span>
@@ -147,6 +208,24 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             providers={providers}
             onSaveProvider={handleSaveProvider}
             onDeleteProvider={handleDeleteProvider}
+            showToast={showToast}
+          />
+        )}
+
+        {activeSubTab === 'mcp' && (
+          <McpSettings
+            mcpServers={mcpServers}
+            onSaveMcpServer={handleSaveMcpServer}
+            onDeleteMcpServer={handleDeleteMcpServer}
+            showToast={showToast}
+          />
+        )}
+
+        {activeSubTab === 'skills' && (
+          <SkillSettings
+            skills={skills}
+            onSaveSkill={handleSaveSkill}
+            onDeleteSkill={handleDeleteSkill}
             showToast={showToast}
           />
         )}

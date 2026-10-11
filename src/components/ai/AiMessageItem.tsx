@@ -6,7 +6,7 @@ import { ToolCallCard } from './ToolCallCard';
 import { InlineSqlResultTable } from './InlineSqlResultTable';
 import { extractSchemaPlanFromText } from './schemaPlanHelper';
 import { SchemaPlanCard } from './SchemaPlanCard';
-import { Copy, Check, Sparkles, Box, AlertTriangle } from 'lucide-react';
+import { Copy, Check, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
@@ -34,9 +34,19 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
     return (
       <div className="flex justify-end my-4 pl-12">
         <div className="max-w-[85%] md:max-w-[75%] space-y-1.5">
-          {message.entityRefs && message.entityRefs.length > 0 && (
+          {((message.entityRefs && message.entityRefs.length > 0) || (message.attachments && message.attachments.length > 0)) && (
             <div className="flex flex-wrap gap-1.5 justify-end">
-              {message.entityRefs.map((ref) => (
+              {message.attachments?.map((att) => (
+                <span
+                  key={att.id}
+                  title={att.summaryText || att.name}
+                  className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-medium border border-emerald-200"
+                >
+                  <Paperclip className="w-3 h-3 text-emerald-600" />
+                  <span>{att.name} ({(att.size / 1024).toFixed(0)}KB)</span>
+                </span>
+              ))}
+              {message.entityRefs?.map((ref) => (
                 <span
                   key={ref.apiKey}
                   className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-sky-100/90 text-sky-800 text-[11px] font-medium border border-sky-200"

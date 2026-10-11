@@ -17,7 +17,9 @@ import {
 import { 
   BUILTIN_AI_PROVIDERS, 
   DEFAULT_AI_SETTINGS, 
-  CRM_HARNESS_TOOLS_SPEC 
+  CRM_HARNESS_TOOLS_SPEC, 
+  BUILTIN_MCP_SERVERS, 
+  BUILTIN_AI_SKILLS 
 } from '../../shared/constants';
 import { MetadataService } from './metadataService';
 import { DataService } from './dataService';
@@ -85,9 +87,29 @@ export class AiService {
         ...(data.settings || {}),
       };
 
+      // 处理 MCP 服务器列表合并
+      const existingMcp: any[] = data.mcpServers || [];
+      const mergedMcp: any[] = [...existingMcp];
+      for (const bm of BUILTIN_MCP_SERVERS) {
+        if (!mergedMcp.some((m) => m.id === bm.id)) {
+          mergedMcp.unshift(bm);
+        }
+      }
+
+      // 处理 Skill 技能列表合并 (内置 + 个人自定义)
+      const existingSkills: any[] = data.skills || [];
+      const mergedSkills: any[] = [...existingSkills];
+      for (const bs of BUILTIN_AI_SKILLS) {
+        if (!mergedSkills.some((s) => s.id === bs.id)) {
+          mergedSkills.push(bs);
+        }
+      }
+
       return {
         providers: mergedProviders,
         settings: mergedSettings,
+        mcpServers: mergedMcp,
+        skills: mergedSkills,
       };
     } catch (e) {
       console.error('读取 AI 配置失败，恢复默认:', e);
@@ -130,6 +152,123 @@ export class AiService {
 
     this.saveAiConfig(config);
     return config.providers;
+  }
+
+  // ================= MCP 服务器管理 =================
+
+  public saveMcpServer(server: any): any[] {
+    const config = this.getAiConfig();
+    const list = config.mcpServers || [];
+    const idx = list.findIndex((m) => m.id === server.id);
+    if (idx >= 0) {
+      list[idx] = server;
+    } else {
+      list.push(server);
+    }
+    config.mcpServers = list;
+    this.saveAiConfig(config);
+    return list;
+  }
+
+  public deleteMcpServer(serverId: string): any[] {
+    const config = this.getAiConfig();
+    config.mcpServers = (config.mcpServers || []).filter((m) => m.id !== serverId);
+    this.saveAiConfig(config);
+    return config.mcpServers;
+  }
+
+  // ================= Skill 技能管理 (系统内置 + 个人自定义) =================
+
+  public saveSkill(skill: any): any[] {
+    const config = this.getAiConfig();
+    const list = config.skills || [];
+    const idx = list.findIndex((s) => s.id === skill.id);
+    const now = Date.now();
+    const item = { ...skill, updatedAt: now };
+
+    if (idx >= 0) {
+      list[idx] = item;
+    } else {
+      item.createdAt = now;
+      list.push(item);
+    }
+    config.skills = list;
+    this.saveAiConfig(config);
+    return list;
+  }
+
+  public deleteSkill(skillId: string): any[] {
+    const config = this.getAiConfig();
+    // 系统内置技能不允许删除
+    config.skills = (config.skills || []).filter((s) => s.id !== skillId || s.category === 'builtin');
+    this.saveAiConfig(config);
+    return config.skills;
+  }
+
+  // ================= 上下文长对话压缩 (Context Compaction) =================
+
+  public async compactSession(sessionId: string): Promise<AiChatSession | null> {
+    const sessions = this.getSessions();
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session || session.messages.length <= 4) {
+      return session || null;
+    }
+
+    const config = this.getAiConfig();
+    const providerId = session.providerId || config.settings.defaultProviderId || 'deepseek';
+    const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
+    const modelId = session.modelId || provider?.models?.[0]?.id || 'deepseek-chat';
+
+    // 取除最近 3 条之外的所有更早消息进行总结
+    const messagesToCompact = session.messages.slice(0, -3);
+    const recentMessages = session.messages.slice(-3);
+
+    const dialogHistoryText = messagesToCompact
+      .map((m) => `${m.role === 'user' ? '用户' : 'AI助手'}: ${m.content.slice(0, 500)}`)
+      .join('\n\n');
+
+    const prompt = `请为以下较早的 CRM 对话历史生成一份精炼的结构化记忆摘要（150~250字）。
+必须包含：
+1. 涉及的关键业务对象与 API Key；
+2. 用户核心诉求与关键参数；
+3. 已达成的结论或已创建的元数据信息。
+对话内容如下：
+${dialogHistoryText}`;
+
+    let summaryText = '历史对话要点已压缩保留。';
+    try {
+      const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
+      const res = await axios.post(
+        `${cleanBaseUrl}/chat/completions`,
+        {
+          model: modelId,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          max_tokens: 500,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${provider.apiKey}`,
+          },
+          timeout: 25000,
+        }
+      );
+      summaryText = res.data?.choices?.[0]?.message?.content || summaryText;
+    } catch {
+      summaryText = `已压缩前 ${messagesToCompact.length} 轮历史对话（涵盖对象字典查询与数据分析记录）。`;
+    }
+
+    session.compactionSummary = {
+      originalMessageCount: messagesToCompact.length,
+      summary: summaryText.trim(),
+      compactedAt: Date.now(),
+    };
+    session.messages = recentMessages;
+    session.updatedAt = Date.now();
+
+    this.saveSession(session);
+    return session;
   }
 
   public deleteProvider(providerId: string): AiProviderConfig[] {
@@ -430,10 +569,12 @@ export class AiService {
       presetPrompt?: string;
       messages: AiChatMessage[];
       enableTools?: boolean;
+      activeSkillIds?: string[];
+      compactionSummary?: any;
     },
     sendEvent: (event: AiStreamEvent) => void
   ): Promise<void> {
-    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools } = params;
+    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, compactionSummary } = params;
 
     const config = this.getAiConfig();
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
@@ -484,6 +625,22 @@ export class AiService {
         systemParts.push(`【用户自定义追加规范】\n${config.settings.customSystemPrompt.trim()}`);
       }
 
+      // 注入已挂载的 Skill 技能指令
+      if (activeSkillIds && activeSkillIds.length > 0) {
+        const allSkills = config.skills || [];
+        for (const sid of activeSkillIds) {
+          const s = allSkills.find((item) => item.id === sid && item.enabled);
+          if (s) {
+            systemParts.push(`【已激活专业技能: ${s.name}】\n${s.systemInstruction}`);
+          }
+        }
+      }
+
+      // 注入历史对话压缩记忆
+      if (compactionSummary?.summary) {
+        systemParts.push(`【前期历史对话精简记忆摘要】\n${compactionSummary.summary}`);
+      }
+
       const systemPromptText = systemParts.join('\n\n');
       const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
@@ -521,6 +678,11 @@ export class AiService {
       for (const msg of recentMessages) {
         if (msg.role === 'user') {
           let text = msg.content;
+          // 注入文件附件内容 (如 Excel 解析表格、代码文件等)
+          if (msg.attachments && msg.attachments.length > 0) {
+            const attachText = msg.attachments.map((a) => a.parsedContent).join('\n\n');
+            text = `${attachText}\n\n${text}`;
+          }
           if (msg.entityRefs && msg.entityRefs.length > 0) {
             const refDesc = msg.entityRefs
               .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)

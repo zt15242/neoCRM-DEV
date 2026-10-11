@@ -245,9 +245,58 @@ export interface AiHarnessSettings {
   defaultSqlLimit: number;
 }
 
+export interface AiFileAttachment {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  parsedContent: string; // 解析出的文本或表格数据
+  summaryText?: string; // 简要说明，例如 "Excel工作表: 3个Sheet, 150行"
+}
+
+export interface McpToolItem {
+  name: string;
+  description: string;
+  inputSchema?: any;
+}
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  description?: string;
+  type: 'builtin' | 'stdio' | 'sse';
+  enabled: boolean;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  tools?: McpToolItem[];
+}
+
+export interface AiSkillItem {
+  id: string;
+  name: string;
+  description: string;
+  category: 'builtin' | 'personal'; // 系统内置 vs 个人自定义
+  iconName?: string;
+  systemInstruction: string;
+  triggerKeywords?: string[];
+  enabled: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface AiCompactedSummary {
+  originalMessageCount: number;
+  summary: string;
+  compactedAt: number;
+}
+
 export interface AiConfigData {
   providers: AiProviderConfig[];
   settings: AiHarnessSettings;
+  mcpServers?: McpServerConfig[];
+  skills?: AiSkillItem[];
 }
 
 export interface AiToolCallRecord {
@@ -278,6 +327,8 @@ export interface AiChatMessage {
   isThinkingFinished?: boolean;
   toolCalls?: AiToolCallRecord[];
   entityRefs?: AiContextEntityRef[];
+  attachments?: AiFileAttachment[]; // 上传的文件附件
+  skillIds?: string[]; // 本条消息引用的技能
   providerId?: string;
   modelId?: string;
   createdAt: number;
@@ -292,6 +343,8 @@ export interface AiChatSession {
   modelId: string;
   messages: AiChatMessage[];
   entityRefs?: AiContextEntityRef[];
+  activeSkillIds?: string[]; // 当前会话挂载的技能 ID
+  compactionSummary?: AiCompactedSummary; // 上下文压缩摘要
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;

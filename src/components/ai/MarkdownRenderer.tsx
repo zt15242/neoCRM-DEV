@@ -19,7 +19,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
 
   // 将文本分割为代码块与普通文本块
   const parts: Array<{ type: 'text' | 'code'; content: string; lang?: string }> = [];
-  const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
+  const codeBlockRegex = /```([a-zA-Z0-9_:.-]*)[ \t]*\r?\n([\s\S]*?)(?:```|$)/g;
   let lastIndex = 0;
   let match;
 
@@ -51,8 +51,17 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
         if (part.type === 'code') {
           const codeId = `code_${index}`;
           const isCopied = copiedId === codeId;
-          if (part.lang?.toLowerCase() === 'json:schema-plan') {
-            return null;
+          if (
+            part.lang?.toLowerCase() === 'json:schema-plan' ||
+            part.lang?.toLowerCase() === 'schema-plan' ||
+            (part.lang?.toLowerCase() === 'json' && part.content.includes('"entity"') && part.content.includes('"fields"'))
+          ) {
+            return (
+              <div key={index} className="my-2 px-3.5 py-2 rounded-xl bg-indigo-50/70 border border-indigo-200/80 text-xs text-indigo-700 flex items-center justify-between">
+                <span>📦 已生成结构化数据模型定义 (Schema Plan)，请点击下方卡片一键部署至租户</span>
+                <span className="text-[10px] font-mono bg-white px-2 py-0.5 rounded border border-indigo-200">JSON Schema Ready</span>
+              </div>
+            );
           }
 
           const isSql =
