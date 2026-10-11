@@ -126,7 +126,7 @@ export class SessionStore {
     }
 
     try {
-      const baseDir = targetDirPath?.trim() || process.cwd();
+      const baseDir = targetDirPath?.trim() || (process.cwd() !== '/' ? process.cwd() : os.homedir());
       const neoCliDir = path.join(baseDir, '.neo-cli');
 
       if (!fs.existsSync(neoCliDir)) {

@@ -246,14 +246,49 @@ ipcMain.handle('metadata:exportDictionary', async (_, targetDir?: string) => {
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) throw new Error('请先登录租户');
   const entities = await metadataService.fetchEntityList(current.environment, current.tokenData);
-  const baseDir = targetDir?.trim() || process.cwd();
-  return metadataService.exportDictionary(
-    baseDir,
+  const tenantName = current.tokenData.userInfo?.tenantName || current.environment.name || '租户';
+  const safeTenantName = tenantName.replace(/[\\/:*?"<>|]/g, '_');
+  const defaultFileName = `NeoCRM_实体字典_${safeTenantName}_AllxObjects.md`;
+
+  let targetPath = '';
+
+  if (targetDir?.trim() && targetDir.trim() !== '/') {
+    targetPath = targetDir.trim();
+  } else {
+    const defaultDesktop = app.getPath('desktop') || app.getPath('downloads');
+    const saveRes = win
+      ? await dialog.showSaveDialog(win, {
+          title: '导出实体对象字典文档 (Markdown)',
+          defaultPath: path.join(defaultDesktop, defaultFileName),
+          filters: [{ name: 'Markdown 文档 (*.md)', extensions: ['md'] }],
+        })
+      : await dialog.showSaveDialog({
+          title: '导出实体对象字典文档 (Markdown)',
+          defaultPath: path.join(defaultDesktop, defaultFileName),
+          filters: [{ name: 'Markdown 文档 (*.md)', extensions: ['md'] }],
+        });
+
+    if (saveRes.canceled || !saveRes.filePath) {
+      return { success: false, filePath: '', message: '已取消导出字典' };
+    }
+    targetPath = saveRes.filePath;
+  }
+
+  const res = metadataService.exportDictionary(
+    targetPath,
     entities,
-    current.tokenData.userInfo?.tenantName,
+    tenantName,
     current.tokenData.tenant_id,
     current.tokenData.instance_uri || current.environment.neoBaseURL
   );
+
+  if (res.success && res.filePath) {
+    try {
+      shell.showItemInFolder(res.filePath);
+    } catch {}
+  }
+
+  return res;
 });
 
 // ================= 数据管理 (SQL查询与DML) =================

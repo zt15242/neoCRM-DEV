@@ -83,8 +83,10 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
       const res = await window.neoApi.exportDictionary();
       if (res.success) {
         showToast('success', res.message);
+      } else if (res.message && res.message.includes('取消')) {
+        showToast('info', '已取消导出');
       } else {
-        showToast('error', res.message);
+        showToast('error', res.message || '导出失败');
       }
     } catch (e: any) {
       showToast('error', `导出字典异常: ${e.message}`);

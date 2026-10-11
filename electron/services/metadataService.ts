@@ -242,16 +242,29 @@ export class MetadataService {
    * 将实体字典同步导出为 Markdown 本地文件 (AllxObjects.md)
    */
   public exportDictionary(
-    targetDir: string,
+    targetPathOrDir: string,
     entities: EntityMetadata[],
     tenantName?: string,
     tenantId?: string | number,
     baseUrl?: string
   ): { success: boolean; filePath: string; message: string } {
     try {
-      const xObjectsDir = path.join(targetDir, 'src/xObjects');
-      if (!fs.existsSync(xObjectsDir)) {
-        fs.mkdirSync(xObjectsDir, { recursive: true });
+      let finalFilePath = targetPathOrDir;
+
+      // 如果传入的是目录路径，则在该目录下生成 AllxObjects.md
+      if (!targetPathOrDir.toLowerCase().endsWith('.md')) {
+        const isCliProject = fs.existsSync(path.join(targetPathOrDir, 'src'));
+        const dir = isCliProject ? path.join(targetPathOrDir, 'src/xObjects') : targetPathOrDir;
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        finalFilePath = path.join(dir, 'AllxObjects.md');
+      } else {
+        // 如果传入的是具体的文件路径，确保父目录存在
+        const parentDir = path.dirname(finalFilePath);
+        if (!fs.existsSync(parentDir)) {
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
       }
 
       const standard = entities.filter((e) => e.isStandard);
@@ -273,7 +286,7 @@ export class MetadataService {
 
       for (const e of entities) {
         const etype = e.isStandard ? '标准' : '自定义';
-        const desc = e.description || '-';
+        const desc = (e.description || '-').replace(/\|/g, '/');
         const detail = e.detail ? '✓' : '-';
         const busitype = e.enableBusitype ? '✓' : '-';
         const script = e.enableScriptExecutor ? '✓' : '-';
@@ -281,13 +294,12 @@ export class MetadataService {
         lines.push(`| ${e.label} | ${e.apiKey} | ${etype} | ${desc} | ${detail} | ${busitype} | ${script} | ${check} |`);
       }
 
-      const filePath = path.join(xObjectsDir, 'AllxObjects.md');
-      fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+      fs.writeFileSync(finalFilePath, lines.join('\n'), 'utf-8');
 
       return {
         success: true,
-        filePath,
-        message: `成功导出实体字典至: ${filePath}`,
+        filePath: finalFilePath,
+        message: `成功导出实体字典至: ${finalFilePath}`,
       };
     } catch (e: any) {
       return {
