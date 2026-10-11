@@ -546,12 +546,15 @@ export class AiService {
         (modelObj?.tools ?? !isPureReasoner) &&
         provider.protocol !== 'anthropic-messages';
 
-      // 5. 执行 Agent Loop（最多循环 5 次）
+      // 5. 执行 Agent Loop（最多 3 轮工具调用 + 智能去重与上下文直注总结兜底）
       let loopCount = 0;
-      const maxLoops = 5;
+      const maxToolLoops = 3;
       let hasMoreIterations = true;
+      let totalContentGenerated = '';
+      const calledToolSignatures = new Set<string>();
+      const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
 
-      while (hasMoreIterations && loopCount < maxLoops) {
+      while (hasMoreIterations && loopCount < maxToolLoops) {
         loopCount++;
 
         const requestBody: any = {
@@ -728,9 +731,28 @@ export class AiService {
           }
         }
 
+        if (assistantContent) {
+          totalContentGenerated += assistantContent;
+        }
+
         const toolCallsList = Object.values(toolCallsMap);
 
         if (toolCallsList.length > 0) {
+          // 检查是否全都是已经调用过的完全相同工具（说明中转网关可能丢弃了 role:tool 历史导致模型死循环）
+          const allDuplicates = toolCallsList.every((tc) => {
+            let parsedArgs = {};
+            try {
+              parsedArgs = JSON.parse(tc.arguments || '{}');
+            } catch {}
+            return calledToolSignatures.has(`${tc.name}:${JSON.stringify(parsedArgs)}`);
+          });
+
+          if (allDuplicates && executedToolsLog.length > 0) {
+            // 检测到重复调用同一工具，跳出工具循环，直接进入下方的无工具总结轮
+            hasMoreIterations = false;
+            break;
+          }
+
           conversationHistory.push({
             role: 'assistant',
             content: assistantContent || null,
@@ -751,6 +773,9 @@ export class AiService {
             } catch {
               args = {};
             }
+
+            const signature = `${tc.name}:${JSON.stringify(args)}`;
+            calledToolSignatures.add(signature);
 
             const toolRecord: AiToolCallRecord = {
               id: tc.id,
@@ -776,6 +801,12 @@ export class AiService {
               const res = await this.executeCrmTool(tc.name, args, currentSession.environment, currentSession.tokenData);
               toolResult = res.data;
               resultSummary = res.summary;
+              executedToolsLog.push({
+                name: tc.name,
+                args,
+                summary: res.summary,
+                data: res.data,
+              });
             } catch (toolErr: any) {
               isError = true;
               toolResult = { error: toolErr.message };
@@ -805,6 +836,134 @@ export class AiService {
           hasMoreIterations = true;
         } else {
           hasMoreIterations = false;
+        }
+      }
+
+      // 6. 兜底总结收敛轮：如果调用了工具但尚未输出最终正文（例如达到工具轮上限，或网关未正确透传 tool 消息）
+      if (!totalContentGenerated.trim() && executedToolsLog.length > 0) {
+        const cleanSynthesisHistory: any[] = [];
+        if (systemMessage) {
+          cleanSynthesisHistory.push(systemMessage);
+        }
+
+        // 保留前面的普通 user/assistant 消息
+        for (const msg of recentMessages.slice(0, -1)) {
+          if (msg.role === 'user' || msg.role === 'assistant') {
+            cleanSynthesisHistory.push({ role: msg.role, content: msg.content });
+          }
+        }
+
+        const lastUserMsg = recentMessages[recentMessages.length - 1];
+        const toolDataContext = executedToolsLog
+          .map(
+            (t, idx) =>
+              `【本地工具调用 #${idx + 1}: ${t.name}(${JSON.stringify(t.args)}) -> ${t.summary}】
+返回真实数据:
+---
+${JSON.stringify(t.data, null, 2)}
+---`
+          )
+          .join('\n\n');
+
+        cleanSynthesisHistory.push({
+          role: 'user',
+          content: `${lastUserMsg?.content || '请分析以上数据'}
+
+---
+系统已为您自动调取到当前销售易租户的以下真实元数据/业务数据：
+
+${toolDataContext}
+
+请直接基于以上真实数据，用专业、清晰的中文 Markdown 格式（包含合理的分类、结构化表格与深入解读）给出完整详尽的最终回答：`,
+        });
+
+        const synthesisResponse = await fetch(`${cleanBaseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${provider.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages: cleanSynthesisHistory,
+            temperature: config.settings.temperature ?? 0.3,
+            max_tokens: config.settings.maxTokens || 4096,
+            stream: true,
+          }),
+          signal: controller.signal,
+        });
+
+        if (synthesisResponse.ok && synthesisResponse.body) {
+          const reader = synthesisResponse.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let buffer = '';
+          let isInThinkTag = false;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith('data:')) continue;
+              const dataStr = trimmed.slice(5).trim();
+              if (dataStr === '[DONE]') continue;
+
+              try {
+                const chunk = JSON.parse(dataStr);
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta) continue;
+
+                if (delta.reasoning_content) {
+                  sendEvent({
+                    requestId,
+                    sessionId,
+                    messageId,
+                    type: 'reasoning_delta',
+                    delta: delta.reasoning_content,
+                  });
+                }
+
+                if (delta.content) {
+                  let piece = delta.content;
+                  if (piece.includes('<think>')) {
+                    isInThinkTag = true;
+                    const parts = piece.split('<think>');
+                    if (parts[1]) {
+                      sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: parts[1] });
+                    }
+                    continue;
+                  }
+                  if (isInThinkTag) {
+                    if (piece.includes('</think>')) {
+                      isInThinkTag = false;
+                      const parts = piece.split('</think>');
+                      if (parts[0]) {
+                        sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: parts[0] });
+                      }
+                      if (parts[1]) {
+                        sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: parts[1] });
+                      }
+                    } else {
+                      sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: piece });
+                    }
+                    continue;
+                  }
+                  sendEvent({
+                    requestId,
+                    sessionId,
+                    messageId,
+                    type: 'content_delta',
+                    delta: piece,
+                  });
+                }
+              } catch {}
+            }
+          }
         }
       }
 
@@ -916,11 +1075,13 @@ export class AiService {
     });
 
     let loopCount = 0;
+    const maxToolLoops = 4;
     const maxLoops = 5;
     let hasMoreIterations = true;
 
     while (hasMoreIterations && loopCount < maxLoops) {
       loopCount++;
+      const isFinalSummaryTurn = loopCount > maxToolLoops;
 
       const requestBody: any = {
         contents: geminiContents,
@@ -936,7 +1097,7 @@ export class AiService {
         };
       }
 
-      if (canUseTools) {
+      if (canUseTools && !isFinalSummaryTurn) {
         requestBody.tools = [{ functionDeclarations: geminiFunctionDeclarations }];
       }
 
@@ -1158,13 +1319,19 @@ export class AiService {
       if (args.isCustomOnly) {
         filtered = filtered.filter((e) => !e.isStandard);
       }
+      const items = filtered.slice(0, 250).map((e) => ({
+        apiKey: e.apiKey,
+        label: e.label,
+        isStandard: e.isStandard,
+        ...(e.description ? { description: e.description } : {}),
+      }));
       return {
-        data: filtered.slice(0, 50).map((e) => ({
-          apiKey: e.apiKey,
-          label: e.label,
-          isStandard: e.isStandard,
-          description: e.description,
-        })),
+        data: {
+          totalCount: filtered.length,
+          returnedCount: items.length,
+          entities: items,
+          _hint: '已返回全部匹配的对象列表，请直接基于此列表进行归类与结构分析，无需重复调用 list_entities。',
+        },
         summary: `成功检索到 ${filtered.length} 个对象元数据`,
       };
     }
