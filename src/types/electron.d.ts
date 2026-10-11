@@ -66,7 +66,7 @@ declare global {
       // 元数据
       getEntities: () => Promise<EntityMetadata[]>;
       getFields: (entityApiKey: string) => Promise<FieldMetadata[]>;
-      createEntity: (payload: CreateEntityPayload) => Promise<{ success: boolean; data?: any; error?: string }>;
+      createEntity: (payload: CreateEntityPayload) => Promise<{ success: boolean; data?: any; createdApiKey?: string; error?: string }>;
       createField: (entityApiKey: string, payload: CreateFieldPayload) => Promise<{ success: boolean; data?: any; error?: string }>;
       exportDictionary: (targetDir?: string) => Promise<{ success: boolean; filePath: string; message: string }>;
 

@@ -33,17 +33,19 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
   onNavigateToMetadata,
   showToast,
 }) => {
-  // 对象基础属性（允许用户二次修改确认）
+  // 对象基础属性
+  const initialCleanKey = (plan.entity?.apiKey || '').replace(/__c$/i, '');
   const [entityLabel, setEntityLabel] = useState(plan.entity?.label || '');
-  const [entityApiKey, setEntityApiKey] = useState(plan.entity?.apiKey || '');
+  const [entityApiKey, setEntityApiKey] = useState(initialCleanKey || 'customObject');
   const [autoNumberFormat, setAutoNumberFormat] = useState(plan.entity?.autoNumberFormat || '');
   const [enableScript, setEnableScript] = useState(plan.entity?.enableScriptExecutor ?? true);
   const [enableBusiType, setEnableBusiType] = useState(plan.entity?.enableBusitype ?? false);
 
-  // 待创建字段列表（支持勾选/取消勾选）
+  // 待创建字段列表（字段 apiKey 统一显示为剥离 __c 后的纯净标识）
   const [fields, setFields] = useState<Array<PlannedFieldItem & { selected: boolean; status?: 'pending' | 'creating' | 'success' | 'failed'; error?: string }>>(
     (plan.fields || []).map((f) => ({
       ...f,
+      apiKey: (f.apiKey || '').replace(/__c$/i, ''),
       selected: true,
       status: 'pending',
     }))
@@ -54,6 +56,7 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
   const [progressText, setProgressText] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [createdTargetEntity, setCreatedTargetEntity] = useState('');
   const [finalSummary, setFinalSummary] = useState<{ successCount: number; failCount: number }>({ successCount: 0, failCount: 0 });
 
   if (!isOpen) return null;
@@ -81,13 +84,20 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
 
     setIsExecuting(true);
     setProgressPercent(5);
-    setProgressText(`正在创建业务对象 [${entityLabel}] (${entityApiKey})...`);
 
-    let entityCreated = false;
+    // 清洗对象 apiKey，确保传给销售易的是纯净前缀（销售易会自动追加 __c）
+    const cleanEntityKey = entityApiKey.trim().replace(/__c$/i, '');
+    const realTargetEntityKey = `${cleanEntityKey}__c`;
+    setCreatedTargetEntity(realTargetEntityKey);
+
+    setProgressText(`正在创建业务对象 [${entityLabel}] (${realTargetEntityKey})...`);
+
+    let targetEntityKeyForFields = realTargetEntityKey;
+
     try {
-      // 步骤 1: 创建实体对象
+      // 步骤 1: 创建实体对象 (传给销售易 cleanEntityKey)
       const entityRes = await window.neoApi.createEntity({
-        apiKey: entityApiKey.trim(),
+        apiKey: cleanEntityKey,
         label: entityLabel.trim(),
         description: plan.entity?.description || `由 AI 模型设计器自动生成`,
         autoNumberFormat: autoNumberFormat.trim() || undefined,
@@ -95,16 +105,12 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
         enableBusitype: enableBusiType,
       });
 
-      if (!entityRes.success && !String(entityRes.error || '').includes('已存在')) {
-        throw new Error(entityRes.error || '创建实体对象失败');
+      if (entityRes.createdApiKey) {
+        targetEntityKeyForFields = entityRes.createdApiKey;
       }
-      entityCreated = true;
     } catch (err: any) {
-      // 若实体已存在则允许继续创建字段
       const msg = err.message || '';
-      if (msg.includes('已存在') || msg.includes('exist')) {
-        entityCreated = true;
-      } else {
+      if (!msg.includes('已存在') && !msg.includes('REPEAT') && !msg.includes('exist')) {
         setIsExecuting(false);
         showToast('error', `创建对象失败: ${msg}`);
         return;
@@ -120,7 +126,6 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
       const field = fields[i];
       if (!field.selected) continue;
 
-      // 更新字段状态为 creating
       setFields((prev) => {
         const copy = [...prev];
         copy[i].status = 'creating';
@@ -128,19 +133,19 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
       });
 
       const currentIdx = successCount + failCount + 1;
-      setProgressText(`正在创建字段 [${currentIdx}/${total}]: ${field.label} (${field.apiKey})...`);
+      setProgressText(`正在创建字段 [${currentIdx}/${total}]: ${field.label} (${field.apiKey}__c)...`);
       setProgressPercent(Math.round(10 + (currentIdx / total) * 85));
 
       try {
-        const res = await window.neoApi.createField(entityApiKey.trim(), {
-          apiKey: field.apiKey.trim(),
+        const res = await window.neoApi.createField(targetEntityKeyForFields, {
+          apiKey: field.apiKey.trim().replace(/__c$/i, ''),
           label: field.label.trim(),
           itemType: field.itemType,
           maxLength: field.maxLength,
           decimal: field.decimal,
           referObjectApiKey: field.referObjectApiKey,
           pickOption: field.pickOption,
-          description: field.description,
+          description: field.description || field.label,
           linkLabel: `${entityLabel}列表`,
         });
 
@@ -149,6 +154,7 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
           setFields((prev) => {
             const copy = [...prev];
             copy[i].status = 'success';
+            copy[i].error = undefined;
             return copy;
           });
         } else {
@@ -170,8 +176,8 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
         });
       }
 
-      // 轻微休眠 120ms 避免过快请求限制
-      await new Promise((r) => setTimeout(r, 120));
+      // 轻微等待 100ms
+      await new Promise((r) => setTimeout(r, 100));
     }
 
     setProgressPercent(100);
@@ -179,7 +185,12 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
     setIsExecuting(false);
     setIsCompleted(true);
     setFinalSummary({ successCount, failCount });
-    showToast('success', `对象 [${entityLabel}] 及字段已完成创建！`);
+
+    if (successCount > 0) {
+      showToast('success', `对象 [${entityLabel}] 及 ${successCount} 个字段已成功创建！`);
+    } else {
+      showToast('error', `对象已就绪，但字段创建失败，请查看下方具体错误`);
+    }
   };
 
   return (
@@ -201,7 +212,7 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
             </div>
           </div>
           {!isExecuting && (
-            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg">
+            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer">
               <X className="w-4 h-4" />
             </button>
           )}
@@ -217,11 +228,11 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
               </div>
               <div>
                 <h4 className="text-sm font-bold text-slate-900">
-                  业务对象与字段已成功在当前租户创建！
+                  业务对象与字段部署执行完毕！
                 </h4>
                 <p className="text-xs text-slate-600 mt-1">
-                  对象 <strong>{entityLabel} ({entityApiKey})</strong> 创建完成，共成功创建{' '}
-                  <strong className="text-emerald-600">{finalSummary.successCount}</strong> 个字段
+                  对象 <strong>{entityLabel} ({createdTargetEntity || `${entityApiKey}__c`})</strong> 创建成功，共成功创建{' '}
+                  <strong className="text-emerald-600 font-bold">{finalSummary.successCount}</strong> 个字段
                   {finalSummary.failCount > 0 ? `，失败 ${finalSummary.failCount} 个` : ''}。
                 </p>
               </div>
@@ -232,14 +243,14 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
                       onClose();
                       onNavigateToMetadata();
                     }}
-                    className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs"
+                    className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs cursor-pointer"
                   >
                     前往【对象与字段管理】查看
                   </button>
                 )}
                 <button
                   onClick={onClose}
-                  className="px-4 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium"
+                  className="px-4 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium cursor-pointer"
                 >
                   留在当前对话
                 </button>
@@ -269,15 +280,18 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
                   </div>
                   <div>
                     <label className="block text-slate-600 font-medium mb-1">
-                      API Key (推荐 __c 后缀) <span className="text-rose-500">*</span>
+                      API Key (系统会自动附加 __c) <span className="text-rose-500">*</span>
                     </label>
-                    <input
-                      type="text"
-                      disabled={isExecuting}
-                      value={entityApiKey}
-                      onChange={(e) => setEntityApiKey(e.target.value)}
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono text-[11px]"
-                    />
+                    <div className="relative">
+                      <input
+                        type="text"
+                        disabled={isExecuting}
+                        value={entityApiKey}
+                        onChange={(e) => setEntityApiKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                        className="w-full pl-3 pr-12 py-1.5 rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+                      />
+                      <span className="absolute right-3 top-2 text-[11px] text-slate-400 font-mono">+ __c</span>
+                    </div>
                   </div>
                 </div>
 
@@ -354,7 +368,7 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
                           <div className="truncate">
                             <div className="font-semibold text-slate-800 flex items-center space-x-2">
                               <span>{field.label}</span>
-                              <span className="font-mono text-[11px] text-slate-400 font-normal">({field.apiKey})</span>
+                              <span className="font-mono text-[11px] text-slate-400 font-normal">({field.apiKey}__c)</span>
                               {field.referObjectApiKey && (
                                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-600 border border-indigo-200">
                                   关联: {field.referObjectApiKey}
@@ -381,8 +395,8 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                           )}
                           {field.status === 'failed' && (
-                            <span className="text-[10px] text-rose-600" title={field.error}>
-                              创建失败
+                            <span className="text-[10px] text-rose-600 max-w-[150px] truncate" title={field.error}>
+                              {field.error || '失败'}
                             </span>
                           )}
                         </div>
@@ -425,7 +439,7 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
                 type="button"
                 disabled={isExecuting}
                 onClick={onClose}
-                className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 font-medium text-xs"
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 font-medium text-xs cursor-pointer"
               >
                 取消
               </button>

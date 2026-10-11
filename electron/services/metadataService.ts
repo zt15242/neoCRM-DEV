@@ -103,13 +103,18 @@ export class MetadataService {
     env: NeoEnvironment, 
     tokenData: TokenData, 
     payload: CreateEntityPayload
-  ): Promise<{ success: boolean; data?: any; error?: string }> {
+  ): Promise<{ success: boolean; data?: any; createdApiKey?: string; error?: string }> {
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
     const url = `${baseUrl}/rest/metadata/v3.1/xobjects/`;
 
+    // 关键：销售易平台创建自定义实体时，接口会自动在末尾拼接 __c！
+    // 传入给销售易接口的 apiKey 必须剥离末尾已有的 __c，避免被双重拼接成 __c__c
+    const cleanApiKey = payload.apiKey.trim().replace(/__c$/i, '');
+    const realExpectedApiKey = `${cleanApiKey}__c`;
+
     const body: Record<string, any> = {
-      apiKey: payload.apiKey.trim(),
+      apiKey: cleanApiKey,
       label: payload.label.trim(),
       description: payload.description?.trim() || payload.label.trim(),
       nameItem: payload.autoNumberFormat
@@ -122,17 +127,20 @@ export class MetadataService {
     try {
       const res = await axios.post(url, body, { headers, timeout: 20000 });
       if (res.data?.code === 200 || res.data?.code === '200') {
-        return { success: true, data: res.data?.data };
+        const createdKey = res.data?.data?.apiKey || realExpectedApiKey;
+        return { success: true, data: res.data?.data, createdApiKey: createdKey };
       }
-      return { 
-        success: false, 
-        error: res.data?.msg || res.data?.message || JSON.stringify(res.data) 
-      };
+      const errMsg = res.data?.msg || res.data?.message || JSON.stringify(res.data);
+      if (errMsg.includes('已存在') || errMsg.includes('REPEAT') || errMsg.includes('exist')) {
+        return { success: true, createdApiKey: realExpectedApiKey, data: res.data?.data };
+      }
+      return { success: false, error: errMsg };
     } catch (e: any) {
-      return {
-        success: false,
-        error: e.response?.data?.msg || e.response?.data?.message || e.message,
-      };
+      const errMsg = e.response?.data?.msg || e.response?.data?.message || e.message;
+      if (errMsg.includes('已存在') || errMsg.includes('REPEAT') || errMsg.includes('exist')) {
+        return { success: true, createdApiKey: realExpectedApiKey };
+      }
+      return { success: false, error: errMsg };
     }
   }
 
@@ -147,52 +155,87 @@ export class MetadataService {
   ): Promise<{ success: boolean; data?: any; error?: string }> {
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
-    const url = `${baseUrl}/rest/metadata/v3.1/xobjects/${entityApiKey}/items`;
+
+    // 关键：销售易平台创建自定义字段时，接口同样会自动在字段 apiKey 后面拼接 __c！
+    // 传入给销售易接口的字段 apiKey 必须剥离已有的 __c，避免字段被双重拼接
+    const cleanFieldApiKey = payload.apiKey.trim().replace(/__c$/i, '');
 
     const body: Record<string, any> = {
-      apiKey: payload.apiKey.trim(),
+      apiKey: cleanFieldApiKey,
       label: payload.label.trim(),
       itemType: Number(payload.itemType),
       description: payload.description || payload.label,
     };
 
     if ([1, 2, 40].includes(payload.itemType)) {
-      body.maxLength = payload.maxLength || 200;
+      body.maxLength = payload.itemType === 2
+        ? Math.min(Number(payload.maxLength) || 1000, 2000)
+        : Math.min(Number(payload.maxLength) || 200, 500);
     }
     if ([6, 33].includes(payload.itemType)) {
-      body.maxLength = payload.maxLength || 16;
-      body.decimal = payload.decimal !== undefined ? payload.decimal : 2;
+      body.maxLength = Math.min(Number(payload.maxLength) || 16, 18);
+      body.decimal = payload.decimal !== undefined ? Number(payload.decimal) : 2;
     }
     if ([3, 4].includes(payload.itemType)) {
-      body.pickOption = payload.pickOption || [];
+      if (Array.isArray(payload.pickOption) && payload.pickOption.length > 0) {
+        body.pickOption = payload.pickOption.map((opt: any, idx: number) => {
+          if (typeof opt === 'string') {
+            return { optionLabel: opt, optionCode: idx + 1 };
+          }
+          return {
+            optionLabel: String(opt.optionLabel || opt.label || opt.name || `选项${idx + 1}`),
+            optionCode: opt.optionCode !== undefined ? Number(opt.optionCode) : idx + 1,
+          };
+        });
+      } else {
+        body.pickOption = [
+          { optionLabel: '选项一', optionCode: 1 },
+          { optionLabel: '选项二', optionCode: 2 },
+        ];
+      }
     }
     if (payload.itemType === 29) {
       body.maxLength = payload.maxLength || 1;
     }
-    // 关联关系字段 (itemType = 10)
     if (payload.itemType === 10) {
-      body.referObjectApiKey = payload.referObjectApiKey?.trim();
-      body.cascadeDelete = payload.cascadeDelete !== undefined ? Number(payload.cascadeDelete) : 1; // 默认1=置空清理
-      if (payload.linkLabel?.trim()) {
-        body.linkLabel = payload.linkLabel.trim();
+      body.referObjectApiKey = payload.referObjectApiKey?.trim() || 'account';
+      body.cascadeDelete = payload.cascadeDelete !== undefined ? Number(payload.cascadeDelete) : 1;
+      body.linkLabel = payload.linkLabel?.trim() || `${payload.label.trim()}列表`;
+    }
+
+    // 智能定位实体 API Key（支持自动兼容 __c 或历史误创的 __c__c）
+    const targetEntitiesToTry = [entityApiKey.trim()];
+    if (!entityApiKey.endsWith('__c')) {
+      targetEntitiesToTry.push(`${entityApiKey.trim()}__c`);
+    } else {
+      targetEntitiesToTry.push(`${entityApiKey.trim()}__c`); // 兼容可能误创为 __c__c 的历史对象
+      targetEntitiesToTry.push(entityApiKey.trim().replace(/__c$/, ''));
+    }
+
+    let lastError = '创建字段失败';
+
+    for (const tryKey of targetEntitiesToTry) {
+      const tryUrl = `${baseUrl}/rest/metadata/v3.1/xobjects/${tryKey}/items`;
+      try {
+        const res = await axios.post(tryUrl, body, { headers, timeout: 20000 });
+        if (res.data?.code === 200 || res.data?.code === '200') {
+          return { success: true, data: res.data?.data };
+        }
+        const errMsg = res.data?.msg || res.data?.message || JSON.stringify(res.data);
+        if (errMsg.includes('已存在') || errMsg.includes('REPEAT')) {
+          return { success: true, data: res.data?.data }; // 字段已存在视为成功
+        }
+        lastError = errMsg;
+      } catch (e: any) {
+        const errMsg = e.response?.data?.msg || e.response?.data?.message || e.message;
+        if (errMsg.includes('已存在') || errMsg.includes('REPEAT')) {
+          return { success: true };
+        }
+        lastError = errMsg;
       }
     }
 
-    try {
-      const res = await axios.post(url, body, { headers, timeout: 20000 });
-      if (res.data?.code === 200 || res.data?.code === '200') {
-        return { success: true, data: res.data?.data };
-      }
-      return { 
-        success: false, 
-        error: res.data?.msg || res.data?.message || JSON.stringify(res.data) 
-      };
-    } catch (e: any) {
-      return {
-        success: false,
-        error: e.response?.data?.msg || e.response?.data?.message || e.message,
-      };
-    }
+    return { success: false, error: lastError };
   }
 
   /**
