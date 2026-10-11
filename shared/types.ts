@@ -307,12 +307,31 @@ export interface AiStreamEvent {
   error?: string;
 }
 
+export interface PlannedFieldItem {
+  apiKey: string;
+  label: string;
+  itemType: number;
+  typeName: string;
+  maxLength?: number;
+  decimal?: number;
+  referObjectApiKey?: string;
+  pickOption?: { optionLabel: string; optionCode: number }[];
+  description?: string;
+}
+
+export interface SchemaPlanPayload {
+  entity: CreateEntityPayload;
+  fields: PlannedFieldItem[];
+}
+
 export interface AiAgentPreset {
   id: string;
   name: string;
   description: string;
   iconName: string;
   badge?: string;
+  disabled?: boolean;
+  disabledReason?: string;
   systemPrompt: string;
   recommendedModel?: string;
   enableCrmTools: boolean;

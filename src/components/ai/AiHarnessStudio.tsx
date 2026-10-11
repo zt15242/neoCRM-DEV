@@ -5,13 +5,15 @@ import {
   AiProviderConfig, 
   AiHarnessSettings, 
   AiContextEntityRef,
-  SessionState
+  SessionState,
+  SchemaPlanPayload
 } from '../../../shared/types';
 import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS } from '../../../shared/constants';
 import { AiSidebar } from './AiSidebar';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
 import { ContextEntityModal } from './ContextEntityModal';
+import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
 import { 
   Sparkles, 
   Settings, 
@@ -30,12 +32,14 @@ import {
 interface AiHarnessStudioProps {
   crmSession: SessionState;
   onNavigateToSettings: () => void;
+  onNavigateToMetadata?: () => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
 export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   crmSession,
   onNavigateToSettings,
+  onNavigateToMetadata,
   showToast,
 }) => {
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
@@ -50,6 +54,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [enableTools, setEnableTools] = useState<boolean>(true);
   const [entityRefs, setEntityRefs] = useState<AiContextEntityRef[]>([]);
   const [isEntityModalOpen, setIsEntityModalOpen] = useState<boolean>(false);
+
+  // 实体与字段数据建模创建确认模态框状态
+  const [pendingSchemaPlan, setPendingSchemaPlan] = useState<SchemaPlanPayload | null>(null);
 
   // 快速配置 API Key 状态
   const [quickApiKey, setQuickApiKey] = useState<string>('');
@@ -74,12 +81,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       }
       if (window.neoApi?.aiGetSessions) {
         const list = await window.neoApi.aiGetSessions();
-        setSessions(list);
-        if (list.length > 0 && !activeSessionId) {
-          setActiveSessionId(list[0].id);
-          setSelectedPresetId(list[0].presetId || 'harness-agent');
-          if (list[0].providerId) setCurrentProviderId(list[0].providerId);
-          if (list[0].modelId) setCurrentModelId(list[0].modelId);
+        // 自动清理没有任何消息的历史空会话
+        const validList = list.filter((s) => s.messages && s.messages.length > 0);
+        setSessions(validList);
+        if (validList.length > 0 && !activeSessionId) {
+          setActiveSessionId(validList[0].id);
+          setSelectedPresetId(validList[0].presetId || 'harness-agent');
+          if (validList[0].providerId) setCurrentProviderId(validList[0].providerId);
+          if (validList[0].modelId) setCurrentModelId(validList[0].modelId);
         }
       }
     } catch (e: any) {
@@ -170,7 +179,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             updatedAt: Date.now(),
           };
 
-          // 当流式结束或出错时，持久化会话到磁盘
           if (type === 'done' || type === 'error') {
             window.neoApi.aiSaveSession(newSess).catch(() => {});
           }
@@ -193,33 +201,22 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     };
   }, []);
 
-  // 创建新会话
-  const handleCreateSession = async (presetId = selectedPresetId) => {
-    const preset = AI_AGENT_PRESETS.find((p) => p.id === presetId) || AI_AGENT_PRESETS[0];
-    const newSession: AiChatSession = {
-      id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      title: `${preset.name.split(' (')[0]} 对话`,
-      presetId: preset.id,
-      providerId: currentProviderId,
-      modelId: preset.recommendedModel && currentProviderId === 'deepseek' ? preset.recommendedModel : currentModelId,
-      messages: [],
-      entityRefs: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    const list = await window.neoApi.aiSaveSession(newSession);
-    setSessions(list);
-    setActiveSessionId(newSession.id);
-    setSelectedPresetId(preset.id);
-    setEnableTools(preset.enableCrmTools);
-    if (newSession.modelId) setCurrentModelId(newSession.modelId);
+  // 新建对话（仅将视图切换为新会话准备草稿，绝不预先向磁盘存入空会话）
+  const handleNewChatDraft = () => {
+    setActiveSessionId(null);
+    const p = AI_AGENT_PRESETS.find((item) => item.id === selectedPresetId);
+    if (p) {
+      setEnableTools(p.enableCrmTools);
+      if (p.recommendedModel && currentProviderId === 'deepseek') {
+        setCurrentModelId(p.recommendedModel);
+      }
+    }
   };
 
   // 删除会话
   const handleDeleteSession = async (sessionId: string) => {
     const list = await window.neoApi.aiDeleteSession(sessionId);
-    setSessions(list);
+    setSessions(list.filter((s) => s.messages && s.messages.length > 0));
     if (activeSessionId === sessionId) {
       setActiveSessionId(list[0]?.id || null);
     }
@@ -231,7 +228,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     if (!target) return;
     const updated = { ...target, title, updatedAt: Date.now() };
     const list = await window.neoApi.aiSaveSession(updated);
-    setSessions(list);
+    setSessions(list.filter((s) => s.messages && s.messages.length > 0));
   };
 
   // 清空所有会话
@@ -245,7 +242,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   // 快速保存当前供应商 API Key (支持 DeepSeek / Gemini / OpenAI 等)
   const handleSaveQuickApiKey = async () => {
     if (!quickApiKey.trim()) {
-      showToast('error', `请输入有效的 ${currentProvider?.name || ''} API Key`);
+      showToast('error', `请输入有效的 API Key`);
       return;
     }
     setSavingQuickKey(true);
@@ -272,7 +269,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     let targetSession = activeSession;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
 
-    // 若当前没有活跃会话，自动新建一个
+    // 若当前是草稿状态或无活跃会话，才在真正发送第一条消息时正式创建会话
     if (!targetSession) {
       targetSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -285,7 +282,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         updatedAt: Date.now(),
       };
     } else if (targetSession.messages.length === 0) {
-      // 第一条消息自动更新会话标题
       targetSession = {
         ...targetSession,
         title: text.slice(0, 22) + (text.length > 22 ? '...' : ''),
@@ -319,9 +315,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       updatedAt: Date.now(),
     };
 
-    // 先更新本地状态与磁盘
+    // 保存到磁盘并更新活跃状态
     const savedList = await window.neoApi.aiSaveSession(updatedSession);
-    setSessions(savedList);
+    setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
     setActiveSessionId(updatedSession.id);
 
     const requestId = `req_${Date.now()}`;
@@ -329,7 +325,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     setStreamingMessageId(assistantMsgId);
     reasoningStartTimeRef.current = null;
 
-    // 调用主进程流式接口
+    // 发起流式请求
     await window.neoApi.aiStartChatStream({
       requestId,
       sessionId: updatedSession.id,
@@ -404,17 +400,21 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             if (target.modelId) setCurrentModelId(target.modelId);
           }
         }}
-        onCreateSession={handleCreateSession}
+        onNewChatDraft={handleNewChatDraft}
         onDeleteSession={handleDeleteSession}
         onUpdateSessionTitle={handleUpdateSessionTitle}
         onClearSessions={handleClearSessions}
         onSelectPreset={(presetId) => {
-          setSelectedPresetId(presetId);
           const p = AI_AGENT_PRESETS.find((item) => item.id === presetId);
-          if (p) {
+          if (p && !p.disabled) {
+            setSelectedPresetId(presetId);
             setEnableTools(p.enableCrmTools);
             if (p.recommendedModel && currentProviderId === 'deepseek') {
               setCurrentModelId(p.recommendedModel);
+            }
+            // 切换预设时仅切到草稿态，不创建空记录
+            if (activeSession && activeSession.messages.length > 0) {
+              setActiveSessionId(null);
             }
           }
         }}
@@ -470,7 +470,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               <button
                 onClick={onNavigateToSettings}
                 title="配置模型 API Key 与供应商"
-                className="p-1.5 text-slate-500 hover:text-sky-600 hover:bg-white rounded-lg transition-colors"
+                className="p-1.5 text-slate-500 hover:text-sky-600 hover:bg-white rounded-lg transition-colors cursor-pointer"
               >
                 <Settings className="w-3.5 h-3.5" />
               </button>
@@ -481,7 +481,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               <button
                 onClick={handleExportMarkdown}
                 title="导出对话为 Markdown"
-                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors"
+                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
               </button>
@@ -504,7 +504,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                       <span>当前供应商 [{currentProvider?.name}] 尚未配置 API Key</span>
                     </h4>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      您可以直接在下方粘贴您的 DeepSeek API Key 立即激活，或前往【系统设置】配置 OpenAI / 硅基流动 / 自定义网关。
+                      您可以直接在右侧粘贴您的 API Key 立即激活，或前往【系统设置】进行详细管理。
                     </p>
                   </div>
                 </div>
@@ -528,9 +528,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   </div>
                   <button
                     onClick={onNavigateToSettings}
-                    className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-medium"
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-medium cursor-pointer"
                   >
-                    前往模型设置
+                    前往设置
                   </button>
                 </div>
               </div>
@@ -568,7 +568,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   <button
                     key={index}
                     onClick={() => handleSendMessage(prompt, entityRefs)}
-                    className="text-left p-3.5 rounded-2xl bg-white hover:bg-sky-50/60 border border-slate-200/90 hover:border-sky-300 transition-all shadow-2xs group"
+                    className="text-left p-3.5 rounded-2xl bg-white hover:bg-sky-50/60 border border-slate-200/90 hover:border-sky-300 transition-all shadow-2xs group cursor-pointer"
                   >
                     <div className="flex items-start justify-between">
                       <span className="text-xs font-medium text-slate-700 group-hover:text-sky-800 leading-relaxed">
@@ -587,6 +587,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   key={msg.id}
                   message={msg}
                   isStreamingCurrent={streamingMessageId === msg.id}
+                  onOpenCreateSchema={(plan) => setPendingSchemaPlan(plan)}
                 />
               ))}
               <div ref={messagesEndRef} />
@@ -622,6 +623,18 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         onClose={() => setIsEntityModalOpen(false)}
         onConfirm={(refs) => setEntityRefs(refs)}
       />
+
+      {/* 确认创建数据模型与字段弹窗 */}
+      {pendingSchemaPlan && (
+        <ConfirmCreateSchemaModal
+          isOpen={!!pendingSchemaPlan}
+          plan={pendingSchemaPlan}
+          tenantName={crmSession.tokenData?.userInfo?.tenantName || crmSession.environment?.name}
+          onClose={() => setPendingSchemaPlan(null)}
+          onNavigateToMetadata={onNavigateToMetadata}
+          showToast={showToast}
+        />
+      )}
     </div>
   );
 };

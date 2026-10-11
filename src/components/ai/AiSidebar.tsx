@@ -13,7 +13,7 @@ import {
   MessageSquare,
   Check,
   X,
-  Pin
+  Lock
 } from 'lucide-react';
 
 interface AiSidebarProps {
@@ -22,7 +22,7 @@ interface AiSidebarProps {
   presets: AiAgentPreset[];
   selectedPresetId: string;
   onSelectSession: (sessionId: string) => void;
-  onCreateSession: (presetId?: string) => void;
+  onNewChatDraft: () => void;
   onDeleteSession: (sessionId: string) => void;
   onUpdateSessionTitle: (sessionId: string, title: string) => void;
   onClearSessions: () => void;
@@ -35,7 +35,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   presets,
   selectedPresetId,
   onSelectSession,
-  onCreateSession,
+  onNewChatDraft,
   onDeleteSession,
   onUpdateSessionTitle,
   onClearSessions,
@@ -77,18 +77,21 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     setEditingId(null);
   };
 
-  const filteredSessions = sessions.filter((s) => {
+  // 关键：仅展示有实际消息内容的有效会话，彻底避免空会话堆积
+  const validSessions = sessions.filter((s) => s.messages && s.messages.length > 0);
+
+  const filteredSessions = validSessions.filter((s) => {
     if (!keyword.trim()) return true;
     return s.title.toLowerCase().includes(keyword.toLowerCase());
   });
 
   return (
-    <div className="w-72 bg-white border-r border-slate-200 flex flex-col h-full select-none">
+    <div className="w-72 bg-white border-r border-slate-200 flex flex-col h-full select-none shrink-0">
       {/* 顶部操作区 */}
       <div className="p-3 border-b border-slate-100 space-y-2">
         <button
-          onClick={() => onCreateSession(selectedPresetId)}
-          className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold flex items-center justify-center space-x-2 shadow-xs transition-all"
+          onClick={onNewChatDraft}
+          className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold flex items-center justify-center space-x-2 shadow-xs transition-all cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>新建 AI 对话</span>
@@ -115,15 +118,33 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
         <div className="space-y-1">
           {presets.map((preset) => {
             const Icon = getPresetIcon(preset.iconName);
-            const isSelected = selectedPresetId === preset.id;
+            const isSelected = selectedPresetId === preset.id && !preset.disabled;
+            const isDisabled = Boolean(preset.disabled);
+
+            if (isDisabled) {
+              return (
+                <div
+                  key={preset.id}
+                  title={preset.disabledReason || '该功能暂未开放'}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between opacity-50 cursor-not-allowed bg-slate-100/40 text-slate-400 border border-transparent select-none"
+                >
+                  <div className="flex items-center space-x-2 truncate">
+                    <Icon className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                    <span className="truncate line-through text-slate-400">{preset.name.split(' (')[0]}</span>
+                  </div>
+                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-500 font-mono shrink-0">
+                    暂未开放
+                  </span>
+                </div>
+              );
+            }
+
             return (
               <button
                 key={preset.id}
-                onClick={() => {
-                  onSelectPreset(preset.id);
-                  onCreateSession(preset.id);
-                }}
-                className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                type="button"
+                onClick={() => onSelectPreset(preset.id)}
+                className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors cursor-pointer ${
                   isSelected
                     ? 'bg-sky-50 text-sky-700 border border-sky-200 shadow-2xs font-semibold'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
@@ -147,12 +168,12 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
       {/* 历史会话列表 */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1 px-2">
-          对话记录 ({sessions.length})
+          对话记录 ({validSessions.length})
         </div>
 
         {filteredSessions.length === 0 ? (
           <div className="py-8 text-center text-xs text-slate-400">
-            {keyword ? '未搜到相关会话' : '暂无历史对话，点击上方新建'}
+            {keyword ? '未搜到相关会话' : '暂无对话记录，在下方输入消息开始'}
           </div>
         ) : (
           filteredSessions.map((session) => {
@@ -228,12 +249,12 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
       </div>
 
       {/* 底部清理操作 */}
-      {sessions.length > 0 && (
+      {validSessions.length > 0 && (
         <div className="p-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400 px-3">
-          <span>共 {sessions.length} 个对话</span>
+          <span>共 {validSessions.length} 个对话</span>
           <button
             onClick={onClearSessions}
-            className="hover:text-rose-600 transition-colors flex items-center space-x-1 text-[11px]"
+            className="hover:text-rose-600 transition-colors flex items-center space-x-1 text-[11px] cursor-pointer"
           >
             <Trash2 className="w-3 h-3" />
             <span>清空所有</span>

@@ -380,6 +380,7 @@ export const App: React.FC = () => {
           <AiHarnessStudio
             crmSession={session}
             onNavigateToSettings={() => setActiveTab('settings')}
+            onNavigateToMetadata={() => setActiveTab('metadata')}
             showToast={showToast}
           />
         )}

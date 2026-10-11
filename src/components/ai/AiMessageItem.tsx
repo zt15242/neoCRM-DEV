@@ -1,17 +1,24 @@
 import React, { useState } from 'react';
-import { AiChatMessage } from '../../../shared/types';
+import { AiChatMessage, SchemaPlanPayload } from '../../../shared/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBox } from './ReasoningBox';
 import { ToolCallCard } from './ToolCallCard';
 import { InlineSqlResultTable } from './InlineSqlResultTable';
-import { Bot, User, Copy, Check, Sparkles, Box, AlertTriangle } from 'lucide-react';
+import { extractSchemaPlanFromText } from './schemaPlanHelper';
+import { SchemaPlanCard } from './SchemaPlanCard';
+import { Copy, Check, Sparkles, Box, AlertTriangle } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
   isStreamingCurrent?: boolean;
+  onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
 }
 
-export const AiMessageItem: React.FC<AiMessageItemProps> = ({ message, isStreamingCurrent = false }) => {
+export const AiMessageItem: React.FC<AiMessageItemProps> = ({
+  message,
+  isStreamingCurrent = false,
+  onOpenCreateSchema,
+}) => {
   const [copied, setCopied] = useState(false);
   const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
 
@@ -51,6 +58,9 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({ message, isStreami
       </div>
     );
   }
+
+  // 检测是否包含可执行的数据建模方案
+  const detectedPlan = !isStreamingCurrent && message.content ? extractSchemaPlanFromText(message.content) : null;
 
   return (
     <div className="flex items-start space-x-3 my-4 pr-12">
@@ -137,6 +147,14 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({ message, isStreami
             <InlineSqlResultTable
               sql={activeExecutedSql}
               onClose={() => setActiveExecutedSql(null)}
+            />
+          )}
+
+          {/* 数据模型方案确认与一键建表卡片 */}
+          {detectedPlan && onOpenCreateSchema && (
+            <SchemaPlanCard
+              plan={detectedPlan}
+              onOpenConfirm={() => onOpenCreateSchema(detectedPlan)}
             />
           )}
         </div>

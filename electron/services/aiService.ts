@@ -378,7 +378,8 @@ export class AiService {
     if (!fs.existsSync(filePath)) return [];
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      return Array.isArray(data) ? data : [];
+      const list: AiChatSession[] = Array.isArray(data) ? data : [];
+      return list.filter((s) => Array.isArray(s.messages) && s.messages.length > 0);
     } catch {
       return [];
     }

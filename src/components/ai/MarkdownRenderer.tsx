@@ -51,6 +51,10 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
         if (part.type === 'code') {
           const codeId = `code_${index}`;
           const isCopied = copiedId === codeId;
+          if (part.lang?.toLowerCase() === 'json:schema-plan') {
+            return null;
+          }
+
           const isSql =
             part.lang?.toLowerCase() === 'sql' ||
             (part.content.trim().toUpperCase().startsWith('SELECT') && !part.lang);

@@ -429,11 +429,31 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     enableCrmTools: true,
     recommendedModel: 'deepseek-chat',
     systemPrompt: `你是一个销售易 PaaS 数据模型与实体关系架构专家。
-你可以帮助用户根据业务需求设计：
-1. 业务实体（对象 API Key 规范以小写驼峰或下划线，自定义对象后缀或语义命名）。
-2. 字段类型选择（如文本 itemType:1、金额 itemType:6、关联关系 itemType:10、单选 itemType:3、日期时间 itemType:8 等）。
-3. 主子对象关系与级联删除规则（级联删除、保留或拒绝）。
-4. 产出清晰规范的 Markdown 表格，列明：字段中文名、API Key、字段类型、是否必填、关联目标、选项值或默认值。`,
+你可以帮助用户根据业务需求设计业务实体与字段。
+规范与要求：
+1. 业务实体规范：对象 API Key 规范以小写英文驼峰或加 __c 后缀（如 serviceTicket__c）。
+2. 字段类型代码 (itemType)：文本:1, 文本域:2, 单选:3, 多选:4, 整数:5, 金额:6, 日期:7, 日期时间:8, 自动编号:9, 关联关系:10, 图片:14, 电话:16, 邮箱:17, 网址:18, 布尔:31。
+3. 首先输出结构清晰的 Markdown 表格和分析说明。
+4. 【关键要求】：当你为用户设计了一套具体的新实体或新字段方案时，请在回答的末尾使用 【json:schema-plan】 代码块输出完整的结构化配置，工作台将自动为用户生成「一键在租户中创建此对象与字段」的确认对话框！
+输出格式范例：
+标准格式 【json:schema-plan】
+{
+  "entity": {
+    "apiKey": "equipmentRepair__c",
+    "label": "设备维保单",
+    "description": "设备售后维保与维修记录",
+    "autoNumberFormat": "REP-{YYYY}{MM}{DD}-{0000}",
+    "enableScriptExecutor": true,
+    "enableBusitype": false
+  },
+  "fields": [
+    { "apiKey": "repairTitle__c", "label": "维保主题", "itemType": 1, "typeName": "单行文本", "maxLength": 100 },
+    { "apiKey": "account__c", "label": "关联客户", "itemType": 10, "typeName": "关联关系", "referObjectApiKey": "account" },
+    { "apiKey": "repairCost__c", "label": "维修费用", "itemType": 6, "typeName": "金额", "decimal": 2 },
+    { "apiKey": "repairStatus__c", "label": "处理状态", "itemType": 3, "typeName": "单选列表", "pickOption": [{ "optionLabel": "待处理", "optionCode": 1 }, { "optionLabel": "处理中", "optionCode": 2 }, { "optionLabel": "已完成", "optionCode": 3 }] }
+  ]
+}
+`,
     quickPrompts: [
       '帮我设计一套【设备维保管理】业务对象与核心字段表',
       '规划一个主子明细关系的对象（如采购订单与订单行明细）',
@@ -444,9 +464,11 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
     id: 'paas-coder',
     name: 'PaaS 后端脚本与前端组件专家',
-    description: '专精销售易 Java/Groovy 触发器 (Trigger)、自定义 REST API、自定义 React 前端组件',
+    description: '销售易 Java/Groovy 触发器 (Trigger)、自定义 REST API、自定义 React 前端组件 (内测开发中)',
     iconName: 'Code2',
-    badge: '代码开发',
+    badge: '暂未开放',
+    disabled: true,
+    disabledReason: '该预设角色正在进行深度适配与内测，暂未开放使用',
     enableCrmTools: false,
     recommendedModel: 'deepseek-chat',
     systemPrompt: `你是一个精通销售易 NeoCRM PaaS 扩展开发的顶级全栈专家。
