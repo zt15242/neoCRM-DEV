@@ -1369,13 +1369,19 @@ ${toolDataContext}
         sql += ' LIMIT 30';
       }
       const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
+      if (!queryRes.success || !queryRes.data) {
+        throw new Error(queryRes.error || 'SQL 执行返回失败');
+      }
+      const records = queryRes.data.records || [];
+      const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);
+      const totalSize = queryRes.data.totalSize ?? records.length;
       return {
         data: {
-          records: queryRes.records.slice(0, 30),
-          totalSize: queryRes.totalSize,
-          fields: queryRes.fields,
+          records: records.slice(0, 30),
+          totalSize,
+          fields,
         },
-        summary: `SQL 执行成功，返回 ${queryRes.records.length} 条数据`,
+        summary: `SQL 执行成功，返回 ${records.length} 条数据`,
       };
     }
 

@@ -156,7 +156,7 @@ xsy-inner-source: bff`}
           <div>
             <div className="font-semibold text-slate-800">检查软件版本更新</div>
             <div className="text-[11px] text-slate-400 mt-0.5">
-              当前版本: v1.2.6（通过国内 CDN 加速自动检测）
+              当前版本: v1.2.7（通过国内 CDN 加速自动检测）
             </div>
           </div>
           <button
