@@ -89,7 +89,10 @@ export const neoApi = {
   aiDeleteMcpServer: (id: string) => ipcRenderer.invoke('ai:deleteMcpServer', id),
   aiSaveSkill: (skill: any) => ipcRenderer.invoke('ai:saveSkill', skill),
   aiDeleteSkill: (id: string) => ipcRenderer.invoke('ai:deleteSkill', id),
-  aiCompactSession: (sessionId: string) => ipcRenderer.invoke('ai:compactSession', sessionId),
+  aiCompactSession: (sessionId: string) => ipcRenderer.invoke("ai:compactSession", sessionId),
+  aiImportSkillZip: () => ipcRenderer.invoke("ai:importSkillZip"),
+  aiImportSkillZipBuffer: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke("ai:importSkillZipBuffer", fileName, buffer),
+  aiExportSkillZip: (skillIds?: string[]) => ipcRenderer.invoke("ai:exportSkillZip", skillIds),
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);

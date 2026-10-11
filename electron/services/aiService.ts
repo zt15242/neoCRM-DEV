@@ -1,3 +1,4 @@
+import { SkillPackageService } from "./skillPackageService";
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
@@ -32,11 +33,121 @@ import { SessionStore } from './sessionStore';
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
 
+  private skillPackageService = new SkillPackageService();
+
   constructor(
     private sessionStore: SessionStore,
     private metadataService: MetadataService,
     private dataService: DataService
   ) {}
+
+  // ================= 技能包 ZIP 导入与导出 =================
+
+  public async importSkillZipFromDialog(): Promise<{
+    success: boolean;
+    skills?: AiSkillItem[];
+    importedCount?: number;
+    importedNames?: string[];
+    error?: string;
+    canceled?: boolean;
+  }> {
+    const res = await this.skillPackageService.importSkillZipFromDialog();
+    if (res.canceled) {
+      return { success: false, canceled: true };
+    }
+    if (res.error || !res.skills || res.skills.length === 0) {
+      return { success: false, error: res.error || "未读取到有效技能" };
+    }
+
+    const config = this.getAiConfig();
+    const existingPersonal = (config.skills || []).filter((s) => s.category === "personal");
+    const importedNames: string[] = [];
+
+    for (const newSkill of res.skills) {
+      const existingIdx = existingPersonal.findIndex((p) => p.name === newSkill.name);
+      if (existingIdx >= 0) {
+        existingPersonal[existingIdx] = { ...newSkill, id: existingPersonal[existingIdx].id };
+      } else {
+        existingPersonal.push(newSkill);
+      }
+      importedNames.push(newSkill.name);
+    }
+
+    config.skills = [
+      ...(config.skills || []).filter((s) => s.category === "builtin"),
+      ...existingPersonal,
+    ];
+    this.saveAiConfig(config);
+
+    return {
+      success: true,
+      skills: config.skills,
+      importedCount: res.skills.length,
+      importedNames,
+    };
+  }
+
+  public async importSkillZipFromBuffer(
+    fileName: string,
+    buffer: Buffer
+  ): Promise<{
+    success: boolean;
+    skills?: AiSkillItem[];
+    importedCount?: number;
+    importedNames?: string[];
+    error?: string;
+  }> {
+    const res = await this.skillPackageService.parseSkillZipBuffer(buffer, fileName);
+    if (res.error || !res.skills || res.skills.length === 0) {
+      return { success: false, error: res.error || "未读取到有效技能" };
+    }
+
+    const config = this.getAiConfig();
+    const existingPersonal = (config.skills || []).filter((s) => s.category === "personal");
+    const importedNames: string[] = [];
+
+    for (const newSkill of res.skills) {
+      const existingIdx = existingPersonal.findIndex((p) => p.name === newSkill.name);
+      if (existingIdx >= 0) {
+        existingPersonal[existingIdx] = { ...newSkill, id: existingPersonal[existingIdx].id };
+      } else {
+        existingPersonal.push(newSkill);
+      }
+      importedNames.push(newSkill.name);
+    }
+
+    config.skills = [
+      ...(config.skills || []).filter((s) => s.category === "builtin"),
+      ...existingPersonal,
+    ];
+    this.saveAiConfig(config);
+
+    return {
+      success: true,
+      skills: config.skills,
+      importedCount: res.skills.length,
+      importedNames,
+    };
+  }
+
+  public async exportSkillZip(
+    skillIds?: string[]
+  ): Promise<{
+    success: boolean;
+    filePath?: string;
+    error?: string;
+    canceled?: boolean;
+  }> {
+    const config = this.getAiConfig();
+    let candidates = (config.skills || []).filter((s) => s.category === "personal");
+    if (skillIds && skillIds.length > 0) {
+      candidates = candidates.filter((s) => skillIds.includes(s.id));
+    }
+    if (candidates.length === 0) {
+      return { success: false, error: "当前没有可导出的个人专属技能" };
+    }
+    return this.skillPackageService.exportSkillZip(candidates);
+  }
 
   private getConfigPath(): string {
     const userData = app?.getPath ? app.getPath('userData') : process.cwd();

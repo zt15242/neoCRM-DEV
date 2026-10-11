@@ -409,4 +409,9 @@ ipcMain.handle('ai:saveMcpServer', async (_, server) => aiService.saveMcpServer(
 ipcMain.handle('ai:deleteMcpServer', async (_, id: string) => aiService.deleteMcpServer(id));
 ipcMain.handle('ai:saveSkill', async (_, skill) => aiService.saveSkill(skill));
 ipcMain.handle('ai:deleteSkill', async (_, id: string) => aiService.deleteSkill(id));
-ipcMain.handle('ai:compactSession', async (_, sessionId: string) => aiService.compactSession(sessionId));
+ipcMain.handle("ai:compactSession", async (_, sessionId: string) => aiService.compactSession(sessionId));
+ipcMain.handle("ai:importSkillZip", async () => aiService.importSkillZipFromDialog());
+ipcMain.handle("ai:importSkillZipBuffer", async (_, fileName: string, bufferData: ArrayBuffer) => {
+  return aiService.importSkillZipFromBuffer(fileName, Buffer.from(bufferData));
+});
+ipcMain.handle("ai:exportSkillZip", async (_, skillIds?: string[]) => aiService.exportSkillZip(skillIds));

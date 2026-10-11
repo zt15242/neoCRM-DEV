@@ -111,6 +111,30 @@ declare global {
       aiSaveSkill: (skill: AiSkillItem) => Promise<AiSkillItem[]>;
       aiDeleteSkill: (id: string) => Promise<AiSkillItem[]>;
       aiCompactSession: (sessionId: string) => Promise<AiChatSession | null>;
+      aiImportSkillZip: () => Promise<{
+        success: boolean;
+        skills?: AiSkillItem[];
+        importedCount?: number;
+        importedNames?: string[];
+        error?: string;
+        canceled?: boolean;
+      }>;
+      aiImportSkillZipBuffer: (
+        fileName: string,
+        buffer: ArrayBuffer
+      ) => Promise<{
+        success: boolean;
+        skills?: AiSkillItem[];
+        importedCount?: number;
+        importedNames?: string[];
+        error?: string;
+      }>;
+      aiExportSkillZip: (skillIds?: string[]) => Promise<{
+        success: boolean;
+        filePath?: string;
+        error?: string;
+        canceled?: boolean;
+      }>;
       onAiStreamEvent: (callback: (event: AiStreamEvent) => void) => () => void;
     };
   }

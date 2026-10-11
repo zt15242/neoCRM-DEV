@@ -260,6 +260,8 @@ export interface McpToolItem {
   inputSchema?: any;
 }
 
+export type McpAuthType = 'none' | 'bearer' | 'basic' | 'custom';
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -268,8 +270,13 @@ export interface McpServerConfig {
   enabled: boolean;
   command?: string;
   args?: string[];
-  env?: Record<string, string>;
-  url?: string;
+  env?: Record<string, string>; // Stdio 进程环境变量 (如 API_KEY, TOKEN 等)
+  url?: string; // SSE 远程端点
+  authType?: McpAuthType;
+  bearerToken?: string;
+  basicUsername?: string;
+  basicPassword?: string;
+  headers?: Record<string, string>; // 自定义请求头 (含 Authorization / API Key 等)
   tools?: McpToolItem[];
 }
 

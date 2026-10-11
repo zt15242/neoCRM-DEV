@@ -226,6 +226,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             skills={skills}
             onSaveSkill={handleSaveSkill}
             onDeleteSkill={handleDeleteSkill}
+            onSkillsChange={setSkills}
             showToast={showToast}
           />
         )}
