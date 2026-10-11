@@ -57,19 +57,26 @@ export class AiService {
 
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      // 保证预设供应商完整性（如版本更新后合并新模型或新预设）
       const existingProviders: AiProviderConfig[] = data.providers || [];
-      const mergedProviders = [...existingProviders];
+      const mergedProviders: AiProviderConfig[] = [];
 
+      // 1. 先按 BUILTIN_AI_PROVIDERS 顺序对齐内置供应商，确保新增的内置供应商（如 Gemini）排在正确位置
       for (const builtin of BUILTIN_AI_PROVIDERS) {
-        const found = mergedProviders.find((p) => p.id === builtin.id);
+        const found = existingProviders.find((p) => p.id === builtin.id);
         if (!found) {
           mergedProviders.push(builtin);
         } else {
-          // 补充新预设字段与新模型
           if (!found.models || found.models.length === 0) {
             found.models = builtin.models;
           }
+          mergedProviders.push(found);
+        }
+      }
+
+      // 2. 追加用户自定义的供应商
+      for (const ep of existingProviders) {
+        if (!mergedProviders.some((m) => m.id === ep.id)) {
+          mergedProviders.push(ep);
         }
       }
 
@@ -146,6 +153,54 @@ export class AiService {
     }
 
     try {
+      // 1. Google Gemini 原生协议测试
+      if (provider.protocol === 'google-gemini' && !baseUrl.endsWith('/openai')) {
+        const apiKey = provider.apiKey?.trim() || '';
+        if (!apiKey) {
+          return { success: false, message: '请先输入 Google Gemini API Key' };
+        }
+
+        try {
+          const modelsRes = await axios.get(`${baseUrl}/models?key=${encodeURIComponent(apiKey)}`, {
+            headers: { 'x-goog-api-key': apiKey },
+            timeout: 10000,
+          });
+          if (modelsRes.status === 200 && Array.isArray(modelsRes.data?.models)) {
+            const count = modelsRes.data.models.length;
+            return {
+              success: true,
+              message: `Gemini 连接成功！探测到 ${count} 个可用模型`,
+              responseTimeMs: Date.now() - start,
+            };
+          }
+        } catch {
+          // 若代理不支持 /models，回退到极简 generateContent 测试
+        }
+
+        const testModel = (provider.models?.[0]?.id || 'gemini-2.0-flash').replace(/^models\//, '');
+        const genRes = await axios.post(
+          `${baseUrl}/models/${testModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+            generationConfig: { maxOutputTokens: 5 },
+          },
+          {
+            headers: {
+              'x-goog-api-key': apiKey,
+              'Content-Type': 'application/json',
+            },
+            timeout: 12000,
+          }
+        );
+
+        return {
+          success: true,
+          message: `Gemini 连通性正常 (模型 ${testModel} 响应 HTTP ${genRes.status})`,
+          responseTimeMs: Date.now() - start,
+        };
+      }
+
+      // 2. Anthropic 协议测试
       if (provider.protocol === 'anthropic-messages') {
         const res = await axios.post(
           `${baseUrl}/messages`,
@@ -170,7 +225,7 @@ export class AiService {
         };
       }
 
-      // OpenAI 协议：优先尝试 GET /models，若失败则发极简 chat 请求
+      // 3. OpenAI 兼容协议：优先尝试 GET /models，若失败则发极简 chat 请求
       try {
         const modelsRes = await axios.get(`${baseUrl}/models`, {
           headers: {
@@ -209,11 +264,14 @@ export class AiService {
 
       return {
         success: true,
-        message: `连通性正常 (模型 ${testModel} 响应正常)`,
+        message: `连通性正常 (模型 ${testModel} 响应 HTTP ${chatRes.status})`,
         responseTimeMs: Date.now() - start,
       };
     } catch (err: any) {
-      const errMsg = err.response?.data?.error?.message || err.response?.data?.message || err.message;
+      const errMsg =
+        err.response?.data?.error?.message ||
+        err.response?.data?.message ||
+        err.message;
       return {
         success: false,
         message: `连接失败: ${errMsg}`,
@@ -229,6 +287,46 @@ export class AiService {
     }
 
     try {
+      // Google Gemini 原生模型列表解析
+      if (provider.protocol === 'google-gemini' && !baseUrl.endsWith('/openai')) {
+        const apiKey = provider.apiKey?.trim() || '';
+        const res = await axios.get(`${baseUrl}/models?key=${encodeURIComponent(apiKey)}`, {
+          headers: { 'x-goog-api-key': apiKey },
+          timeout: 10000,
+        });
+
+        const rawModels = Array.isArray(res.data?.models) ? res.data.models : [];
+        if (rawModels.length === 0) {
+          return { success: false, models: [], error: 'Gemini 接口未返回可用模型列表' };
+        }
+
+        const models: AiModelItem[] = rawModels
+          .filter((item: any) => {
+            if (Array.isArray(item.supportedGenerationMethods)) {
+              return item.supportedGenerationMethods.includes('generateContent');
+            }
+            return String(item.name || '').includes('gemini');
+          })
+          .map((item: any) => {
+            const rawName = String(item.name || '');
+            const id = rawName.replace(/^models\//, '');
+            const displayName = item.displayName ? `${item.displayName} (${id})` : id;
+            const lowerId = id.toLowerCase();
+            const isReasoning = lowerId.includes('2.5') || lowerId.includes('thinking');
+            return {
+              id,
+              name: displayName,
+              reasoning: isReasoning,
+              tools: !lowerId.includes('thinking'),
+              contextWindow: item.inputTokenLimit || 1048576,
+              maxOutputTokens: item.outputTokenLimit || 65536,
+            };
+          });
+
+        return { success: true, models };
+      }
+
+      // OpenAI 兼容格式模型列表解析
       const res = await axios.get(`${baseUrl}/models`, {
         headers: {
           Authorization: `Bearer ${provider.apiKey || ''}`,
@@ -244,13 +342,20 @@ export class AiService {
       const models: AiModelItem[] = rawList.map((item: any) => {
         const id = typeof item === 'string' ? item : item.id || item.name;
         const name = typeof item === 'object' && item.name ? item.name : id;
-        const lowerId = id.toLowerCase();
-        const isReasoning = lowerId.includes('r1') || lowerId.includes('reasoner') || lowerId.includes('o1') || lowerId.includes('o3') || lowerId.includes('qwq');
+        const lowerId = String(id).toLowerCase();
+        const isReasoning =
+          lowerId.includes('r1') ||
+          lowerId.includes('reasoner') ||
+          lowerId.includes('o1') ||
+          lowerId.includes('o3') ||
+          lowerId.includes('qwq') ||
+          lowerId.includes('thinking') ||
+          lowerId.includes('gemini-2.5');
         return {
           id,
           name,
           reasoning: isReasoning,
-          tools: !isReasoning,
+          tools: !lowerId.includes('reasoner') && !lowerId.includes('thinking'),
           contextWindow: 65536,
           maxOutputTokens: 8192,
         };
@@ -378,13 +483,35 @@ export class AiService {
         systemParts.push(`【用户自定义追加规范】\n${config.settings.customSystemPrompt.trim()}`);
       }
 
-      const systemMessage = systemParts.length > 0 ? { role: 'system', content: systemParts.join('\n\n') } : null;
+      const systemPromptText = systemParts.join('\n\n');
+      const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
-      // 2. 组装历史上下文（根据 contextLimit 截取最近消息）
+      // 2. 截取最近上下文消息
       const contextLimit = config.settings.contextLimit || 20;
       const recentMessages = messages.slice(-contextLimit);
 
-      // 3. 构建对话上下文列表
+      const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
+
+      // 判断是否走 Google Gemini 原生协议
+      if (provider.protocol === 'google-gemini' && !cleanBaseUrl.endsWith('/openai')) {
+        await this.runGeminiNativeStream({
+          requestId,
+          sessionId,
+          messageId,
+          provider,
+          modelId,
+          systemPromptText,
+          recentMessages,
+          enableTools: (enableTools !== false) && config.settings.enableCrmTools,
+          settings: config.settings,
+          currentSession,
+          controller,
+          sendEvent,
+        });
+        return;
+      }
+
+      // 3. 构建 OpenAI 兼容对话上下文列表
       const conversationHistory: any[] = [];
       if (systemMessage) {
         conversationHistory.push(systemMessage);
@@ -393,7 +520,6 @@ export class AiService {
       for (const msg of recentMessages) {
         if (msg.role === 'user') {
           let text = msg.content;
-          // 若附带了引用的实体字典信息
           if (msg.entityRefs && msg.entityRefs.length > 0) {
             const refDesc = msg.entityRefs
               .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
@@ -408,8 +534,17 @@ export class AiService {
 
       // 4. 判断是否开启工具调用
       const modelObj = provider.models?.find((m) => m.id === modelId);
-      const isReasonerModel = modelObj?.reasoning || modelId.toLowerCase().includes('reasoner') || modelId.toLowerCase().includes('r1');
-      const canUseTools = (enableTools !== false) && config.settings.enableCrmTools && !isReasonerModel && provider.protocol !== 'anthropic-messages';
+      const lowerModelId = modelId.toLowerCase();
+      const isPureReasoner =
+        lowerModelId.includes('reasoner') ||
+        lowerModelId.includes('deepseek-r1') ||
+        lowerModelId.includes('thinking') ||
+        lowerModelId.includes('qwq');
+      const canUseTools =
+        (enableTools !== false) &&
+        config.settings.enableCrmTools &&
+        (modelObj?.tools ?? !isPureReasoner) &&
+        provider.protocol !== 'anthropic-messages';
 
       // 5. 执行 Agent Loop（最多循环 5 次）
       let loopCount = 0;
@@ -432,7 +567,6 @@ export class AiService {
           requestBody.tool_choice = 'auto';
         }
 
-        const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
         const endpoint = `${cleanBaseUrl}/chat/completions`;
 
         const response = await fetch(endpoint, {
@@ -506,7 +640,6 @@ export class AiService {
               if (delta.content) {
                 let piece = delta.content;
 
-                // 兼容部分模型输出 <think>...</think>
                 if (piece.includes('<think>')) {
                   isInThinkTag = true;
                   const parts = piece.split('<think>');
@@ -597,7 +730,6 @@ export class AiService {
 
         const toolCallsList = Object.values(toolCallsMap);
 
-        // 如果模型调用了工具，在主进程执行销售易本地工具并继续下一轮
         if (toolCallsList.length > 0) {
           conversationHistory.push({
             role: 'assistant',
@@ -627,7 +759,6 @@ export class AiService {
               status: 'running',
             };
 
-            // 发送工具开始事件
             sendEvent({
               requestId,
               sessionId,
@@ -636,7 +767,6 @@ export class AiService {
               toolCall: toolRecord,
             });
 
-            // 执行本地销售易操作
             const toolStartTime = Date.now();
             let toolResult: any = null;
             let resultSummary = '';
@@ -657,7 +787,6 @@ export class AiService {
             toolRecord.resultData = toolResult;
             toolRecord.durationMs = Date.now() - toolStartTime;
 
-            // 发送工具执行完毕事件
             sendEvent({
               requestId,
               sessionId,
@@ -666,7 +795,6 @@ export class AiService {
               toolCall: toolRecord,
             });
 
-            // 回填给大模型
             conversationHistory.push({
               role: 'tool',
               tool_call_id: tc.id,
@@ -674,10 +802,8 @@ export class AiService {
             });
           }
 
-          // 进入下一轮生成
           hasMoreIterations = true;
         } else {
-          // 没有工具调用，生成结束
           hasMoreIterations = false;
         }
       }
@@ -708,6 +834,289 @@ export class AiService {
     } finally {
       this.activeControllers.delete(requestId);
     }
+  }
+
+  /**
+   * Google Gemini 原生 REST API 流式对话与工具调用引擎
+   */
+  private async runGeminiNativeStream(opts: {
+    requestId: string;
+    sessionId: string;
+    messageId: string;
+    provider: AiProviderConfig;
+    modelId: string;
+    systemPromptText: string;
+    recentMessages: AiChatMessage[];
+    enableTools: boolean;
+    settings: AiHarnessSettings;
+    currentSession: any;
+    controller: AbortController;
+    sendEvent: (event: AiStreamEvent) => void;
+  }): Promise<void> {
+    const {
+      requestId,
+      sessionId,
+      messageId,
+      provider,
+      modelId,
+      systemPromptText,
+      recentMessages,
+      enableTools,
+      settings,
+      currentSession,
+      controller,
+      sendEvent,
+    } = opts;
+
+    const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
+    const cleanModelId = modelId.replace(/^models\//, '');
+    const apiKey = provider.apiKey.trim();
+
+    // 1. 组装 Gemini contents (role: 'user' | 'model')
+    const geminiContents: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
+
+    for (const msg of recentMessages) {
+      if (msg.role === 'user') {
+        let text = msg.content;
+        if (msg.entityRefs && msg.entityRefs.length > 0) {
+          const refDesc = msg.entityRefs
+            .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
+            .join(', ');
+          text = `${refDesc}\n\n${text}`;
+        }
+        const prev = geminiContents[geminiContents.length - 1];
+        if (prev && prev.role === 'user') {
+          prev.parts.push({ text });
+        } else {
+          geminiContents.push({ role: 'user', parts: [{ text }] });
+        }
+      } else if (msg.role === 'assistant' && msg.content) {
+        const prev = geminiContents[geminiContents.length - 1];
+        if (prev && prev.role === 'model') {
+          prev.parts.push({ text: msg.content });
+        } else {
+          geminiContents.push({ role: 'model', parts: [{ text: msg.content }] });
+        }
+      }
+    }
+
+    // 2. 判断是否支持工具调用
+    const isThinkingExp = cleanModelId.toLowerCase().includes('thinking');
+    const canUseTools = enableTools && !isThinkingExp;
+
+    // 转换 OpenAI tools 为 Gemini functionDeclarations
+    const geminiFunctionDeclarations = CRM_HARNESS_TOOLS_SPEC.map((spec) => {
+      const fn = spec.function;
+      const hasProps = fn.parameters?.properties && Object.keys(fn.parameters.properties).length > 0;
+      return {
+        name: fn.name,
+        description: fn.description,
+        ...(hasProps ? { parameters: fn.parameters } : {}),
+      };
+    });
+
+    let loopCount = 0;
+    const maxLoops = 5;
+    let hasMoreIterations = true;
+
+    while (hasMoreIterations && loopCount < maxLoops) {
+      loopCount++;
+
+      const requestBody: any = {
+        contents: geminiContents,
+        generationConfig: {
+          temperature: settings.temperature ?? 0.3,
+          maxOutputTokens: settings.maxTokens || 8192,
+        },
+      };
+
+      if (systemPromptText) {
+        requestBody.systemInstruction = {
+          parts: [{ text: systemPromptText }],
+        };
+      }
+
+      if (canUseTools) {
+        requestBody.tools = [{ functionDeclarations: geminiFunctionDeclarations }];
+      }
+
+      const endpoint = `${cleanBaseUrl}/models/${cleanModelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        let parsedError = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          parsedError = parsed.error?.message || parsed[0]?.error?.message || errText;
+        } catch {}
+        throw new Error(`Gemini 接口响应异常 (HTTP ${response.status}): ${parsedError}`);
+      }
+
+      if (!response.body) {
+        throw new Error('未获取到 Gemini 流式响应主体');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      const modelTurnParts: any[] = [];
+      const pendingFunctionCalls: Array<{ id: string; name: string; args: any }> = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (!dataStr || dataStr === '[DONE]') continue;
+
+          try {
+            const chunk = JSON.parse(dataStr);
+            const parts = chunk.candidates?.[0]?.content?.parts;
+            if (!Array.isArray(parts)) continue;
+
+            for (const part of parts) {
+              // 1. Gemini 2.5 / Thinking 原生思考块 (part.thought === true)
+              if (part.thought && part.text) {
+                sendEvent({
+                  requestId,
+                  sessionId,
+                  messageId,
+                  type: 'reasoning_delta',
+                  delta: part.text,
+                });
+                continue;
+              }
+
+              // 2. 常规文本输出
+              if (typeof part.text === 'string' && part.text.length > 0) {
+                modelTurnParts.push({ text: part.text });
+                sendEvent({
+                  requestId,
+                  sessionId,
+                  messageId,
+                  type: 'content_delta',
+                  delta: part.text,
+                });
+              }
+
+              // 3. Gemini Function Call
+              if (part.functionCall && part.functionCall.name) {
+                modelTurnParts.push({ functionCall: part.functionCall });
+                pendingFunctionCalls.push({
+                  id: `gemini_tc_${Date.now()}_${pendingFunctionCalls.length}`,
+                  name: part.functionCall.name,
+                  args: part.functionCall.args || {},
+                });
+              }
+            }
+          } catch {
+            // 忽略单行解析异常
+          }
+        }
+      }
+
+      if (pendingFunctionCalls.length > 0) {
+        geminiContents.push({
+          role: 'model',
+          parts: modelTurnParts,
+        });
+
+        const functionResponseParts: any[] = [];
+
+        for (const fc of pendingFunctionCalls) {
+          const toolRecord: AiToolCallRecord = {
+            id: fc.id,
+            name: fc.name,
+            arguments: fc.args,
+            status: 'running',
+          };
+
+          sendEvent({
+            requestId,
+            sessionId,
+            messageId,
+            type: 'tool_start',
+            toolCall: toolRecord,
+          });
+
+          const toolStartTime = Date.now();
+          let toolResult: any = null;
+          let resultSummary = '';
+          let isError = false;
+
+          try {
+            const res = await this.executeCrmTool(
+              fc.name,
+              fc.args,
+              currentSession.environment,
+              currentSession.tokenData
+            );
+            toolResult = res.data;
+            resultSummary = res.summary;
+          } catch (toolErr: any) {
+            isError = true;
+            toolResult = { error: toolErr.message };
+            resultSummary = `调用失败: ${toolErr.message}`;
+          }
+
+          toolRecord.status = isError ? 'error' : 'success';
+          toolRecord.resultSummary = resultSummary;
+          toolRecord.resultData = toolResult;
+          toolRecord.durationMs = Date.now() - toolStartTime;
+
+          sendEvent({
+            requestId,
+            sessionId,
+            messageId,
+            type: 'tool_update',
+            toolCall: toolRecord,
+          });
+
+          functionResponseParts.push({
+            functionResponse: {
+              name: fc.name,
+              response: {
+                result: toolResult,
+              },
+            },
+          });
+        }
+
+        geminiContents.push({
+          role: 'user',
+          parts: functionResponseParts,
+        });
+
+        hasMoreIterations = true;
+      } else {
+        hasMoreIterations = false;
+      }
+    }
+
+    sendEvent({
+      requestId,
+      sessionId,
+      messageId,
+      type: 'done',
+    });
   }
 
   /**
@@ -789,7 +1198,6 @@ export class AiService {
       if (!sql.toLowerCase().startsWith('select')) {
         throw new Error('出于数据安全保护，AI 工具仅允许执行 SELECT 查询');
       }
-      // 限制单次返回条数
       if (!sql.toLowerCase().includes('limit')) {
         sql += ' LIMIT 30';
       }

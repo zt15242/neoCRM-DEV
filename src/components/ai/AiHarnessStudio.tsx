@@ -242,24 +242,24 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     showToast('info', '已清空所有历史对话');
   };
 
-  // 快速保存 DeepSeek API Key
-  const handleSaveQuickDeepSeekKey = async () => {
+  // 快速保存当前供应商 API Key (支持 DeepSeek / Gemini / OpenAI 等)
+  const handleSaveQuickApiKey = async () => {
     if (!quickApiKey.trim()) {
-      showToast('error', '请输入有效的 DeepSeek API Key');
+      showToast('error', `请输入有效的 ${currentProvider?.name || ''} API Key`);
       return;
     }
     setSavingQuickKey(true);
     try {
-      const dsProvider = providers.find((p) => p.id === 'deepseek') || BUILTIN_AI_PROVIDERS[0];
+      const targetProvider = providers.find((p) => p.id === currentProviderId) || providers[0];
       const updatedProvider: AiProviderConfig = {
-        ...dsProvider,
+        ...targetProvider,
         apiKey: quickApiKey.trim(),
         enabled: true,
       };
       const newProviders = await window.neoApi.aiSaveProvider(updatedProvider);
       setProviders(newProviders);
       setQuickApiKey('');
-      showToast('success', 'DeepSeek API Key 已保存并激活，现在可以直接开始对话！');
+      showToast('success', `${targetProvider.name} API Key 已保存并激活，现在可以直接开始对话！`);
     } catch (e: any) {
       showToast('error', `保存失败: ${e.message}`);
     } finally {
@@ -510,24 +510,22 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                 </div>
 
                 <div className="flex items-center space-x-2 shrink-0">
-                  {currentProviderId === 'deepseek' ? (
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="password"
-                        value={quickApiKey}
-                        onChange={(e) => setQuickApiKey(e.target.value)}
-                        placeholder="粘贴 sk-... 密钥一键激活"
-                        className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-sky-500 w-52 font-mono"
-                      />
-                      <button
-                        onClick={handleSaveQuickDeepSeekKey}
-                        disabled={savingQuickKey}
-                        className="px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium shadow-xs cursor-pointer"
-                      >
-                        {savingQuickKey ? '保存中...' : '立即激活'}
-                      </button>
-                    </div>
-                  ) : null}
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="password"
+                      value={quickApiKey}
+                      onChange={(e) => setQuickApiKey(e.target.value)}
+                      placeholder={currentProviderId === 'gemini' ? '粘贴 AIzaSy... 密钥' : '粘贴 API Key 快速激活'}
+                      className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-sky-500 w-56 font-mono"
+                    />
+                    <button
+                      onClick={handleSaveQuickApiKey}
+                      disabled={savingQuickKey}
+                      className="px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium shadow-xs cursor-pointer shrink-0"
+                    >
+                      {savingQuickKey ? '保存中...' : '立即激活'}
+                    </button>
+                  </div>
                   <button
                     onClick={onNavigateToSettings}
                     className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-medium"

@@ -19,7 +19,7 @@ import {
   Cpu, 
   ChevronDown, 
   ChevronRight,
-  ShieldCheck
+  Search
 } from 'lucide-react';
 
 interface ModelProviderSettingsProps {
@@ -48,8 +48,8 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
   const [testingDs, setTestingDs] = useState(false);
   const [dsTestResult, setDsTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  // 展开的第三方供应商 ID
-  const [expandedThirdPartyId, setExpandedThirdPartyId] = useState<string | null>(null);
+  // 展开的第三方供应商 ID (默认展开 gemini 方便查看)
+  const [expandedThirdPartyId, setExpandedThirdPartyId] = useState<string | null>('gemini');
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
 
@@ -92,18 +92,13 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
     }
   };
 
-  const handleToggleProviderEnabled = async (provider: AiProviderConfig, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const updated = { ...provider, enabled: !provider.enabled };
-    await onSaveProvider(updated);
-  };
-
-  const handleSaveThirdParty = async (provider: AiProviderConfig, key: string, url: string) => {
+  const handleSaveThirdParty = async (provider: AiProviderConfig, key: string, url: string, customModels?: AiModelItem[]) => {
     try {
       const updated = {
         ...provider,
         apiKey: key.trim(),
         baseUrl: url.trim(),
+        models: customModels || provider.models,
         enabled: true,
       };
       await onSaveProvider(updated);
@@ -139,7 +134,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         <div>
           <h3 className="text-base font-bold text-slate-800">模型供应商 (Models & Providers)</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            配置 DeepSeek 官方、第三方云端模型或自定义 API 网关。模型密钥本地加密保存，支持随时热切。
+            配置 DeepSeek、Google Gemini、OpenAI 或自定义 API 网关。密钥本地保存，支持随时热切。
           </p>
         </div>
         <button
@@ -280,7 +275,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
       {/* 2. 预置第三方供应商列表 */}
       <div className="space-y-3">
         <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-          内置主流供应商目录 (Built-in Providers)
+          内置主流供应商目录 (Built-in Providers · 含 Google Gemini / OpenAI 等)
         </h4>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -308,6 +303,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
                 }
                 onSave={handleSaveThirdParty}
                 onTest={handleTestProvider}
+                showToast={showToast}
               />
             );
           })}
@@ -400,8 +396,9 @@ const ThirdPartyProviderCard: React.FC<{
   isKeyVisible: boolean;
   onToggleExpand: () => void;
   onToggleKeyVisible: () => void;
-  onSave: (provider: AiProviderConfig, key: string, url: string) => Promise<void>;
+  onSave: (provider: AiProviderConfig, key: string, url: string, customModels?: AiModelItem[]) => Promise<void>;
   onTest: (provider: AiProviderConfig, key: string, url: string) => Promise<void>;
+  showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }> = ({
   provider,
   isExpanded,
@@ -413,30 +410,74 @@ const ThirdPartyProviderCard: React.FC<{
   onToggleKeyVisible,
   onSave,
   onTest,
+  showToast,
 }) => {
   const [localKey, setLocalKey] = useState(provider.apiKey || '');
   const [localUrl, setLocalUrl] = useState(provider.baseUrl || '');
+  const [localModels, setLocalModels] = useState<AiModelItem[]>(provider.models || []);
   const [saving, setSaving] = useState(false);
+  const [fetching, setFetching] = useState(false);
+
+  const isGemini = provider.id === 'gemini';
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave(provider, localKey, localUrl);
+    await onSave(provider, localKey, localUrl, localModels);
     setSaving(false);
   };
 
+  const handleFetchModels = async () => {
+    if (!localKey.trim() && !localUrl.includes('localhost')) {
+      showToast('error', `请先输入 ${provider.name} 的 API Key`);
+      return;
+    }
+    setFetching(true);
+    try {
+      const temp: AiProviderConfig = {
+        ...provider,
+        apiKey: localKey.trim(),
+        baseUrl: localUrl.trim(),
+      };
+      const res = await window.neoApi.aiFetchModels(temp);
+      if (res.success && res.models.length > 0) {
+        setLocalModels(res.models);
+        showToast('success', `成功从 ${provider.name} 探测到 ${res.models.length} 个模型！请点击保存生效。`);
+      } else {
+        showToast('error', res.error || '未能探测到可用模型');
+      }
+    } catch (e: any) {
+      showToast('error', `探测异常: ${e.message}`);
+    } finally {
+      setFetching(false);
+    }
+  };
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs transition-all">
+    <div
+      className={`rounded-xl border bg-white overflow-hidden shadow-2xs transition-all ${
+        isGemini ? 'border-indigo-200 ring-1 ring-indigo-50' : 'border-slate-200'
+      }`}
+    >
       <div
         onClick={onToggleExpand}
         className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-slate-50/80 transition-colors"
       >
         <div className="flex items-center space-x-2.5 truncate">
-          <div className="p-1.5 rounded-lg bg-slate-100 text-slate-600 shrink-0">
-            <Globe className="w-4 h-4" />
+          <div
+            className={`p-1.5 rounded-lg shrink-0 ${
+              isGemini ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'
+            }`}
+          >
+            {isGemini ? <Sparkles className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
           </div>
           <div className="truncate">
             <div className="flex items-center space-x-1.5">
               <span className="font-semibold text-xs text-slate-800">{provider.name}</span>
+              {isGemini && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium">
+                  支持 2.5 Pro/Flash
+                </span>
+              )}
               {hasKey && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
                   已配置
@@ -475,14 +516,14 @@ const ThirdPartyProviderCard: React.FC<{
         <div className="p-3.5 bg-slate-50/60 border-t border-slate-100 space-y-3 text-xs">
           <div>
             <label className="block text-slate-600 font-medium mb-1">
-              API Key 访问密钥
+              {isGemini ? 'Gemini API Key (AIzaSy...)' : 'API Key 访问密钥'}
             </label>
             <div className="relative">
               <input
                 type={isKeyVisible ? 'text' : 'password'}
                 value={localKey}
                 onChange={(e) => setLocalKey(e.target.value)}
-                placeholder="请输入 API 密钥..."
+                placeholder={isGemini ? '粘贴 AIzaSy... 格式密钥' : '请输入 API 密钥...'}
                 className="w-full pl-2.5 pr-8 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono"
               />
               <button
@@ -507,6 +548,23 @@ const ThirdPartyProviderCard: React.FC<{
             />
           </div>
 
+          {/* 预置/探测模型标签展示 */}
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            {localModels.slice(0, 6).map((m) => (
+              <span
+                key={m.id}
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600"
+              >
+                {m.id}
+              </span>
+            ))}
+            {localModels.length > 6 && (
+              <span className="text-[10px] px-1.5 py-0.5 text-slate-400">
+                +{localModels.length - 6} 个模型
+              </span>
+            )}
+          </div>
+
           {/* 探测或测试结果 */}
           {testRes && (
             <div
@@ -526,9 +584,15 @@ const ThirdPartyProviderCard: React.FC<{
           )}
 
           <div className="flex items-center justify-between pt-1">
-            <div className="text-[10px] text-slate-400 font-mono">
-              包含 {provider.models.length} 个预设模型
-            </div>
+            <button
+              type="button"
+              onClick={handleFetchModels}
+              disabled={fetching}
+              className="text-[11px] text-sky-600 hover:text-sky-700 font-medium flex items-center space-x-1"
+            >
+              {fetching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+              <span>探测可用模型</span>
+            </button>
             <div className="flex items-center space-x-2">
               <button
                 type="button"

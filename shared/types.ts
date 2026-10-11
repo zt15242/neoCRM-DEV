@@ -204,7 +204,7 @@ export interface ScrollProgress {
 
 // ================= AI 对话平台与设置相关类型 (参考 DeepSeek Harness) =================
 
-export type AiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages';
+export type AiProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages' | 'google-gemini';
 
 export interface AiModelItem {
   id: string;

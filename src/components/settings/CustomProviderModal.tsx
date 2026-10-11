@@ -217,6 +217,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
                 <option value="openai-completions">OpenAI Chat Completions (/chat/completions)</option>
                 <option value="openai-responses">OpenAI Responses (/responses)</option>
                 <option value="anthropic-messages">Anthropic Messages (/messages)</option>
+                <option value="google-gemini">Google Gemini Native API (/v1beta/models)</option>
               </select>
             </div>
           </div>
