@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AiProviderConfig, AiModelItem, AiProtocol } from '../../../shared/types';
 import { 
   Cpu, 
@@ -10,7 +10,9 @@ import {
   Loader2, 
   AlertCircle,
   CheckCircle2,
-  BrainCircuit
+  BrainCircuit,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface CustomProviderModalProps {
@@ -28,16 +30,13 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
   onSave,
   showToast,
 }) => {
-  const [providerId, setProviderId] = useState(initialProvider?.id || '');
-  const [name, setName] = useState(initialProvider?.name || '');
-  const [protocol, setProtocol] = useState<AiProtocol>(initialProvider?.protocol || 'openai-completions');
-  const [baseUrl, setBaseUrl] = useState(initialProvider?.baseUrl || 'http://127.0.0.1:11434/v1');
-  const [apiKey, setApiKey] = useState(initialProvider?.apiKey || '');
-  const [models, setModels] = useState<AiModelItem[]>(
-    initialProvider?.models || [
-      { id: 'llama3:latest', name: 'Llama 3', reasoning: false, tools: true },
-    ]
-  );
+  const [providerId, setProviderId] = useState('');
+  const [name, setName] = useState('');
+  const [protocol, setProtocol] = useState<AiProtocol>('openai-completions');
+  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:11434/v1');
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [models, setModels] = useState<AiModelItem[]>([]);
 
   // 手动添加模型字段
   const [newModelId, setNewModelId] = useState('');
@@ -49,7 +48,35 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // 关键：当 initialProvider 或 isOpen 变化时，完整同步表单状态
+  useEffect(() => {
+    if (isOpen) {
+      if (initialProvider) {
+        setProviderId(initialProvider.id || '');
+        setName(initialProvider.name || '');
+        setProtocol(initialProvider.protocol || 'openai-completions');
+        setBaseUrl(initialProvider.baseUrl || '');
+        setApiKey(initialProvider.apiKey || '');
+        setModels(initialProvider.models ? [...initialProvider.models] : []);
+      } else {
+        setProviderId('');
+        setName('');
+        setProtocol('openai-completions');
+        setBaseUrl('http://127.0.0.1:11434/v1');
+        setApiKey('');
+        setModels([{ id: 'llama3:latest', name: 'Llama 3', reasoning: false, tools: true }]);
+      }
+      setTestResult(null);
+      setNewModelId('');
+      setNewModelName('');
+      setNewModelReasoning(false);
+      setShowApiKey(false);
+    }
+  }, [initialProvider, isOpen]);
+
   if (!isOpen) return null;
+
+  const isEditing = Boolean(initialProvider?.id);
 
   const handleTest = async () => {
     if (!baseUrl.trim()) {
@@ -151,7 +178,9 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
       return;
     }
 
-    const finalId = providerId.trim() || `custom_${Date.now()}`;
+    // 编辑模式保留原有的 id，新建模式生成新 id
+    const finalId = (isEditing && initialProvider?.id) ? initialProvider.id : (providerId.trim() || `custom_${Date.now()}`);
+
     const payload: AiProviderConfig = {
       id: finalId,
       name: name.trim(),
@@ -159,7 +188,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
       protocol,
       baseUrl: baseUrl.trim(),
       apiKey: apiKey.trim(),
-      enabled: true,
+      enabled: initialProvider?.enabled ?? true,
       models,
     };
 
@@ -178,9 +207,11 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-semibold text-slate-800">
-                {initialProvider ? '编辑模型供应商' : '添加自定义模型 API (Custom Model API)'}
+                {isEditing ? `编辑自定义模型 API (${initialProvider?.name})` : '添加自定义模型 API (Custom Model API)'}
               </h3>
-              <p className="text-[11px] text-slate-500">支持接入本地 Ollama、公司大模型中转站或任意 OpenAI 兼容网关</p>
+              <p className="text-[11px] text-slate-500">
+                {isEditing ? `唯一标识: ${initialProvider?.id}` : '支持接入本地 Ollama、公司大模型网关或任意兼容接口'}
+              </p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg">
@@ -215,9 +246,9 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
                 className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500 bg-white"
               >
                 <option value="openai-completions">OpenAI Chat Completions (/chat/completions)</option>
+                <option value="google-gemini">Google Gemini Native API (/v1beta/models)</option>
                 <option value="openai-responses">OpenAI Responses (/responses)</option>
                 <option value="anthropic-messages">Anthropic Messages (/messages)</option>
-                <option value="google-gemini">Google Gemini Native API (/v1beta/models)</option>
               </select>
             </div>
           </div>
@@ -242,22 +273,31 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
               required
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="例如：http://127.0.0.1:11434/v1 或 https://api.yourgateway.com/v1"
+              placeholder="例如：https://ai.aijws.top/ 或 http://127.0.0.1:11434/v1"
               className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
             />
           </div>
 
           <div>
             <label className="block text-slate-600 font-medium mb-1">
-              API Key (密钥，本地模型或免密网关可留空)
+              API Key (密钥，免密网关或本地模型可留空)
             </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
-            />
+            <div className="relative">
+              <input
+                type={showApiKey ? 'text' : 'password'}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-... 或留空"
+                className="w-full pl-3 pr-9 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey(!showApiKey)}
+                className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+              >
+                {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
           </div>
 
           {/* 连通性测试结果条 */}
@@ -297,7 +337,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
             </div>
 
             {/* 模型列表 */}
-            <div className="max-h-36 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-slate-50/50">
+            <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-slate-50/50">
               {models.length === 0 ? (
                 <div className="py-6 text-center text-slate-400">暂无模型，请在下方手动添加或点击探测</div>
               ) : (
@@ -331,7 +371,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
                 type="text"
                 value={newModelId}
                 onChange={(e) => setNewModelId(e.target.value)}
-                placeholder="模型 ID (如 qwen2.5:14b)"
+                placeholder="模型 ID (如 gemini-2.5-pro)"
                 className="flex-1 px-2.5 py-1 text-xs rounded-lg border border-slate-200 font-mono"
               />
               <input
@@ -348,7 +388,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
                   onChange={(e) => setNewModelReasoning(e.target.checked)}
                   className="rounded text-indigo-600"
                 />
-                <span>R1推理</span>
+                <span>R1/思考</span>
               </label>
               <button
                 type="button"
@@ -373,7 +413,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
               type="submit"
               className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium shadow-xs"
             >
-              保存供应商配置
+              {isEditing ? '保存修改' : '添加供应商'}
             </button>
           </div>
         </form>
