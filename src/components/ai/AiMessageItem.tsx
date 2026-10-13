@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan } from '../../../shared/types';
+import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan, ApprovalDeployPlan } from '../../../shared/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBox } from './ReasoningBox';
 import { ToolCallCard } from './ToolCallCard';
@@ -15,6 +15,7 @@ interface AiMessageItemProps {
   isStreamingCurrent?: boolean;
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
+  onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
 }
 
 export const AiMessageItem: React.FC<AiMessageItemProps> = ({
@@ -22,6 +23,7 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
   isStreamingCurrent = false,
   onOpenCreateSchema,
   onOpenDeployWorkflow,
+  onOpenDeployApproval,
 }) => {
   const [copied, setCopied] = useState(false);
   const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
@@ -143,6 +145,7 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
               content={message.content}
               onExecuteSql={(sql) => setActiveExecutedSql(sql)}
               onOpenDeployWorkflow={onOpenDeployWorkflow}
+              onOpenDeployApproval={onOpenDeployApproval}
             />
           ) : isStreamingCurrent ? (
             <div className="flex items-center space-x-2 py-1 text-slate-400 text-xs">

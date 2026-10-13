@@ -19,7 +19,9 @@ import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
 import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
-import { ConfirmDeployWorkflowModal } from './ConfirmDeployWorkflowModal';
+import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
+import { ConfirmDeployApprovalModal } from "./ConfirmDeployApprovalModal";
+import { ApprovalDeployPlan } from "../../../shared/types";
 import { WorkflowLicenseModal } from './WorkflowLicenseModal';
 import { 
   Sparkles, 
@@ -84,8 +86,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   // 实体与字段数据建模创建确认模态框状态
   const [pendingSchemaPlan, setPendingSchemaPlan] = useState<SchemaPlanPayload | null>(null);
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<WorkflowDeployPlan | null>(null);
+  const [pendingApprovalPlan, setPendingApprovalPlan] = useState<ApprovalDeployPlan | null>(null);
 
-  // 自动流程本地离线设备锁状态
+  // 流程引擎 (自动流程 & 审批流) 本地离线设备锁状态
   const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
   const [pendingAfterUnlock, setPendingAfterUnlock] = useState<
@@ -93,8 +96,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     | { type: "session"; sessionId: string }
     | { type: "skill"; skillId: string }
     | { type: "deploy"; plan: WorkflowDeployPlan }
+    | { type: "deployApproval"; plan: ApprovalDeployPlan }
     | null
   >(null);
+
+  const isFlowEnginePreset = (id?: string) =>
+    id === "autoflow-architect" || id === "approval-architect";
 
   // 上下文压缩状态
   const [isCompacting, setIsCompacting] = useState(false);
@@ -172,7 +179,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         setSessions(validList);
         if (validList.length > 0 && !activeSessionId) {
           const first = validList[0];
-          if (first.presetId === "autoflow-architect" && !licStatus?.isAuthorized) {
+          if (isFlowEnginePreset(first.presetId) && !licStatus?.isAuthorized) {
             setSelectedPresetId("harness-agent");
           } else {
             setActiveSessionId(first.id);
@@ -394,14 +401,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
     // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
     const effectiveSkills = (skillIds || activeSkillIds).filter((sid) => personalSkillIds.has(sid));
-    if (preset.id === "autoflow-architect") {
+    if (isFlowEnginePreset(preset.id)) {
       const latestLic = window.neoApi?.workflowGetLicenseStatus
         ? await window.neoApi.workflowGetLicenseStatus()
         : workflowLicenseStatus;
       if (latestLic) setWorkflowLicenseStatus(latestLic);
       if (!latestLic?.isAuthorized) {
         setIsLicenseModalOpen(true);
-        showToast("info", "🔒 自动流程功能已上锁，请先输入绑定本机的加密密码");
+        showToast("info", "🔒 流程引擎高级功能已上锁，请先输入绑定本机的加密密码完成设备激活");
         return;
       }
     }
@@ -544,7 +551,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         workflowLicenseStatus={workflowLicenseStatus}
         onSelectSession={async (id) => {
           const target = sessions.find((s) => s.id === id);
-          if (target?.presetId === "autoflow-architect") {
+          if (isFlowEnginePreset(target?.presetId)) {
             const latestLic = window.neoApi?.workflowGetLicenseStatus
               ? await window.neoApi.workflowGetLicenseStatus()
               : workflowLicenseStatus;
@@ -576,7 +583,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         onSelectPreset={async (presetId) => {
           const p = AI_AGENT_PRESETS.find((item) => item.id === presetId);
           if (!p || p.disabled) return;
-          if (presetId === "autoflow-architect") {
+          if (isFlowEnginePreset(presetId)) {
             const latestLic = window.neoApi?.workflowGetLicenseStatus
               ? await window.neoApi.workflowGetLicenseStatus()
               : workflowLicenseStatus;
@@ -614,7 +621,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-medium shrink-0">
                   {currentPreset.badge || "AI Harness"}
                 </span>
-                {currentPreset.id === "autoflow-architect" && (
+                {isFlowEnginePreset(currentPreset.id) && (
                   <button
                     type="button"
                     onClick={() => setIsLicenseModalOpen(true)}
@@ -863,6 +870,18 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     }
                     setPendingWorkflowPlan(plan);
                   }}
+                  onOpenDeployApproval={async (plan) => {
+                    const latestLic = window.neoApi?.workflowGetLicenseStatus
+                      ? await window.neoApi.workflowGetLicenseStatus()
+                      : workflowLicenseStatus;
+                    if (latestLic) setWorkflowLicenseStatus(latestLic);
+                    if (!latestLic?.isAuthorized) {
+                      setPendingAfterUnlock({ type: "deployApproval", plan });
+                      setIsLicenseModalOpen(true);
+                      return;
+                    }
+                    setPendingApprovalPlan(plan);
+                  }}
                 />
               ))}
               <div ref={messagesEndRef} />
@@ -944,6 +963,19 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         />
       )}
 
+      {/* 新版审批流配置方案核对与代码部署弹窗 */}
+      {pendingApprovalPlan && (
+        <ConfirmDeployApprovalModal
+          plan={pendingApprovalPlan}
+          crmSession={crmSession}
+          licenseStatus={workflowLicenseStatus}
+          onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
+          onClose={() => setPendingApprovalPlan(null)}
+          onRefreshSession={loadData}
+          showToast={showToast}
+        />
+      )}
+
       {/* 自动流程功能本地离线设备安全锁弹窗 */}
       <WorkflowLicenseModal
         isOpen={isLicenseModalOpen}
@@ -985,6 +1017,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               );
             } else if (pendingAfterUnlock.type === "deploy") {
               setPendingWorkflowPlan(pendingAfterUnlock.plan);
+            } else if (pendingAfterUnlock.type === "deployApproval") {
+              setPendingApprovalPlan(pendingAfterUnlock.plan);
             }
             setPendingAfterUnlock(null);
           }

@@ -2,15 +2,19 @@ import React, { useState } from 'react';
 import { Check, Copy, Play, Workflow } from 'lucide-react';
 import { WorkflowDeployPlan } from '../../../shared/types';
 import { extractWorkflowPlanFromText } from './workflowPlanHelper';
-import { WorkflowPlanCard } from './WorkflowPlanCard';
+import { WorkflowPlanCard } from "./WorkflowPlanCard";
+import { ApprovalPlanCard } from "./ApprovalPlanCard";
+import { extractApprovalPlanFromText } from "./approvalPlanHelper";
+import { ApprovalDeployPlan } from "../../../shared/types";
 
 interface MarkdownRendererProps {
   content: string;
   onExecuteSql?: (sql: string) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
+  onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = (text: string, id: string) => {
@@ -59,8 +63,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
     ) {
       if (i > 0 && parts[i - 1].type === "text") {
         parts[i - 1].content = parts[i - 1].content
-          .replace(/(?:\r?\n---\s*)?\r?\n#{1,6}\s*[^\n]*(?:结构化代码配置|代码配置交付|Workflow\s*Plan|部署契约)[\s\S]*$/i, "")
-          .replace(/\r?\n[^\n]*(?:捕获以下\s*JSON|JSON\s*契约|json:workflow-plan|以下\s*JSON)[^\n]*\s*$/i, "")
+          .replace(/(?:\r?\n---\s*)?\r?\n#{1,6}\s*[^\n]*(?:结构化代码配置|代码配置交付|Workflow\s*Plan|Approval\s*Plan|部署契约)[\s\S]*$/i, "")
+          .replace(/\r?\n[^\n]*(?:捕获以下\s*JSON|JSON\s*契约|json:workflow-plan|json:approval-plan|以下\s*JSON)[^\n]*\s*$/i, "")
           .trimEnd();
       }
     }
@@ -81,6 +85,41 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
               <div key={index} className="my-2 px-3.5 py-2 rounded-xl bg-indigo-50/70 border border-indigo-200/80 text-xs text-indigo-700 flex items-center justify-between">
                 <span>📦 已生成结构化数据模型定义 (Schema Plan)，请点击下方卡片一键部署至租户</span>
                 <span className="text-[10px] font-mono bg-white px-2 py-0.5 rounded border border-indigo-200">JSON Schema Ready</span>
+              </div>
+            );
+          }
+
+          const isApprovalPlan =
+            part.lang?.toLowerCase() === "json:approval-plan" ||
+            part.lang?.toLowerCase() === "approval-plan" ||
+            (part.content.includes('"flow"') &&
+              part.content.includes('"nodes"') &&
+              (part.content.includes('"UserTask"') ||
+                part.content.includes('"approverRules"') ||
+                part.content.includes('"withdrawFlag"') ||
+                part.content.includes('"startupOrder"')));
+
+          if (isApprovalPlan) {
+            const parsedApprovalPlan = extractApprovalPlanFromText('```json\n' + part.content + '\n```');
+            if (parsedApprovalPlan && onOpenDeployApproval) {
+              return (
+                <div key={index} className="my-2">
+                  <ApprovalPlanCard
+                    plan={parsedApprovalPlan}
+                    onOpenConfirm={() => onOpenDeployApproval(parsedApprovalPlan)}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div
+                key={index}
+                className="my-3 p-3.5 rounded-2xl border border-indigo-200 bg-indigo-50/50 flex items-center space-x-2.5 text-xs text-indigo-800"
+              >
+                <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
+                <span className="font-medium">
+                  正在生成审批流配置方案 (底层机密契约已受沙箱隔离保护)...
+                </span>
               </div>
             );
           }

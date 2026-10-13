@@ -897,17 +897,19 @@ ${dialogHistoryText}`;
         }
       }
 
-      // 0. 自动流程专属安全锁强制校验 (内核级拦截)
+      // 0. 流程引擎专属安全锁强制校验 (自动流程与新版审批流共用内核级安全锁)
       const isAutoflowPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]"));
-      if (isAutoflowPreset) {
+      const isApprovalPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::approval-architect]"));
+      if (isAutoflowPreset || isApprovalPreset) {
         const lockStatus = licenseService.getLicenseStatus();
         if (!lockStatus.isAuthorized) {
+          const featureName = isApprovalPreset ? "审批流高级功能" : "自动流程功能";
           sendEvent({
             requestId,
             sessionId,
             messageId,
             type: "error",
-            error: `🔒 自动流程功能已上锁：${lockStatus.message || "请先输入本机专属加密密码完成设备激活"}`,
+            error: `🔒 ${featureName}已上锁：${lockStatus.message || "请先输入本机专属加密密码完成设备激活"}`,
           });
           return;
         }
@@ -918,6 +920,11 @@ ${dialogHistoryText}`;
       if (presetPrompt) {
         if (presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]")) {
           const decodedPreset = getProtectedSkillInstruction("preset-autoflow-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
+        } else if (presetPrompt.includes("[PROTECTED_PRESET::approval-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-approval-architect");
           if (decodedPreset) {
             systemParts.push(decodedPreset);
           }

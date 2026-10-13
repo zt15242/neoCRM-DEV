@@ -456,6 +456,15 @@ ipcMain.handle("workflow:deployPlan", async (_, plan: WorkflowDeployPlan, option
   return workflowService.deployWorkflowPlan(current.environment, current.tokenData, plan, options);
 });
 
+ipcMain.handle("workflow:deployApprovalPlan", async (_, plan: any, options?: { autoEnable?: boolean }) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.deployApprovalPlan(current.environment, current.tokenData, plan, options);
+});
+
 ipcMain.handle("workflow:listFlows", async (_, params) => {
   licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();

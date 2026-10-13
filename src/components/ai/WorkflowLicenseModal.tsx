@@ -125,7 +125,7 @@ export const WorkflowLicenseModal: React.FC<WorkflowLicenseModalProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <h3 className="text-sm font-bold text-slate-900">
-                  自动流程 (Automatic Flow) 安全密码锁
+                  流程引擎 (自动流程 & 审批流) 安全密码锁
                 </h3>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${

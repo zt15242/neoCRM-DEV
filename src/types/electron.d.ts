@@ -148,6 +148,7 @@ declare global {
       workflowGetLicenseStatus: () => Promise<WorkflowLicenseStatus>;
       workflowActivateLicense: (password: string) => Promise<WorkflowLicenseActivateResult>;
       workflowDeployPlan: (plan: WorkflowDeployPlan, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
+      workflowDeployApprovalPlan: (plan: ApprovalDeployPlan, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
       workflowListFlows: (params?: { keyword?: string; pageNo?: number; pageSize?: number; status?: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
       workflowGetFlowDetail: (procdefId: string | number) => Promise<{ success: boolean; definition?: any; property?: any; error?: string }>;
       workflowToggleStatus: (procdefId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;

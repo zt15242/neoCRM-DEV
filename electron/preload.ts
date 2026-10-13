@@ -100,6 +100,7 @@ export const neoApi = {
   workflowGetLicenseStatus: () => ipcRenderer.invoke("license:getStatus"),
   workflowActivateLicense: (password: string) => ipcRenderer.invoke("license:activate", password),
   workflowDeployPlan: (plan: any, options?: { autoEnable?: boolean }) => ipcRenderer.invoke("workflow:deployPlan", plan, options),
+  workflowDeployApprovalPlan: (plan: any, options?: { autoEnable?: boolean }) => ipcRenderer.invoke("workflow:deployApprovalPlan", plan, options),
   workflowListFlows: (params?: any) => ipcRenderer.invoke("workflow:listFlows", params),
   workflowGetFlowDetail: (procdefId: string | number) => ipcRenderer.invoke("workflow:getFlowDetail", procdefId),
   workflowToggleStatus: (procdefId: string | number, enable: boolean) => ipcRenderer.invoke("workflow:toggleStatus", procdefId, enable),

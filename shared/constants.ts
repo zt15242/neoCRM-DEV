@@ -379,6 +379,22 @@ export const DEFAULT_AI_SETTINGS: AiHarnessSettings = {
  */
 export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
+    id: "approval-architect",
+    name: "审批流架构与部署专家 (Approval Flow)",
+    description: "销售易新版审批流 (procType=2) 全生命周期专家：精通业务对象与业务类型分析、审批人策略矩阵、编辑字段与按钮控制、代码级配置部署与运行验证",
+    iconName: "FileCheck",
+    badge: "审批流专精",
+    enableCrmTools: true,
+    recommendedModel: "deepseek-chat",
+    systemPrompt: `[PROTECTED_PRESET::approval-architect]`,
+    quickPrompts: [
+      "请为【合同】(contract) 设计一套基于合同金额与折扣率分流的多级审批流方案",
+      "如何用代码配置一个包含直属上级逐级审批、财务会签及字段修改权限的审批流？",
+      "对比销售易新版审批流 (approvalflow) 与自动流程 (automaticflow) 的适用边界与防错准则",
+      "为【特价商机】(opportunity) 规划审批流：包含自选审批人、加签/转办限制与审批通过后自动回写状态",
+    ],
+  },
+  {
     id: "autoflow-architect",
     name: "自动流程架构与部署专家 (Automatic Flow)",
     description: "销售易自动流程 (procType=1) 全生命周期专家：精通方案分析、拓扑与变量设计、代码级配置部署与运行验证",

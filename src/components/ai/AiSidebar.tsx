@@ -15,7 +15,8 @@ import {
   X,
   Lock,
   Unlock,
-  Workflow
+  Workflow,
+  FileCheck
 } from 'lucide-react';
 
 interface AiSidebarProps {
@@ -53,6 +54,8 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     switch (iconName) {
       case 'Workflow':
         return Workflow;
+      case 'FileCheck':
+        return FileCheck;
       case 'Sparkles':
         return Sparkles;
       case 'Database':
@@ -160,7 +163,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
                   <Icon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-sky-600' : 'text-slate-500'}`} />
                   <span className="truncate">{preset.name.split(' (')[0]}</span>
                 </div>
-                {preset.id === "autoflow-architect" ? (
+                {(preset.id === "autoflow-architect" || preset.id === "approval-architect") ? (
                   workflowLicenseStatus?.isAuthorized ? (
                     <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono shrink-0 flex items-center space-x-0.5">
                       <Unlock className="w-2.5 h-2.5 mr-0.5" />
