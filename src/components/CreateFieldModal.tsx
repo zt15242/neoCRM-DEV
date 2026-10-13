@@ -12,23 +12,24 @@ interface CreateFieldModalProps {
 }
 
 const FIELD_TYPES = [
-  { type: 1, name: '单行文本 (Text)' },
-  { type: 2, name: '多行文本 (TextArea)' },
-  { type: 10, name: '关联关系 (Reference)' },
-  { type: 3, name: '单选列表 (Picklist)' },
-  { type: 4, name: '多选列表 (Multi-Picklist)' },
-  { type: 5, name: '整数 (Integer)' },
-  { type: 6, name: '金额 (Currency)' },
-  { type: 7, name: '日期 (Date)' },
-  { type: 21, name: '日期时间 (DateTime)' },
-  { type: 29, name: '图片 (Image)' },
-  { type: 39, name: '文件 (File)' },
-  { type: 22, name: '电话号码 (Phone)' },
-  { type: 23, name: '电子邮箱 (Email)' },
-  { type: 24, name: '网站链接 (URL)' },
-  { type: 31, name: '布尔值 (Boolean)' },
-  { type: 33, name: '百分比 (Percent)' },
-  { type: 40, name: '富文本 (RichText)' },
+  { key: '1', type: 1, name: '单行文本 (Text)' },
+  { key: '2', type: 2, name: '多行文本 (TextArea)' },
+  { key: '10', type: 10, name: '关联关系 (Reference)' },
+  { key: '3', type: 3, name: '单选列表 (Picklist)' },
+  { key: '4', type: 4, name: '多选列表 (Multi-Picklist)' },
+  { key: '5', type: 5, name: '整数 (Integer)' },
+  { key: '6_currency', type: 6, isCurrency: true, name: '货币 (Currency)' },
+  { key: '6_decimal', type: 6, isCurrency: false, name: '实数/浮点 (Decimal / Float)' },
+  { key: '7', type: 7, name: '日期 (Date)' },
+  { key: '21', type: 21, name: '日期时间 (DateTime)' },
+  { key: '29', type: 29, name: '图片 (Image)' },
+  { key: '39', type: 39, name: '文件 (File)' },
+  { key: '22', type: 22, name: '电话号码 (Phone)' },
+  { key: '23', type: 23, name: '电子邮箱 (Email)' },
+  { key: '24', type: 24, name: '网站链接 (URL)' },
+  { key: '31', type: 31, name: '布尔值 (Boolean)' },
+  { key: '33', type: 33, name: '百分比 (Percent)' },
+  { key: '40', type: 40, name: '富文本 (RichText)' },
 ];
 
 export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
@@ -40,7 +41,9 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
 }) => {
   const [apiKey, setApiKey] = useState('');
   const [label, setLabel] = useState('');
+  const [selectedTypeKey, setSelectedTypeKey] = useState<string>('1');
   const [itemType, setItemType] = useState<number>(1);
+  const [isCurrency, setIsCurrency] = useState<boolean>(true);
   const [maxLength, setMaxLength] = useState<number>(200);
   const [decimal, setDecimal] = useState<number>(2);
   const [description, setDescription] = useState('');
@@ -99,6 +102,9 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
       if ([6, 33].includes(itemType)) {
         payload.maxLength = maxLength || 16;
         payload.decimal = decimal;
+        if (itemType === 6) {
+          payload.currency = isCurrency;
+        }
       }
       if ([3, 4].includes(itemType)) {
         payload.pickOption = pickOptions;
@@ -195,12 +201,20 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
               字段类型 (Item Type) <span className="text-rose-500">*</span>
             </label>
             <select
-              value={itemType}
-              onChange={(e) => setItemType(Number(e.target.value))}
+              value={selectedTypeKey}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedTypeKey(val);
+                const found = FIELD_TYPES.find((t) => t.key === val);
+                if (found) {
+                  setItemType(found.type);
+                  setIsCurrency(Boolean(found.isCurrency));
+                }
+              }}
               className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-medium"
             >
               {FIELD_TYPES.map((t) => (
-                <option key={t.type} value={t.type}>
+                <option key={t.key} value={t.key}>
                   {t.name}
                 </option>
               ))}

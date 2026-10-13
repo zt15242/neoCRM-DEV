@@ -138,9 +138,10 @@ export const ConfirmCreateSchemaModal: React.FC<ConfirmCreateSchemaModalProps> =
 
       try {
         const res = await window.neoApi.createField(targetEntityKeyForFields, {
-          apiKey: field.apiKey.trim().replace(/__c$/i, ''),
+          apiKey: field.apiKey.trim().replace(/__c$/i, ""),
           label: field.label.trim(),
           itemType: field.itemType,
+          currency: field.currency,
           maxLength: field.maxLength,
           decimal: field.decimal,
           referObjectApiKey: field.referObjectApiKey,

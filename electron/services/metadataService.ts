@@ -82,11 +82,17 @@ export class MetadataService {
 
     return records.map((f: any) => {
       const itemType = Number(f.itemType || 1);
+      const isCurrency = itemType === 6 ? Boolean(f.currency) : undefined;
+      const typeName = itemType === 6
+        ? (f.currency ? '货币' : '实数')
+        : (ITEM_TYPE_MAP[itemType] || `类型(${itemType})`);
+
       return {
         apiKey: f.apiKey || '',
         label: f.label || f.apiKey || '',
         itemType,
-        typeName: ITEM_TYPE_MAP[itemType] || `类型(${itemType})`,
+        typeName,
+        currency: isCurrency,
         custom: !!f.custom,
         maxLength: f.maxLength,
         decimal: f.decimal,
@@ -176,6 +182,11 @@ export class MetadataService {
     if ([6, 33].includes(payload.itemType)) {
       body.maxLength = Math.min(Number(payload.maxLength) || 16, 18);
       body.decimal = payload.decimal !== undefined ? Number(payload.decimal) : 2;
+      if (payload.itemType === 6) {
+        // 关键修复：当未指定 currency 或显式为 true 时，默认传入 currency: true 注册为真正货币字段
+        // 仅当显式指定 currency: false 时才注册为普通实数/浮点字段
+        body.currency = payload.currency !== false;
+      }
     }
     if ([3, 4].includes(payload.itemType)) {
       if (Array.isArray(payload.pickOption) && payload.pickOption.length > 0) {

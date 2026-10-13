@@ -148,6 +148,7 @@ export const BatchFieldImportModal: React.FC<BatchFieldImportModalProps> = ({
           apiKey: currentRow.apiKey,
           label: currentRow.label,
           itemType: currentRow.itemType,
+          currency: currentRow.currency,
           maxLength: currentRow.maxLength,
           decimal: currentRow.decimal,
           pickOption: currentRow.pickOption,

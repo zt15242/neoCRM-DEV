@@ -103,6 +103,7 @@ export interface FieldMetadata {
   itemType: number;
   typeName: string;
   custom: boolean;
+  currency?: boolean; // 当 itemType=6 时: true 为货币 (Currency), false 为实数/浮点 (Decimal/Float)
   maxLength?: number;
   decimal?: number;
   referObjectApiKey?: string;
@@ -123,6 +124,7 @@ export interface CreateFieldPayload {
   apiKey: string;
   label: string;
   itemType: number;
+  currency?: boolean; // 当 itemType=6 时: true 为货币 (Currency), false 为实数/浮点 (Decimal/Float)
   maxLength?: number;
   decimal?: number;
   pickOption?: { optionLabel: string; optionCode: number }[];
@@ -157,6 +159,7 @@ export interface ExcelFieldRow {
   apiKey: string; // API Key
   itemType: number; // 映射后的系统类型数值
   typeName: string; // 类型中文名
+  currency?: boolean; // 当 itemType=6 时是否为货币
   maxLength?: number;
   decimal?: number;
   optionsStr?: string; // 原始选项字符串
@@ -377,6 +380,7 @@ export interface PlannedFieldItem {
   label: string;
   itemType: number;
   typeName: string;
+  currency?: boolean; // 当 itemType=6 时是否为货币
   maxLength?: number;
   decimal?: number;
   referObjectApiKey?: string;

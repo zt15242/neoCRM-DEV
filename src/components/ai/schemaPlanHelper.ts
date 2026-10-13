@@ -120,16 +120,25 @@ function normalizeSchemaPlan(parsed: any): SchemaPlanPayload {
       enableScriptExecutor: parsed.entity.enableScriptExecutor ?? true,
       enableBusitype: parsed.entity.enableBusitype ?? false,
     },
-    fields: parsed.fields.map((f: any) => ({
-      apiKey: f.apiKey,
-      label: f.label,
-      itemType: Number(f.itemType) || 1,
-      typeName: f.typeName || ITEM_TYPE_MAP[Number(f.itemType) || 1] || '单行文本',
-      maxLength: f.maxLength,
-      decimal: f.decimal,
-      referObjectApiKey: f.referObjectApiKey,
-      pickOption: f.pickOption,
-      description: f.description,
-    })),
+    fields: parsed.fields.map((f: any) => {
+      const itemType = Number(f.itemType) || 1;
+      let currency = f.currency;
+      if (itemType === 6 && currency === undefined) {
+        const typeStr = String(f.typeName || f.label || "").toLowerCase();
+        currency = !typeStr.includes("实数") && !typeStr.includes("浮点") && !typeStr.includes("decimal") && !typeStr.includes("float");
+      }
+      return {
+        apiKey: f.apiKey,
+        label: f.label,
+        itemType,
+        currency,
+        typeName: itemType === 6 ? (currency ? "货币" : "实数") : (f.typeName || ITEM_TYPE_MAP[itemType] || "单行文本"),
+        maxLength: f.maxLength,
+        decimal: f.decimal,
+        referObjectApiKey: f.referObjectApiKey,
+        pickOption: f.pickOption,
+        description: f.description,
+      };
+    }),
   };
 }

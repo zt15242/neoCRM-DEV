@@ -29,6 +29,13 @@ export const TYPE_NAME_MAP: Record<string, number> = {
   '金额': 6,
   '货币': 6,
   'currency': 6,
+  'money': 6,
+  '实数': 6,
+  '浮点': 6,
+  '浮点数': 6,
+  'decimal': 6,
+  'float': 6,
+  'double': 6,
 
   '日期': 7,
   'date': 7,
@@ -184,12 +191,22 @@ export function parseExcelFile(
 
       // 映射类型
       let itemType = 1; // 默认文本
-      if (TYPE_NAME_MAP[rawType]) {
+      let currency: boolean | undefined = undefined;
+
+      if (rawType.includes('实数') || rawType.includes('浮点') || ['decimal', 'float', 'double'].includes(rawType)) {
+        itemType = 6;
+        currency = false;
+      } else if (rawType.includes('金额') || rawType.includes('货币') || ['currency', 'money'].includes(rawType)) {
+        itemType = 6;
+        currency = true;
+      } else if (TYPE_NAME_MAP[rawType]) {
         itemType = TYPE_NAME_MAP[rawType];
+        if (itemType === 6) currency = true;
       } else {
         const num = parseInt(rawType, 10);
         if (!isNaN(num) && REVERSE_TYPE_NAME_MAP[num]) {
           itemType = num;
+          if (itemType === 6) currency = true;
         }
       }
 
@@ -226,7 +243,8 @@ export function parseExcelFile(
         label: rawLabel,
         apiKey: rawApiKey,
         itemType,
-        typeName: REVERSE_TYPE_NAME_MAP[itemType] || '单行文本',
+        currency,
+        typeName: itemType === 6 ? (currency ? '货币' : '实数') : (REVERSE_TYPE_NAME_MAP[itemType] || '单行文本'),
         maxLength: !isNaN(rawLength) ? rawLength : [1, 2, 40].includes(itemType) ? 200 : 16,
         decimal: !isNaN(rawDecimal) ? rawDecimal : 2,
         optionsStr: rawOptions,
