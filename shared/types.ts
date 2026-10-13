@@ -532,3 +532,93 @@ export interface WorkflowLicenseActivateResult {
   message: string;
   status: WorkflowLicenseStatus;
 }
+
+/**
+ * 销售易审批流 (Approval Flow, procType=2) 代码级配置与部署契约
+ */
+export interface ApprovalApproverRule {
+  /**
+   * 审批人策略编码:
+   * 201: 自选审批人
+   * 202: 固定审批人 / 对象字段选人
+   * 203: 流程提交人
+   * 204: 上一节点直属上级
+   * 205: 提交人直属上级
+   * 401: 指定角色
+   */
+  assignmentType: "201" | "202" | "203" | "204" | "205" | "301" | "401" | "601";
+  /** 当为字段选人或直属上级层级时的 itemApiKey (如 "1" 或 "account.ownerId") */
+  itemApiKey?: string;
+  itemApiKeyLabel?: string;
+  /** 指定用户或角色列表 */
+  approvers?: Array<{
+    apiKey?: string;
+    label: string;
+    infoType?: 1 | 2 | 3 | 4; // 1用户 2部门 3用户组 4角色
+  }>;
+}
+
+export interface ApprovalNodeItem {
+  id: string;
+  nodeType: "StartNoneEvent" | "SubmitTask" | "UserTask" | "ExclusiveGateway" | "EndNoneEvent";
+  name: string;
+  description?: string;
+  /** 审批方式: "1" 单人审批, "2" 多人任签(一人通过即通过), "3" 多人并行会签 */
+  taskType?: "1" | "2" | "3";
+  /** 会签规则 (当 taskType="3" 时生效): passType=1(至少一人) / 2(百分比，如 "60" 或 "100") */
+  countersign?: {
+    passType: 1 | 2;
+    passThreshold: string;
+  };
+  /** 审批人策略列表 */
+  approverRules?: ApprovalApproverRule[];
+  /** 允许审批人修改的字段 API Key 列表 */
+  editableFields?: Array<{
+    itemApiKey: string;
+    itemLabel?: string;
+    isEditable?: 0 | 1;
+    isRequired?: 0 | 1;
+  }>;
+  /** 是否允许加签: 1允许 2禁止 */
+  plussignFlag?: 1 | 2;
+  /** 是否允许转办: 1允许 2禁止 */
+  delegationFlag?: 1 | 2;
+  /** 拒绝回退方式: "1" 退回初始节点, "2" 退回上一节点, "3" 退回之前任意节点 */
+  returnTargetType?: "1" | "2" | "3";
+  /** 审批意见设置: 1必填 2选填 3免填 */
+  commentFlag?: 1 | 2 | 3;
+  /** 节点通过后触发的更新记录事件 (可选) */
+  afterAgreeAction?: {
+    actionName: string;
+    fieldApiKey?: string;
+    fieldValue?: string;
+  };
+}
+
+export interface ApprovalDeployPlan {
+  flow: {
+    processName: string;
+    entityApiKey: string;
+    entityLabel?: string;
+    bizTypeApiKey?: string;
+    bizTypeLabel?: string;
+    startupOrder?: number;
+    description?: string;
+    /** 撤回策略: 1允许撤回 2禁止撤回 3仅提交人可撤回 */
+    withdrawFlag?: 1 | 2 | 3;
+    /** 单步收回: 1允许 2禁止 */
+    singleStepWithdrawFlag?: 1 | 2;
+    /** 审批通知: 1发送 2关闭 */
+    sendApprovalNotice?: 1 | 2;
+    /** 准入初始条件公式 (可选，如留空则默认满足) */
+    entryFormula?: string;
+  };
+  nodes: ApprovalNodeItem[];
+  edges?: Array<{
+    source: string;
+    target: string;
+    label?: string;
+    isDefault?: boolean;
+    conditionFormula?: string;
+  }>;
+}

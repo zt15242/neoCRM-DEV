@@ -899,8 +899,7 @@ ${dialogHistoryText}`;
 
       // 0. 自动流程专属安全锁强制校验 (内核级拦截)
       const isAutoflowPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]"));
-      const hasAutoflowSkill = Boolean(activeSkillIds && activeSkillIds.includes("skill-autoflow-spec"));
-      if (isAutoflowPreset || hasAutoflowSkill) {
+      if (isAutoflowPreset) {
         const lockStatus = licenseService.getLicenseStatus();
         if (!lockStatus.isAuthorized) {
           sendEvent({
@@ -941,19 +940,10 @@ ${dialogHistoryText}`;
         systemParts.push(`【用户自定义追加规范】\n${config.settings.customSystemPrompt.trim()}`);
       }
 
-      // 注入已挂载的 Skill 技能指令 (内核安全解密注入，绝不经由渲染进程)
+      // 注入已挂载的 Skill 技能指令 (仅允许用户个人专属技能动态挂载；系统内置技能受内核安全保护，禁止在普通对话中随意挂载)
       if (activeSkillIds && activeSkillIds.length > 0) {
         for (const sid of activeSkillIds) {
-          // 1. 优先从内核受保护模块中获取加密内置指令
-          const protectedInst = getProtectedSkillInstruction(sid);
-          if (protectedInst) {
-            const meta = BUILTIN_AI_SKILLS.find((b) => b.id === sid);
-            const skillName = meta?.name || "销售易系统核心规范";
-            systemParts.push(`【已激活系统内置专业技能: ${skillName}】\n${protectedInst}`);
-            continue;
-          }
-
-          // 2. 用户个人自定义技能
+          // 仅激活用户个人自定义技能，内置系统技能禁止动态外挂
           const personal = (config.skills || []).find(
             (item) => item.id === sid && item.category === "personal" && item.enabled
           );

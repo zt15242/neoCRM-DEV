@@ -272,8 +272,8 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             <span>@ 引用对象</span>
           </button>
 
-          {/* 挂载 Skill 技能按钮 */}
-          {availableSkills.length > 0 && onToggleSkill && (
+          {/* 挂载 Skill 技能按钮 (仅开放挂载个人专属技能，系统内置技能受安全保护禁止在对话中随意外挂) */}
+          {onToggleSkill && (
             <div className="relative">
               <button
                 type="button"
@@ -281,8 +281,12 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                   setSkillPopoverOpen(!skillPopoverOpen);
                   setMcpPopoverOpen(false);
                 }}
-                title="选择要挂载的专业技能 (分系统内置与个人技能)"
-                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 transition-colors cursor-pointer"
+                title="选择要挂载的个人专属技能"
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+                  activeSkillIds.length > 0
+                    ? "bg-indigo-50/90 text-indigo-700 border-indigo-200"
+                    : "text-slate-600 hover:text-indigo-700 hover:bg-indigo-50 border-slate-200 hover:border-indigo-200"
+                }`}
               >
                 <Lightbulb className="w-3.5 h-3.5 text-indigo-600" />
                 <span>技能 ({activeSkillIds.length})</span>
@@ -290,47 +294,89 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
 
               {/* 技能选择浮层 */}
               {skillPopoverOpen && (
-                <div className="absolute left-0 bottom-full mb-2 w-72 bg-white rounded-2xl border border-slate-200 shadow-xl p-3 z-30 space-y-2 text-xs">
+                <div className="absolute left-0 bottom-full mb-2 w-76 bg-white rounded-2xl border border-slate-200 shadow-xl p-3 z-30 space-y-2 text-xs">
                   <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 font-semibold text-slate-800">
                     <span className="flex items-center space-x-1.5">
                       <Lightbulb className="w-4 h-4 text-indigo-600" />
-                      <span>挂载专业技能 (Skills)</span>
+                      <span>挂载个人专属技能 (Skills)</span>
                     </span>
                     <button onClick={() => setSkillPopoverOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <div className="max-h-52 overflow-y-auto space-y-1 divide-y divide-slate-50">
-                    {availableSkills.map((sk) => {
-                      const isActive = activeSkillIds.includes(sk.id);
-                      return (
-                        <div
-                          key={sk.id}
-                          onClick={() => onToggleSkill(sk.id)}
-                          className={`p-2 rounded-xl flex items-center justify-between cursor-pointer transition-colors ${
-                            isActive ? 'bg-indigo-50/80 text-indigo-900 font-medium' : 'hover:bg-slate-50 text-slate-700'
-                          }`}
+                  <p className="text-[11px] text-slate-400">
+                    系统内置技能受安全保护，仅支持挂载个人专属技能
+                  </p>
+
+                  {availableSkills.length === 0 ? (
+                    <div className="py-5 text-center text-slate-400 space-y-2">
+                      <p className="text-xs text-slate-500 font-medium">暂无可挂载的个人技能</p>
+                      <p className="text-[11px] text-slate-400 leading-relaxed px-2">
+                        可在「系统设置 &gt; Skill 技能库」中新建或导入个人专属技能包
+                      </p>
+                      {onOpenMcpSettings && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSkillPopoverOpen(false);
+                            onOpenMcpSettings();
+                          }}
+                          className="inline-flex items-center space-x-1 text-[11px] text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer pt-1"
                         >
-                          <div className="truncate mr-2">
-                            <div className="flex items-center space-x-1.5 truncate">
-                              <span className="truncate">{sk.name}</span>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
-                                {sk.category === 'builtin' ? '内置' : '个人'}
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-slate-400 truncate mt-0.5">{sk.description}</p>
-                          </div>
+                          <Settings className="w-3 h-3" />
+                          <span>前往设置创建个人技能</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="max-h-52 overflow-y-auto space-y-1 divide-y divide-slate-50">
+                      {availableSkills.map((sk) => {
+                        const isActive = activeSkillIds.includes(sk.id);
+                        return (
                           <div
-                            className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${
-                              isActive ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 bg-white'
+                            key={sk.id}
+                            onClick={() => onToggleSkill(sk.id)}
+                            className={`p-2 rounded-xl flex items-center justify-between cursor-pointer transition-colors ${
+                              isActive ? "bg-indigo-50/80 text-indigo-900 font-medium" : "hover:bg-slate-50 text-slate-700"
                             }`}
                           >
-                            {isActive && <Check className="w-3 h-3" />}
+                            <div className="truncate mr-2">
+                              <div className="flex items-center space-x-1.5 truncate">
+                                <span className="truncate">{sk.name}</span>
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 font-mono shrink-0">
+                                  个人专属
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-slate-400 truncate mt-0.5">{sk.description}</p>
+                            </div>
+                            <div
+                              className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${
+                                isActive ? "bg-indigo-600 border-indigo-600 text-white" : "border-slate-300 bg-white"
+                              }`}
+                            >
+                              {isActive && <Check className="w-3 h-3" />}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {onOpenMcpSettings && availableSkills.length > 0 && (
+                    <div className="pt-1.5 border-t border-slate-100 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSkillPopoverOpen(false);
+                          onOpenMcpSettings();
+                        }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-700 font-semibold flex items-center space-x-1 cursor-pointer"
+                      >
+                        <Settings className="w-3 h-3" />
+                        <span>管理个人技能</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

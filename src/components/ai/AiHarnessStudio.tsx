@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   AiChatSession, 
   AiChatMessage, 
@@ -64,6 +64,16 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
 
+  // 个人专属技能（系统内置技能受安全保护，仅由专属智能体角色驱动，禁止在其他对话随意挂载选择）
+  const personalSkills = useMemo(
+    () => skills.filter((s) => s.category === "personal" && s.enabled),
+    [skills]
+  );
+  const personalSkillIds = useMemo(
+    () => new Set(personalSkills.map((s) => s.id)),
+    [personalSkills]
+  );
+
   // 当前对话所选供应商与模型
   const [currentProviderId, setCurrentProviderId] = useState<string>('deepseek');
   const [currentModelId, setCurrentModelId] = useState<string>('deepseek-chat');
@@ -118,12 +128,16 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       let configuredList: AiProviderConfig[] = [];
       let fallbackProvId = "deepseek";
       let fallbackModId = "deepseek-chat";
+      let currentLoadedSkills: AiSkillItem[] = BUILTIN_AI_SKILLS;
 
       if (window.neoApi?.aiGetConfig) {
         const cfg = await window.neoApi.aiGetConfig();
         setProviders(cfg.providers);
         setSettings(cfg.settings);
-        if (cfg.skills) setSkills(cfg.skills);
+        if (cfg.skills) {
+          setSkills(cfg.skills);
+          currentLoadedSkills = cfg.skills;
+        }
         if (cfg.mcpServers) {
           setMcpServers(cfg.mcpServers);
           const enabledCustom = cfg.mcpServers
@@ -169,7 +183,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               const hasMod = sessProv.models.some((m) => m.id === first.modelId);
               setCurrentModelId(hasMod && first.modelId ? first.modelId : sessProv.models[0].id);
             }
-            if (first.activeSkillIds) setActiveSkillIds(first.activeSkillIds);
+            if (first.activeSkillIds) {
+              const pSet = new Set(currentLoadedSkills.filter((s: AiSkillItem) => s.category === "personal" && s.enabled).map((s: AiSkillItem) => s.id));
+              setActiveSkillIds(first.activeSkillIds.filter((sid) => pSet.has(sid)));
+            }
           }
         }
       }
@@ -375,9 +392,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     let targetSession = activeSession;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
 
-    // 自动流程功能安全锁拦截
-    const effectiveSkills = skillIds || activeSkillIds;
-    if (preset.id === "autoflow-architect" || effectiveSkills.includes("skill-autoflow-spec")) {
+    // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
+    const effectiveSkills = (skillIds || activeSkillIds).filter((sid) => personalSkillIds.has(sid));
+    if (preset.id === "autoflow-architect") {
       const latestLic = window.neoApi?.workflowGetLicenseStatus
         ? await window.neoApi.workflowGetLicenseStatus()
         : workflowLicenseStatus;
@@ -547,7 +564,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               const hasMod = sessProv.models.some((m) => m.id === target.modelId);
               setCurrentModelId(hasMod && target.modelId ? target.modelId : sessProv.models[0].id);
             }
-            if (target.activeSkillIds) setActiveSkillIds(target.activeSkillIds);
+            if (target.activeSkillIds) {
+              setActiveSkillIds(target.activeSkillIds.filter((sid) => personalSkillIds.has(sid)));
+            }
           }
         }}
         onNewChatDraft={handleNewChatDraft}
@@ -865,19 +884,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onOpenEntityPicker={() => setIsEntityModalOpen(true)}
               enableTools={enableTools}
               onToggleTools={() => setEnableTools(!enableTools)}
-              availableSkills={skills.filter((s) => s.enabled)}
-              activeSkillIds={activeSkillIds}
-              onToggleSkill={async (sid) => {
-                if (sid === "skill-autoflow-spec" && !activeSkillIds.includes(sid)) {
-                  const latestLic = window.neoApi?.workflowGetLicenseStatus
-                    ? await window.neoApi.workflowGetLicenseStatus()
-                    : workflowLicenseStatus;
-                  if (latestLic) setWorkflowLicenseStatus(latestLic);
-                  if (!latestLic?.isAuthorized) {
-                    setPendingAfterUnlock({ type: "skill", skillId: sid });
-                    setIsLicenseModalOpen(true);
-                    return;
-                  }
+              availableSkills={personalSkills}
+              activeSkillIds={activeSkillIds.filter((sid) => personalSkillIds.has(sid))}
+              onToggleSkill={(sid) => {
+                if (!personalSkillIds.has(sid)) {
+                  showToast("info", "系统内置技能受安全锁定保护，仅支持挂载个人专属技能");
+                  return;
                 }
                 setActiveSkillIds((prev) =>
                   prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]

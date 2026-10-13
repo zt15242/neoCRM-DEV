@@ -73,6 +73,10 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
   };
 
   const handleToggleEnabled = async (skill: AiSkillItem) => {
+    if (skill.category === "builtin") {
+      showToast("info", "系统内置技能受内核安全锁定保护，始终保持生效且不可更改");
+      return;
+    }
     await onSaveSkill({ ...skill, enabled: !skill.enabled });
     showToast('info', `技能 [${skill.name}] 已${!skill.enabled ? '启用' : '停用'}`);
   };
@@ -334,7 +338,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
         <div className="p-3 bg-sky-50/70 border border-sky-100 rounded-xl flex items-center space-x-2.5 text-sky-900">
           <ShieldCheck className="w-4 h-4 text-sky-600 shrink-0" />
           <span className="text-xs">
-            系统内置专业技能已全面实施<strong>内核级加密沙箱保护</strong>，禁止明文提取、查阅与破解导出，可在对话中直接挂载生效。
+            系统内置专业技能已全面实施<strong>内核级加密沙箱保护</strong>与安全锁定，由专属智能体角色按需驱动，不可在其他对话中随意选择挂载。对话挂载仅开放「个人专属」技能。
           </span>
         </div>
       )}
@@ -413,12 +417,16 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
 
                 {/* 操作栏 */}
                 <div className="flex items-center space-x-2 shrink-0 ml-3" onClick={(e) => e.stopPropagation()}>
-                  <label className="inline-flex items-center cursor-pointer" title={skill.enabled ? '点击停用' : '点击启用'}>
+                  <label
+                    className={`inline-flex items-center ${isBuiltin ? "cursor-not-allowed opacity-80" : "cursor-pointer"}`}
+                    title={isBuiltin ? "系统内置技能受安全锁定保护" : (skill.enabled ? "点击停用" : "点击启用")}
+                  >
                     <input
                       type="checkbox"
                       checked={skill.enabled}
+                      disabled={isBuiltin}
                       onChange={() => handleToggleEnabled(skill)}
-                      className="w-4 h-4 rounded text-sky-600 cursor-pointer"
+                      className={`w-4 h-4 rounded text-sky-600 ${isBuiltin ? "cursor-not-allowed" : "cursor-pointer"}`}
                     />
                   </label>
 
@@ -470,7 +478,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                           系统内置核心业务规范（已受内核底层安全沙箱保护）
                         </div>
                         <p className="text-[11px] text-slate-500 leading-relaxed">
-                          该技能提示词及核心规则已深度编译并封装在桌面内核中，实施运行时混淆与防逆向保护，禁止明文查阅、复制与导出。在 AI 对话中一键勾选即可直接获得高精度的专家指导。
+                          该技能规范已深度编译并封装在桌面内核中，受内核底层安全沙箱与专属智能体角色保护，不在普通对话中开放随意选择挂载。如需挂载自定义业务规则，请在「个人专属」中新建或导入技能包并在对话中挂载使用。
                         </p>
                       </div>
                     </div>
