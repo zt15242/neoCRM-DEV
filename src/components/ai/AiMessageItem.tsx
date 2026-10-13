@@ -1,23 +1,27 @@
 import React, { useState } from 'react';
-import { AiChatMessage, SchemaPlanPayload } from '../../../shared/types';
+import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan } from '../../../shared/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBox } from './ReasoningBox';
 import { ToolCallCard } from './ToolCallCard';
 import { InlineSqlResultTable } from './InlineSqlResultTable';
 import { extractSchemaPlanFromText } from './schemaPlanHelper';
 import { SchemaPlanCard } from './SchemaPlanCard';
+import { extractWorkflowPlanFromText } from './workflowPlanHelper';
+import { WorkflowPlanCard } from './WorkflowPlanCard';
 import { Copy, Check, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
   isStreamingCurrent?: boolean;
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
+  onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
 }
 
 export const AiMessageItem: React.FC<AiMessageItemProps> = ({
   message,
   isStreamingCurrent = false,
   onOpenCreateSchema,
+  onOpenDeployWorkflow,
 }) => {
   const [copied, setCopied] = useState(false);
   const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
@@ -71,6 +75,7 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
 
   // 检测是否包含可执行的数据建模方案
   const detectedPlan = !isStreamingCurrent && message.content ? extractSchemaPlanFromText(message.content) : null;
+  const detectedWorkflowPlan = !isStreamingCurrent && message.content ? extractWorkflowPlanFromText(message.content) : null;
 
   return (
     <div className="flex items-start space-x-3 my-4 pr-12">
@@ -137,6 +142,7 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
             <MarkdownRenderer
               content={message.content}
               onExecuteSql={(sql) => setActiveExecutedSql(sql)}
+              onOpenDeployWorkflow={onOpenDeployWorkflow}
             />
           ) : isStreamingCurrent ? (
             <div className="flex items-center space-x-2 py-1 text-slate-400 text-xs">
@@ -167,6 +173,8 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
               onOpenConfirm={() => onOpenCreateSchema(detectedPlan)}
             />
           )}
+
+
         </div>
       </div>
     </div>

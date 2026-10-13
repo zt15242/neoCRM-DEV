@@ -11,7 +11,9 @@ import { UpdateService } from './services/updateService';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
-import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
+import { WorkflowService } from './services/workflowService';
+import { licenseService } from './security/licenseService';
+import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 
 const currentDir = typeof __dirname !== 'undefined' 
   ? __dirname 
@@ -31,6 +33,7 @@ const updateService = new UpdateService();
 const imageService = new ImageService();
 const aiService = new AiService(sessionStore, metadataService, dataService);
 const fileService = new FileService();
+const workflowService = new WorkflowService(metadataService);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -156,13 +159,31 @@ ipcMain.handle('auth:refreshToken', async () => {
     throw new Error('当前未登录或无 refresh_token 凭据');
   }
   const tokenData = await authService.refreshToken(current.environment, current.tokenData.refresh_token);
+  if (current.tokenData.cookieString && !tokenData.cookieString) {
+    tokenData.cookieString = current.tokenData.cookieString;
+    tokenData.cookies = current.tokenData.cookies;
+    tokenData.cookieSavedAt = current.tokenData.cookieSavedAt;
+  }
   return sessionStore.saveSession(current.environment, tokenData);
 });
 
-ipcMain.handle('auth:logout', async () => {
+ipcMain.handle("auth:logout", async () => {
   authService.cancelActiveAuth();
   await authService.clearBrowserSession();
   return sessionStore.clearSession();
+});
+
+ipcMain.handle("auth:captureWebCookie", async () => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  const res = await authService.captureWebSessionCookie(current.environment, current.tokenData, win || undefined);
+  return sessionStore.updateSessionCookie(res.cookieString, res.cookies);
+});
+
+ipcMain.handle("auth:updateCookie", async (_, cookieString: string) => {
+  return sessionStore.updateSessionCookie(cookieString);
 });
 
 // 会话与历史
@@ -416,3 +437,66 @@ ipcMain.handle("ai:importSkillZipBuffer", async (_, fileName: string, bufferData
   return aiService.importSkillZipFromBuffer(fileName, Buffer.from(bufferData));
 });
 ipcMain.handle("ai:exportSkillZip", async (_, skillIds?: string[]) => aiService.exportSkillZip(skillIds));
+
+// ================= 自动流程 (Automatic Flow) 设备授权锁与代码配置部署 =================
+ipcMain.handle("license:getStatus", async () => {
+  return licenseService.getLicenseStatus();
+});
+
+ipcMain.handle("license:activate", async (_, password: string) => {
+  return licenseService.activateLicense(password);
+});
+
+ipcMain.handle("workflow:deployPlan", async (_, plan: WorkflowDeployPlan, options?: { autoEnable?: boolean }) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.deployWorkflowPlan(current.environment, current.tokenData, plan, options);
+});
+
+ipcMain.handle("workflow:listFlows", async (_, params) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.listAutoFlows(current.environment, current.tokenData, params);
+});
+
+ipcMain.handle("workflow:getFlowDetail", async (_, procdefId: string | number) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.getFlowDetail(current.environment, current.tokenData, procdefId);
+});
+
+ipcMain.handle("workflow:toggleStatus", async (_, procdefId: string | number, enable: boolean) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.toggleFlowStatus(current.environment, current.tokenData, procdefId, enable);
+});
+
+ipcMain.handle("workflow:reviseVersion", async (_, procdefId: string | number) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.reviseFlowVersion(current.environment, current.tokenData, procdefId);
+});
+
+ipcMain.handle("workflow:triggerInstance", async (_, payload: any) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.triggerFlowInstance(current.environment, current.tokenData, payload);
+});

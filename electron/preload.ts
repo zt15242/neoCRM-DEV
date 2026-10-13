@@ -16,6 +16,8 @@ export const neoApi = {
   cancelLogin: () => ipcRenderer.invoke('auth:cancelLogin'),
   refreshToken: () => ipcRenderer.invoke('auth:refreshToken'),
   logout: () => ipcRenderer.invoke('auth:logout'),
+  captureWebCookie: () => ipcRenderer.invoke('auth:captureWebCookie'),
+  updateSessionCookie: (cookieString: string) => ipcRenderer.invoke('auth:updateCookie', cookieString),
 
   // 会话与历史
   getCurrentSession: () => ipcRenderer.invoke('session:getCurrent'),
@@ -94,6 +96,15 @@ export const neoApi = {
   aiImportSkillZip: () => ipcRenderer.invoke("ai:importSkillZip"),
   aiImportSkillZipBuffer: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke("ai:importSkillZipBuffer", fileName, buffer),
   aiExportSkillZip: (skillIds?: string[]) => ipcRenderer.invoke("ai:exportSkillZip", skillIds),
+  // 自动流程 (Automatic Flow) & 设备安全锁
+  workflowGetLicenseStatus: () => ipcRenderer.invoke("license:getStatus"),
+  workflowActivateLicense: (password: string) => ipcRenderer.invoke("license:activate", password),
+  workflowDeployPlan: (plan: any, options?: { autoEnable?: boolean }) => ipcRenderer.invoke("workflow:deployPlan", plan, options),
+  workflowListFlows: (params?: any) => ipcRenderer.invoke("workflow:listFlows", params),
+  workflowGetFlowDetail: (procdefId: string | number) => ipcRenderer.invoke("workflow:getFlowDetail", procdefId),
+  workflowToggleStatus: (procdefId: string | number, enable: boolean) => ipcRenderer.invoke("workflow:toggleStatus", procdefId, enable),
+  workflowReviseVersion: (procdefId: string | number) => ipcRenderer.invoke("workflow:reviseVersion", procdefId),
+  workflowTriggerInstance: (payload: any) => ipcRenderer.invoke("workflow:triggerInstance", payload),
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);

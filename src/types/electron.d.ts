@@ -20,7 +20,11 @@ import {
   AiModelItem,
   AiFileAttachment,
   McpServerConfig,
-  AiSkillItem
+  AiSkillItem,
+  WorkflowDeployPlan,
+  WorkflowDeployResult,
+  WorkflowLicenseStatus,
+  WorkflowLicenseActivateResult
 } from '../../shared/types';
 
 declare global {
@@ -37,6 +41,8 @@ declare global {
       cancelLogin: () => Promise<boolean>;
       refreshToken: () => Promise<SessionState>;
       logout: () => Promise<SessionState>;
+      captureWebCookie: () => Promise<SessionState>;
+      updateSessionCookie: (cookieString: string) => Promise<SessionState>;
 
       getCurrentSession: () => Promise<SessionState>;
       getAccountHistory: () => Promise<AccountRecord[]>;
@@ -138,6 +144,15 @@ declare global {
         canceled?: boolean;
       }>;
       onAiStreamEvent: (callback: (event: AiStreamEvent) => void) => () => void;
+      // 自动流程 (Automatic Flow) & 本地设备安全锁
+      workflowGetLicenseStatus: () => Promise<WorkflowLicenseStatus>;
+      workflowActivateLicense: (password: string) => Promise<WorkflowLicenseActivateResult>;
+      workflowDeployPlan: (plan: WorkflowDeployPlan, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
+      workflowListFlows: (params?: { keyword?: string; pageNo?: number; pageSize?: number; status?: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
+      workflowGetFlowDetail: (procdefId: string | number) => Promise<{ success: boolean; definition?: any; property?: any; error?: string }>;
+      workflowToggleStatus: (procdefId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;
+      workflowReviseVersion: (procdefId: string | number) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
+      workflowTriggerInstance: (payload: { processDefinitionApiKey: string; entityApiKey: string; dataId: string | number; beforeData?: Record<string, any> }) => Promise<{ success: boolean; message: string; error?: string }>;
     };
   }
 }

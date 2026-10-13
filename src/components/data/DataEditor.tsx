@@ -7,7 +7,9 @@ import {
   RefreshCw, 
   AlertCircle,
   FileText,
-  Lock
+  Lock,
+  Search,
+  X
 } from 'lucide-react';
 import { EntityMetadata, FieldMetadata } from '../../../shared/types';
 import { ReferenceLookupInput } from './ReferenceLookupInput';
@@ -77,6 +79,10 @@ export const DataEditor: React.FC<DataEditorProps> = ({
   // 关联字段名称缓存映射: { [fieldName]: "选中的真实名称" }
   const [lookupNames, setLookupNames] = useState<Record<string, string>>({});
 
+  // 字段实时搜索与过滤
+  const [fieldKeyword, setFieldKeyword] = useState<string>("");
+  const [fieldFilterMode, setFieldFilterMode] = useState<"all" | "editable" | "filled">("all");
+
   // 模式切换: 表单视图 vs JSON 代码视图
   const [viewMode, setViewMode] = useState<'form' | 'json'>('form');
   const [isBatchImportOpen, setIsBatchImportOpen] = useState(false);
@@ -110,10 +116,14 @@ export const DataEditor: React.FC<DataEditorProps> = ({
     const targetMap: Record<string, { fieldApiKey: string; id: string | number }[]> = {};
 
     fieldList.forEach((f) => {
-      if (f.referObjectApiKey && data[f.apiKey]) {
+      if ((f.referObjectApiKey || f.apiKey === 'entityType') && data[f.apiKey]) {
         const refId = data[f.apiKey];
-        if (!targetMap[f.referObjectApiKey]) targetMap[f.referObjectApiKey] = [];
-        targetMap[f.referObjectApiKey].push({ fieldApiKey: f.apiKey, id: refId });
+        const refKey =
+          f.referObjectApiKey === 'entityBelongType' || f.apiKey === 'entityType'
+            ? `entityBelongType:${selectedEntityApiKey}`
+            : f.referObjectApiKey!;
+        if (!targetMap[refKey]) targetMap[refKey] = [];
+        targetMap[refKey].push({ fieldApiKey: f.apiKey, id: refId });
       }
     });
 
@@ -439,8 +449,90 @@ export const DataEditor: React.FC<DataEditorProps> = ({
             />
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {fields.map((f) => {
+          <div className="space-y-4">
+            {/* 字段搜索与快速筛选工具栏 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={fieldKeyword}
+                  onChange={(e) => setFieldKeyword(e.target.value)}
+                  placeholder="搜索字段名称、API Key (如: 客户名称 / accountName)..."
+                  className="w-full pl-8 pr-8 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/70 text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-sky-500 transition-all"
+                />
+                {fieldKeyword && (
+                  <button
+                    type="button"
+                    onClick={() => setFieldKeyword("")}
+                    className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center space-x-2 text-xs">
+                <div className="flex p-0.5 bg-slate-100 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setFieldFilterMode("all")}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                      fieldFilterMode === "all"
+                        ? "bg-white text-slate-800 font-semibold shadow-2xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    全部 ({fields.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFieldFilterMode("editable")}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                      fieldFilterMode === "editable"
+                        ? "bg-white text-sky-700 font-semibold shadow-2xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    仅可编辑 ({fields.filter((f) => !getReadOnlyReason(f)).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFieldFilterMode("filled")}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                      fieldFilterMode === "filled"
+                        ? "bg-white text-emerald-700 font-semibold shadow-2xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    {mode === "update" ? `仅已修改 (${changedFieldCount})` : "仅已填写"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {fields
+                .filter((f) => {
+                  const kw = fieldKeyword.trim().toLowerCase();
+                  if (kw) {
+                    const matchLabel = (f.label || "").toLowerCase().includes(kw);
+                    const matchKey = (f.apiKey || "").toLowerCase().includes(kw);
+                    if (!matchLabel && !matchKey) return false;
+                  }
+                  if (fieldFilterMode === "editable") {
+                    return !getReadOnlyReason(f);
+                  }
+                  if (fieldFilterMode === "filled") {
+                    if (mode === "update") {
+                      return !isValueEqual(formData[f.apiKey], initialSnapshot[f.apiKey]);
+                    }
+                    const v = formData[f.apiKey];
+                    return v !== undefined && v !== null && v !== "";
+                  }
+                  return true;
+                })
+                .map((f) => {
               const val = formData[f.apiKey] ?? '';
               const isRefer = !!f.referObjectApiKey;
               const lookupName = lookupNames[f.apiKey];
@@ -479,6 +571,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
                       fieldApiKey={f.apiKey}
                       fieldLabel={f.label}
                       referObjectApiKey={f.referObjectApiKey!}
+                      hostEntityApiKey={selectedEntityApiKey}
                       value={val}
                       initialDisplayName={lookupName}
                       disabled={isReadOnly}
@@ -533,6 +626,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
                 </div>
               );
             })}
+            </div>
           </div>
         )}
 

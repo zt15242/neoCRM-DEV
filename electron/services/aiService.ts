@@ -17,6 +17,8 @@ function cleanGeminiSchema(schema: any): any {
 
 import { McpClientService } from "./mcpClientService";
 import { SkillPackageService } from "./skillPackageService";
+import { WorkflowService } from "./workflowService";
+import { licenseService } from "../security/licenseService";
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
@@ -56,6 +58,7 @@ export class AiService {
 
   private skillPackageService = new SkillPackageService();
   private mcpClientService = new McpClientService();
+  private workflowService = new WorkflowService(this.metadataService);
 
   constructor(
     private sessionStore: SessionStore,
@@ -894,10 +897,34 @@ ${dialogHistoryText}`;
         }
       }
 
+      // 0. 自动流程专属安全锁强制校验 (内核级拦截)
+      const isAutoflowPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]"));
+      const hasAutoflowSkill = Boolean(activeSkillIds && activeSkillIds.includes("skill-autoflow-spec"));
+      if (isAutoflowPreset || hasAutoflowSkill) {
+        const lockStatus = licenseService.getLicenseStatus();
+        if (!lockStatus.isAuthorized) {
+          sendEvent({
+            requestId,
+            sessionId,
+            messageId,
+            type: "error",
+            error: `🔒 自动流程功能已上锁：${lockStatus.message || "请先输入本机专属加密密码完成设备激活"}`,
+          });
+          return;
+        }
+      }
+
       // 1. 组装 System Prompt
       const systemParts: string[] = [];
       if (presetPrompt) {
-        systemParts.push(presetPrompt);
+        if (presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-autoflow-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
+        } else {
+          systemParts.push(presetPrompt);
+        }
       }
 
       if (config.settings.injectTenantContext && currentSession.isLoggedIn) {
@@ -1904,7 +1931,7 @@ ${toolDataContext}
         typeName: f.typeName,
         custom: f.custom,
         referObjectApiKey: f.referObjectApiKey,
-        pickOptions: f.pickOption?.map((p) => p.optionLabel).slice(0, 10),
+        pickOptions: f.pickOption?.map((p) => `${p.optionCode}:${p.optionLabel}`).slice(0, 15),
       }));
       return {
         data: {
@@ -1916,19 +1943,22 @@ ${toolDataContext}
       };
     }
 
-    if (name === 'execute_sql_query') {
-      let sql = args.sql?.trim();
-      if (!sql) throw new Error('缺少 sql 查询语句');
-      if (!sql.toLowerCase().startsWith('select')) {
-        throw new Error('出于数据安全保护，AI 工具仅允许执行 SELECT 查询');
+    if (name === "execute_sql_query") {
+      const rawInput = (args.sql || args.query || args.xoql || "").trim();
+      if (!rawInput) throw new Error("缺少 sql 查询语句参数");
+      const { sql: sanitized, rejectReason } = this.dataService.sanitizeAndRewriteXoql(rawInput);
+      if (rejectReason) {
+        throw new Error(rejectReason);
       }
-      if (!sql.toLowerCase().includes('limit')) {
-        sql += ' LIMIT 30';
+      let sql = sanitized;
+      const isPureCount = /^SELECT\s+(?:COUNT|SUM|AVG|MAX|MIN)\s*\([^)]+\)\s*(?:AS\s+\w+\s*)?FROM\b/i.test(sql) && !/\bGROUP\s+BY\b/i.test(sql);
+      if (!/\bLIMIT\s+\d+/i.test(sql) && !isPureCount) {
+        sql = `${sql.replace(/;+$/, "").trim()} LIMIT 30`;
       }
       const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
       if (!queryRes.success || !queryRes.data) {
-        const rawErr = queryRes.error || 'SQL 执行返回失败';
-        throw new Error(`${rawErr} (提示: 销售易标准客户对象的名称字段为 name 而非 accountName，若不确定字段请先调用 get_entity_fields 确认字段 API Key)`);
+        const rawErr = queryRes.error || "SQL 执行返回失败";
+        throw new Error(`${rawErr} (提示: 销售易标准对象主名称字段分别为 account->accountName、contact->contactName、opportunity->opportunityName、order->po、contract->title、product->productName、department->departName、自定义对象(*__c)->name；若不确定字段请先调用 get_entity_fields 确认真实字段 API Key)`);
       }
       const records = queryRes.data.records || [];
       const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);
@@ -1940,6 +1970,48 @@ ${toolDataContext}
           fields,
         },
         summary: `SQL 执行成功，返回 ${records.length} 条数据`,
+      };
+    }
+
+    if (name === "list_autoflows") {
+      licenseService.assertAuthorized();
+      const res = await this.workflowService.listAutoFlows(env, tokenData, { keyword: args.keyword });
+      if (!res.success) throw new Error(res.error || "获取自动流程失败");
+      const list = res.data?.rows || res.data?.data || (Array.isArray(res.data) ? res.data : []);
+      const summaryList = list.slice(0, 30).map((f: any) => ({
+        procdefId: f.procdefId || f.id,
+        processName: f.processName || f.name,
+        actKey: f.actKey || f.apiKey,
+        entityApiKey: f.entityApiKey,
+        status: f.status === 1 ? "启用" : f.status === 2 ? "禁用" : "设计态草稿",
+        executeType: f.executeType,
+      }));
+      return {
+        data: {
+          totalCount: list.length,
+          flows: summaryList,
+        },
+        summary: `检索到当前租户 ${list.length} 条自动流程`,
+      };
+    }
+
+    if (name === "inspect_autoflow") {
+      licenseService.assertAuthorized();
+      const res = await this.workflowService.getFlowDetail(env, tokenData, args.procdefId);
+      if (!res.success) throw new Error(res.error || "获取流程定义失败");
+      return {
+        data: {
+          procdefId: args.procdefId,
+          baseInfo: res.definition?.baseInfo,
+          nodesCount: Object.keys(res.definition?.nodeInfo || {}).length,
+          nodes: Object.values(res.definition?.nodeInfo || {}).map((n: any) => ({
+            id: n.taskDefName,
+            name: n.label,
+            type: n.nodeType,
+          })),
+          resourceConfig: res.definition?.businessConfig?.resourceConfig,
+        },
+        summary: `成功读取自动流程 (${args.procdefId}) 图模型详情`,
       };
     }
 

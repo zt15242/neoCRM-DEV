@@ -26,7 +26,20 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
   const [form, setForm] = useState<AiHarnessSettings>(settings);
   const [saving, setSaving] = useState(false);
 
-  const selectedProvider = providers.find((p) => p.id === form.defaultProviderId) || providers[0];
+  const configuredProviders = providers.filter(
+    (p) =>
+      Boolean(
+        (p.apiKey && p.apiKey.trim()) ||
+          p.id === "ollama" ||
+          p.baseUrl?.includes("localhost") ||
+          p.baseUrl?.includes("127.0.0.1")
+      ) &&
+      Array.isArray(p.models) &&
+      p.models.length > 0
+  );
+  const displayProviders = configuredProviders.length > 0 ? configuredProviders : providers;
+  const selectedProvider =
+    displayProviders.find((p) => p.id === form.defaultProviderId) || displayProviders[0];
 
   const handleSave = async () => {
     setSaving(true);
@@ -85,7 +98,7 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
               }}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:border-sky-500"
             >
-              {providers.map((p) => (
+              {displayProviders.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} {p.apiKey ? '(已配置Key)' : ''}
                 </option>

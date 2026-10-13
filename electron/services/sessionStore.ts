@@ -101,6 +101,50 @@ export class SessionStore {
     return session;
   }
 
+  public updateSessionCookie(
+    cookieString: string,
+    cookies?: Array<{ name: string; value: string; domain?: string; path?: string }>
+  ): SessionState {
+    const data = this.readStorage();
+    if (!data.current?.isLoggedIn || !data.current.tokenData) {
+      throw new Error("当前未登录，无法更新 Cookie");
+    }
+
+    const cleanCookie = cookieString.trim();
+    const parsedCookies: Array<{ name: string; value: string; domain?: string; path?: string }> =
+      cookies && cookies.length > 0
+        ? cookies
+        : cleanCookie
+            .split(";")
+            .map((part) => {
+              const eqIdx = part.indexOf("=");
+              if (eqIdx > 0) {
+                return {
+                  name: part.slice(0, eqIdx).trim(),
+                  value: part.slice(eqIdx + 1).trim(),
+                };
+              }
+              return null;
+            })
+            .filter(Boolean) as any;
+
+    data.current.tokenData.cookieString = cleanCookie;
+    data.current.tokenData.cookies = parsedCookies;
+    data.current.tokenData.cookieSavedAt = Date.now();
+
+    if (data.current.activeAccountId) {
+      const hist = data.history.find((h) => h.id === data.current?.activeAccountId);
+      if (hist && hist.tokenData) {
+        hist.tokenData.cookieString = cleanCookie;
+        hist.tokenData.cookies = parsedCookies;
+        hist.tokenData.cookieSavedAt = Date.now();
+      }
+    }
+
+    this.writeStorage(data);
+    return data.current;
+  }
+
   public deleteAccountRecord(accountId: string): boolean {
     const data = this.readStorage();
     data.history = data.history.filter((h) => h.id !== accountId);
@@ -140,7 +184,12 @@ export class SessionStore {
         savedAt: current.tokenData.savedAt || Date.now(),
         expiresAt: current.tokenData.expiresAt || (Date.now() + (current.tokenData.expires_in || 7200) * 1000),
       };
-      fs.writeFileSync(tokenJsonPath, JSON.stringify(tokenPayload, null, 2), 'utf-8');
+      fs.writeFileSync(tokenJsonPath, JSON.stringify(tokenPayload, null, 2), "utf-8");
+
+      // 1b. 若存在 Web 会话 Cookie，同步写入 cookie.txt
+      if (current.tokenData.cookieString) {
+        fs.writeFileSync(path.join(neoCliDir, "cookie.txt"), current.tokenData.cookieString, "utf-8");
+      }
 
       // 2. 写入 env.json
       const envJsonPath = path.join(neoCliDir, 'env.json');

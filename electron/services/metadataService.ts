@@ -54,6 +54,7 @@ export class MetadataService {
             enableDuplicaterule: !!r.enableDuplicaterule,
             detail: !!r.detail,
             objectType: r.objectType || 0,
+            objectId: r.objectId || r.id,
           });
         }
       } catch (err: any) {
@@ -89,7 +90,7 @@ export class MetadataService {
         custom: !!f.custom,
         maxLength: f.maxLength,
         decimal: f.decimal,
-        referObjectApiKey: f.referObjectApiKey,
+        referObjectApiKey: (f.referObjectApiKey === "entityBelongType" || f.apiKey === "entityType") ? `entityBelongType:${entityApiKey}` : f.referObjectApiKey,
         pickOption: f.pickOption,
         description: f.description,
       };

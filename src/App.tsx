@@ -313,6 +313,8 @@ export const App: React.FC = () => {
                   onLogout={handleLogout}
                   onOpenDesigner={(type) => window.neoApi.openDesigner(type)}
                   onTestApi={() => window.neoApi.testApiCall()}
+                  onRefreshSession={loadInitialData}
+                  showToast={showToast}
                 />
               ) : (
                 <LoginCard

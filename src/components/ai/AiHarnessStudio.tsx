@@ -9,7 +9,9 @@ import {
   AiSkillItem,
   McpServerConfig,
   SessionState,
-  SchemaPlanPayload
+  SchemaPlanPayload,
+  WorkflowDeployPlan,
+  WorkflowLicenseStatus
 } from '../../../shared/types';
 import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI_SKILLS } from '../../../shared/constants';
 import { AiSidebar } from './AiSidebar';
@@ -17,6 +19,8 @@ import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
 import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
+import { ConfirmDeployWorkflowModal } from './ConfirmDeployWorkflowModal';
+import { WorkflowLicenseModal } from './WorkflowLicenseModal';
 import { 
   Sparkles, 
   Settings, 
@@ -32,7 +36,9 @@ import {
   ShieldCheck,
   Minimize2,
   Loader2,
-  Lightbulb
+  Lightbulb,
+  Lock,
+  Unlock
 } from 'lucide-react';
 
 interface AiHarnessStudioProps {
@@ -67,6 +73,18 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   // 实体与字段数据建模创建确认模态框状态
   const [pendingSchemaPlan, setPendingSchemaPlan] = useState<SchemaPlanPayload | null>(null);
+  const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<WorkflowDeployPlan | null>(null);
+
+  // 自动流程本地离线设备锁状态
+  const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
+  const [pendingAfterUnlock, setPendingAfterUnlock] = useState<
+    | { type: "preset"; presetId: string }
+    | { type: "session"; sessionId: string }
+    | { type: "skill"; skillId: string }
+    | { type: "deploy"; plan: WorkflowDeployPlan }
+    | null
+  >(null);
 
   // 上下文压缩状态
   const [isCompacting, setIsCompacting] = useState(false);
@@ -82,9 +100,25 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const reasoningStartTimeRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // 判断供应商是否已配置完成
+  const isProviderConfigured = (p?: AiProviderConfig | null) =>
+    Boolean(
+      p &&
+        ((p.apiKey && p.apiKey.trim()) ||
+          p.id === "ollama" ||
+          p.baseUrl?.includes("localhost") ||
+          p.baseUrl?.includes("127.0.0.1")) &&
+        Array.isArray(p.models) &&
+        p.models.length > 0
+    );
+
   // 初始化加载配置和会话
   const loadData = async () => {
     try {
+      let configuredList: AiProviderConfig[] = [];
+      let fallbackProvId = "deepseek";
+      let fallbackModId = "deepseek-chat";
+
       if (window.neoApi?.aiGetConfig) {
         const cfg = await window.neoApi.aiGetConfig();
         setProviders(cfg.providers);
@@ -97,24 +131,50 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             .map((m) => m.id);
           setActiveMcpServerIds(enabledCustom);
         }
-        setCurrentProviderId(cfg.settings.defaultProviderId || 'deepseek');
-        setCurrentModelId(cfg.settings.defaultModelId || 'deepseek-chat');
+
+        configuredList = cfg.providers.filter((p) => isProviderConfigured(p));
+        const defaultProv = configuredList.find((p) => p.id === cfg.settings.defaultProviderId) || configuredList[0];
+        if (defaultProv) {
+          fallbackProvId = defaultProv.id;
+          const hasDefaultMod = defaultProv.models.some((m) => m.id === cfg.settings.defaultModelId);
+          fallbackModId = hasDefaultMod ? cfg.settings.defaultModelId : defaultProv.models[0].id;
+        } else {
+          fallbackProvId = cfg.settings.defaultProviderId || "deepseek";
+          fallbackModId = cfg.settings.defaultModelId || "deepseek-chat";
+        }
+
+        setCurrentProviderId(fallbackProvId);
+        setCurrentModelId(fallbackModId);
         setEnableTools(cfg.settings.enableCrmTools);
+      }
+      let licStatus: WorkflowLicenseStatus | null = null;
+      if (window.neoApi?.workflowGetLicenseStatus) {
+        licStatus = await window.neoApi.workflowGetLicenseStatus();
+        setWorkflowLicenseStatus(licStatus);
       }
       if (window.neoApi?.aiGetSessions) {
         const list = await window.neoApi.aiGetSessions();
         const validList = list.filter((s) => s.messages && s.messages.length > 0);
         setSessions(validList);
         if (validList.length > 0 && !activeSessionId) {
-          setActiveSessionId(validList[0].id);
-          setSelectedPresetId(validList[0].presetId || 'harness-agent');
-          if (validList[0].providerId) setCurrentProviderId(validList[0].providerId);
-          if (validList[0].modelId) setCurrentModelId(validList[0].modelId);
-          if (validList[0].activeSkillIds) setActiveSkillIds(validList[0].activeSkillIds);
+          const first = validList[0];
+          if (first.presetId === "autoflow-architect" && !licStatus?.isAuthorized) {
+            setSelectedPresetId("harness-agent");
+          } else {
+            setActiveSessionId(first.id);
+            setSelectedPresetId(first.presetId || "harness-agent");
+            const sessProv = configuredList.find((p) => p.id === first.providerId);
+            if (sessProv) {
+              setCurrentProviderId(sessProv.id);
+              const hasMod = sessProv.models.some((m) => m.id === first.modelId);
+              setCurrentModelId(hasMod && first.modelId ? first.modelId : sessProv.models[0].id);
+            }
+            if (first.activeSkillIds) setActiveSkillIds(first.activeSkillIds);
+          }
         }
       }
     } catch (e: any) {
-      console.error('加载 AI 数据异常:', e);
+      console.error("加载 AI 数据异常:", e);
     }
   };
 
@@ -315,6 +375,20 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     let targetSession = activeSession;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
 
+    // 自动流程功能安全锁拦截
+    const effectiveSkills = skillIds || activeSkillIds;
+    if (preset.id === "autoflow-architect" || effectiveSkills.includes("skill-autoflow-spec")) {
+      const latestLic = window.neoApi?.workflowGetLicenseStatus
+        ? await window.neoApi.workflowGetLicenseStatus()
+        : workflowLicenseStatus;
+      if (latestLic) setWorkflowLicenseStatus(latestLic);
+      if (!latestLic?.isAuthorized) {
+        setIsLicenseModalOpen(true);
+        showToast("info", "🔒 自动流程功能已上锁，请先输入绑定本机的加密密码");
+        return;
+      }
+    }
+
     const effectiveTitle = text.slice(0, 22) + (text.length > 22 ? '...' : '') || (attachments?.[0]?.name ? `分析 ${attachments[0].name}` : '新对话');
 
     if (!targetSession) {
@@ -322,8 +396,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         title: effectiveTitle,
         presetId: preset.id,
-        providerId: currentProviderId,
-        modelId: currentModelId,
+        providerId: currentProvider?.id || currentProviderId,
+        modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
         messages: [],
         activeSkillIds: skillIds || activeSkillIds,
         createdAt: Date.now(),
@@ -381,8 +455,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       requestId,
       sessionId: updatedSession.id,
       messageId: assistantMsgId,
-      providerId: currentProviderId,
-      modelId: currentModelId,
+      providerId: currentProvider?.id || currentProviderId,
+      modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
       presetPrompt: preset.systemPrompt,
       messages: [...targetSession.messages, userMsg],
       enableTools,
@@ -433,12 +507,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     showToast('success', '已导出 Markdown 文件');
   };
 
-  const currentProvider = providers.find((p) => p.id === currentProviderId) || providers[0];
+  const configuredProviders = providers.filter((p) => isProviderConfigured(p));
+  const currentProvider =
+    configuredProviders.find((p) => p.id === currentProviderId) ||
+    configuredProviders[0] ||
+    providers.find((p) => p.id === currentProviderId) ||
+    providers[0];
   const currentPreset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
-  const isCurrentProviderConfigured =
-    !!currentProvider?.apiKey ||
-    currentProvider?.baseUrl?.includes('localhost') ||
-    currentProvider?.baseUrl?.includes('127.0.0.1');
+  const isCurrentProviderConfigured = isProviderConfigured(currentProvider);
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex h-[calc(100vh-88px)] min-h-[600px]">
@@ -448,13 +524,29 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         activeSessionId={activeSessionId}
         presets={AI_AGENT_PRESETS}
         selectedPresetId={selectedPresetId}
-        onSelectSession={(id) => {
-          setActiveSessionId(id);
+        workflowLicenseStatus={workflowLicenseStatus}
+        onSelectSession={async (id) => {
           const target = sessions.find((s) => s.id === id);
+          if (target?.presetId === "autoflow-architect") {
+            const latestLic = window.neoApi?.workflowGetLicenseStatus
+              ? await window.neoApi.workflowGetLicenseStatus()
+              : workflowLicenseStatus;
+            if (latestLic) setWorkflowLicenseStatus(latestLic);
+            if (!latestLic?.isAuthorized) {
+              setPendingAfterUnlock({ type: "session", sessionId: id });
+              setIsLicenseModalOpen(true);
+              return;
+            }
+          }
+          setActiveSessionId(id);
           if (target) {
-            setSelectedPresetId(target.presetId || 'harness-agent');
-            if (target.providerId) setCurrentProviderId(target.providerId);
-            if (target.modelId) setCurrentModelId(target.modelId);
+            setSelectedPresetId(target.presetId || "harness-agent");
+            const sessProv = configuredProviders.find((p) => p.id === target.providerId);
+            if (sessProv) {
+              setCurrentProviderId(sessProv.id);
+              const hasMod = sessProv.models.some((m) => m.id === target.modelId);
+              setCurrentModelId(hasMod && target.modelId ? target.modelId : sessProv.models[0].id);
+            }
             if (target.activeSkillIds) setActiveSkillIds(target.activeSkillIds);
           }
         }}
@@ -462,17 +554,27 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         onDeleteSession={handleDeleteSession}
         onUpdateSessionTitle={handleUpdateSessionTitle}
         onClearSessions={handleClearSessions}
-        onSelectPreset={(presetId) => {
+        onSelectPreset={async (presetId) => {
           const p = AI_AGENT_PRESETS.find((item) => item.id === presetId);
-          if (p && !p.disabled) {
-            setSelectedPresetId(presetId);
-            setEnableTools(p.enableCrmTools);
-            if (p.recommendedModel && currentProviderId === 'deepseek') {
-              setCurrentModelId(p.recommendedModel);
+          if (!p || p.disabled) return;
+          if (presetId === "autoflow-architect") {
+            const latestLic = window.neoApi?.workflowGetLicenseStatus
+              ? await window.neoApi.workflowGetLicenseStatus()
+              : workflowLicenseStatus;
+            if (latestLic) setWorkflowLicenseStatus(latestLic);
+            if (!latestLic?.isAuthorized) {
+              setPendingAfterUnlock({ type: "preset", presetId });
+              setIsLicenseModalOpen(true);
+              return;
             }
-            if (activeSession && activeSession.messages.length > 0) {
-              setActiveSessionId(null);
-            }
+          }
+          setSelectedPresetId(presetId);
+          setEnableTools(p.enableCrmTools);
+          if (p.recommendedModel && currentProviderId === "deepseek") {
+            setCurrentModelId(p.recommendedModel);
+          }
+          if (activeSession && activeSession.messages.length > 0) {
+            setActiveSessionId(null);
           }
         }}
       />
@@ -491,8 +593,32 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   {activeSession ? activeSession.title : currentPreset.name}
                 </h2>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-medium shrink-0">
-                  {currentPreset.badge || 'AI Harness'}
+                  {currentPreset.badge || "AI Harness"}
                 </span>
+                {currentPreset.id === "autoflow-architect" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsLicenseModalOpen(true)}
+                    className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold border flex items-center space-x-1 transition-all cursor-pointer shrink-0 ${
+                      workflowLicenseStatus?.isAuthorized
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                        : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                    }`}
+                    title="点击查看设备机器码、有效天数或更换授权密码"
+                  >
+                    {workflowLicenseStatus?.isAuthorized ? (
+                      <>
+                        <Unlock className="w-3 h-3 text-emerald-600" />
+                        <span>设备已绑定 · 剩余 {workflowLicenseStatus.remainingDays} 天</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-3 h-3 text-amber-600" />
+                        <span>已上锁 · 点击输入密码</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 {activeSession && activeSession.messages.length > 0 && (
                   <span className="text-[10px] text-slate-400 font-mono">
                     {activeSession.messages.length} 轮消息
@@ -524,26 +650,39 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               </button>
             )}
 
-            {/* 供应商与模型选择器 */}
+            {/* 供应商与模型选择器 (仅展示已配置好的供应商与模型) */}
             <div className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
               <select
-                value={`${currentProviderId}::${currentModelId}`}
+                value={
+                  configuredProviders.length > 0
+                    ? `${currentProvider?.id || currentProviderId}::${
+                        currentProvider?.models?.some((m) => m.id === currentModelId)
+                          ? currentModelId
+                          : currentProvider?.models?.[0]?.id || currentModelId
+                      }`
+                    : ""
+                }
                 onChange={(e) => {
-                  const [pId, mId] = e.target.value.split('::');
+                  if (!e.target.value) return;
+                  const [pId, mId] = e.target.value.split("::");
                   setCurrentProviderId(pId);
                   setCurrentModelId(mId);
                 }}
                 className="text-xs font-medium text-slate-700 bg-white px-2.5 py-1 rounded-lg border border-slate-200/80 shadow-2xs focus:outline-none cursor-pointer"
               >
-                {providers.map((p) => (
-                  <optgroup key={p.id} label={`${p.name} ${p.apiKey ? '✓' : '(未配Key)'}`}>
-                    {p.models.map((m) => (
-                      <option key={`${p.id}::${m.id}`} value={`${p.id}::${m.id}`}>
-                        {p.name.split(' ')[0]} · {m.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {configuredProviders.length === 0 ? (
+                  <option value="">暂未配置模型，请点击右侧设置配置</option>
+                ) : (
+                  configuredProviders.map((p) => (
+                    <optgroup key={p.id} label={`${p.name} ✓`}>
+                      {p.models.map((m) => (
+                        <option key={`${p.id}::${m.id}`} value={`${p.id}::${m.id}`}>
+                          {p.name.split(" ")[0]} · {m.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                )}
               </select>
 
               <button
@@ -693,6 +832,18 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   message={msg}
                   isStreamingCurrent={streamingMessageId === msg.id}
                   onOpenCreateSchema={(plan) => setPendingSchemaPlan(plan)}
+                  onOpenDeployWorkflow={async (plan) => {
+                    const latestLic = window.neoApi?.workflowGetLicenseStatus
+                      ? await window.neoApi.workflowGetLicenseStatus()
+                      : workflowLicenseStatus;
+                    if (latestLic) setWorkflowLicenseStatus(latestLic);
+                    if (!latestLic?.isAuthorized) {
+                      setPendingAfterUnlock({ type: "deploy", plan });
+                      setIsLicenseModalOpen(true);
+                      return;
+                    }
+                    setPendingWorkflowPlan(plan);
+                  }}
                 />
               ))}
               <div ref={messagesEndRef} />
@@ -716,11 +867,22 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onToggleTools={() => setEnableTools(!enableTools)}
               availableSkills={skills.filter((s) => s.enabled)}
               activeSkillIds={activeSkillIds}
-              onToggleSkill={(sid) =>
+              onToggleSkill={async (sid) => {
+                if (sid === "skill-autoflow-spec" && !activeSkillIds.includes(sid)) {
+                  const latestLic = window.neoApi?.workflowGetLicenseStatus
+                    ? await window.neoApi.workflowGetLicenseStatus()
+                    : workflowLicenseStatus;
+                  if (latestLic) setWorkflowLicenseStatus(latestLic);
+                  if (!latestLic?.isAuthorized) {
+                    setPendingAfterUnlock({ type: "skill", skillId: sid });
+                    setIsLicenseModalOpen(true);
+                    return;
+                  }
+                }
                 setActiveSkillIds((prev) =>
                   prev.includes(sid) ? prev.filter((x) => x !== sid) : [...prev, sid]
-                )
-              }
+                );
+              }}
               availableMcpServers={mcpServers.filter((m) => m.enabled)}
               activeMcpServerIds={activeMcpServerIds}
               onToggleMcpServer={(srvId) =>
@@ -756,6 +918,67 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           showToast={showToast}
         />
       )}
+
+      {/* 自动流程配置方案核对与代码部署弹窗 */}
+      {pendingWorkflowPlan && (
+        <ConfirmDeployWorkflowModal
+          plan={pendingWorkflowPlan}
+          crmSession={crmSession}
+          licenseStatus={workflowLicenseStatus}
+          onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
+          onClose={() => setPendingWorkflowPlan(null)}
+          onRefreshSession={loadData}
+          showToast={showToast}
+        />
+      )}
+
+      {/* 自动流程功能本地离线设备安全锁弹窗 */}
+      <WorkflowLicenseModal
+        isOpen={isLicenseModalOpen}
+        initialStatus={workflowLicenseStatus}
+        onClose={() => {
+          setIsLicenseModalOpen(false);
+          setPendingAfterUnlock(null);
+        }}
+        onActivated={(newStatus) => {
+          setWorkflowLicenseStatus(newStatus);
+          setIsLicenseModalOpen(false);
+          if (pendingAfterUnlock) {
+            if (pendingAfterUnlock.type === "preset") {
+              const p = AI_AGENT_PRESETS.find((item) => item.id === pendingAfterUnlock.presetId);
+              if (p) {
+                setSelectedPresetId(p.id);
+                setEnableTools(p.enableCrmTools);
+                if (p.recommendedModel && currentProviderId === "deepseek") {
+                  setCurrentModelId(p.recommendedModel);
+                }
+                if (activeSession && activeSession.messages.length > 0) {
+                  setActiveSessionId(null);
+                }
+              }
+            } else if (pendingAfterUnlock.type === "session") {
+              const target = sessions.find((s) => s.id === pendingAfterUnlock.sessionId);
+              if (target) {
+                setActiveSessionId(target.id);
+                setSelectedPresetId(target.presetId || "harness-agent");
+                if (target.providerId) setCurrentProviderId(target.providerId);
+                if (target.modelId) setCurrentModelId(target.modelId);
+                if (target.activeSkillIds) setActiveSkillIds(target.activeSkillIds);
+              }
+            } else if (pendingAfterUnlock.type === "skill") {
+              setActiveSkillIds((prev) =>
+                prev.includes(pendingAfterUnlock.skillId)
+                  ? prev
+                  : [...prev, pendingAfterUnlock.skillId]
+              );
+            } else if (pendingAfterUnlock.type === "deploy") {
+              setPendingWorkflowPlan(pendingAfterUnlock.plan);
+            }
+            setPendingAfterUnlock(null);
+          }
+        }}
+        showToast={showToast}
+      />
     </div>
   );
 };

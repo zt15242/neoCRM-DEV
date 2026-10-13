@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AiChatSession, AiAgentPreset } from '../../../shared/types';
+import { AiChatSession, AiAgentPreset, WorkflowLicenseStatus } from '../../../shared/types';
 import { 
   Plus, 
   Search, 
@@ -13,7 +13,9 @@ import {
   MessageSquare,
   Check,
   X,
-  Lock
+  Lock,
+  Unlock,
+  Workflow
 } from 'lucide-react';
 
 interface AiSidebarProps {
@@ -27,6 +29,7 @@ interface AiSidebarProps {
   onUpdateSessionTitle: (sessionId: string, title: string) => void;
   onClearSessions: () => void;
   onSelectPreset: (presetId: string) => void;
+  workflowLicenseStatus?: WorkflowLicenseStatus | null;
 }
 
 export const AiSidebar: React.FC<AiSidebarProps> = ({
@@ -40,6 +43,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   onUpdateSessionTitle,
   onClearSessions,
   onSelectPreset,
+  workflowLicenseStatus,
 }) => {
   const [keyword, setKeyword] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -47,6 +51,8 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
 
   const getPresetIcon = (iconName: string) => {
     switch (iconName) {
+      case 'Workflow':
+        return Workflow;
       case 'Sparkles':
         return Sparkles;
       case 'Database':
@@ -154,10 +160,24 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
                   <Icon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-sky-600' : 'text-slate-500'}`} />
                   <span className="truncate">{preset.name.split(' (')[0]}</span>
                 </div>
-                {preset.badge && (
-                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-200/80 text-slate-600 font-mono shrink-0">
-                    {preset.badge}
-                  </span>
+                {preset.id === "autoflow-architect" ? (
+                  workflowLicenseStatus?.isAuthorized ? (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono shrink-0 flex items-center space-x-0.5">
+                      <Unlock className="w-2.5 h-2.5 mr-0.5" />
+                      <span>剩{workflowLicenseStatus.remainingDays}天</span>
+                    </span>
+                  ) : (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono shrink-0 flex items-center space-x-0.5">
+                      <Lock className="w-2.5 h-2.5 mr-0.5" />
+                      <span>已上锁</span>
+                    </span>
+                  )
+                ) : (
+                  preset.badge && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-200/80 text-slate-600 font-mono shrink-0">
+                      {preset.badge}
+                    </span>
+                  )
                 )}
               </button>
             );

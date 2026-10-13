@@ -3,7 +3,10 @@ import {
   FileDown, 
   RefreshCw, 
   FileSpreadsheet,
-  RotateCw
+  RotateCw,
+  Search,
+  X,
+  KeyRound
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { EntityMetadata, FieldMetadata, ScrollProgress } from '../../../shared/types';
@@ -22,7 +25,8 @@ export const DataExporter: React.FC<DataExporterProps> = ({
 }) => {
   const [selectedEntityApiKey, setSelectedEntityApiKey] = useState(defaultEntityApiKey || 'account');
   const [fields, setFields] = useState<FieldMetadata[]>([]);
-  const [selectedFieldKeys, setSelectedFieldKeys] = useState<string[]>([]);
+  const [selectedFieldKeys, setSelectedFieldKeys] = useState<string[]>(['id']);
+  const [fieldKeyword, setFieldKeyword] = useState<string>('');
   const [limit, setLimit] = useState<number>(0); // 0 代表全量导出
   const [customWhere, setCustomWhere] = useState<string>('');
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv' | 'json'>('xlsx');
@@ -40,52 +44,112 @@ export const DataExporter: React.FC<DataExporterProps> = ({
   const loadFields = async (apiKey: string) => {
     setLoadingFields(true);
     try {
-      const list = await window.neoApi.getFields(apiKey);
-      setFields(list);
-      setSelectedFieldKeys(list.slice(0, 15).map((f) => f.apiKey));
+      const rawList = await window.neoApi.getFields(apiKey);
+      // 确保数据主键 id 始终排在第一位，且名称清晰展示为“数据ID”
+      const existingIdField = rawList.find((f) => f.apiKey === 'id');
+      const idField: FieldMetadata = existingIdField
+        ? { ...existingIdField, label: existingIdField.label || '数据ID' }
+        : {
+            apiKey: 'id',
+            label: '数据ID',
+            itemType: 19,
+            typeName: '长整数',
+            custom: false,
+          };
+
+      const otherFields = rawList.filter((f) => f.apiKey !== 'id');
+      const normalizedList = [idField, ...otherFields];
+
+      setFields(normalizedList);
+      // 默认勾选 id + 前 15 个核心业务字段
+      const defaultSelected = ['id', ...otherFields.slice(0, 15).map((f) => f.apiKey)];
+      setSelectedFieldKeys(defaultSelected);
     } catch {
-      setFields([]);
-      setSelectedFieldKeys([]);
+      const fallbackId: FieldMetadata = {
+        apiKey: 'id',
+        label: '数据ID',
+        itemType: 19,
+        typeName: '长整数',
+        custom: false,
+      };
+      setFields([fallbackId]);
+      setSelectedFieldKeys(['id']);
     } finally {
       setLoadingFields(false);
     }
   };
 
   useEffect(() => {
+    setFieldKeyword('');
     loadFields(selectedEntityApiKey);
   }, [selectedEntityApiKey]);
 
+  const filteredFields = fields.filter((f) => {
+    const kw = fieldKeyword.trim().toLowerCase();
+    if (!kw) return true;
+    return (
+      (f.label || '').toLowerCase().includes(kw) ||
+      (f.apiKey || '').toLowerCase().includes(kw)
+    );
+  });
+
   const handleToggleAll = () => {
     if (selectedFieldKeys.length === fields.length) {
-      setSelectedFieldKeys([]);
+      // 取消全选时仍默认保留主键数据 ID
+      setSelectedFieldKeys(['id']);
     } else {
-      setSelectedFieldKeys(fields.map((f) => f.apiKey));
+      setSelectedFieldKeys([
+        'id',
+        ...fields.filter((f) => f.apiKey !== 'id').map((f) => f.apiKey),
+      ]);
     }
   };
 
+  const handleSelectFiltered = () => {
+    const nextSet = new Set(['id', ...selectedFieldKeys]);
+    const allFilteredSelected = filteredFields.every((f) => nextSet.has(f.apiKey));
+    if (allFilteredSelected) {
+      filteredFields.forEach((f) => {
+        if (f.apiKey !== 'id') nextSet.delete(f.apiKey);
+      });
+    } else {
+      filteredFields.forEach((f) => nextSet.add(f.apiKey));
+    }
+    setSelectedFieldKeys(Array.from(nextSet));
+  };
+
+  const handleResetDefault = () => {
+    const otherFields = fields.filter((f) => f.apiKey !== 'id');
+    setSelectedFieldKeys(['id', ...otherFields.slice(0, 15).map((f) => f.apiKey)]);
+  };
+
   const handleToggleField = (key: string) => {
+    if (key === 'id') {
+      showToast('info', '数据 ID (id) 为导出默认必选主键列');
+      return;
+    }
     if (selectedFieldKeys.includes(key)) {
       setSelectedFieldKeys(selectedFieldKeys.filter((k) => k !== key));
     } else {
-      setSelectedFieldKeys([...selectedFieldKeys, key]);
+      setSelectedFieldKeys(['id', ...selectedFieldKeys.filter((k) => k !== 'id'), key]);
     }
   };
 
   const handleExport = async () => {
-    if (!selectedFieldKeys.length) {
-      showToast('info', '请至少勾选一个要导出的字段');
-      return;
-    }
+    // 强制保证 id (数据ID) 排在导出字段的第一列
+    const exportFieldKeys = [
+      'id',
+      ...selectedFieldKeys.filter((k) => k !== 'id'),
+    ];
 
     setIsExporting(true);
     setScrollProgress(null);
     try {
-      const fieldsStr = selectedFieldKeys.join(', ');
+      const fieldsStr = exportFieldKeys.join(', ');
       const whereClause = customWhere.trim() ? `WHERE ${customWhere.trim()}` : '';
 
       let res: any;
       if (limit > 100 || limit === 0) {
-        // 使用滚动查询模式，突破 100 条限制
         const sql = `SELECT ${fieldsStr} FROM ${selectedEntityApiKey} ${whereClause}`;
         const maxRecords = limit === 0 ? 50000 : limit;
         res = await window.neoApi.executeScrollQuery(sql, 1000, maxRecords);
@@ -104,7 +168,14 @@ export const DataExporter: React.FC<DataExporterProps> = ({
       const entityLabel = targetEntity?.label || selectedEntityApiKey;
 
       if (exportFormat === 'json') {
-        const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
+        const orderedRecords = records.map((r: any) => {
+          const obj: Record<string, any> = { id: r.id };
+          for (const k of exportFieldKeys) {
+            obj[k] = r[k];
+          }
+          return obj;
+        });
+        const blob = new Blob([JSON.stringify(orderedRecords, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -112,13 +183,14 @@ export const DataExporter: React.FC<DataExporterProps> = ({
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        const headers = selectedFieldKeys.map((k) => {
+        const headers = exportFieldKeys.map((k) => {
+          if (k === 'id') return '数据ID (id)';
           const f = fields.find((item) => item.apiKey === k);
           return f ? `${f.label} (${k})` : k;
         });
 
         const rows = records.map((r: any) => {
-          return selectedFieldKeys.map((k) => {
+          return exportFieldKeys.map((k) => {
             const val = r[k];
             if (typeof val === 'object' && val !== null) return JSON.stringify(val);
             return val ?? '';
@@ -136,7 +208,7 @@ export const DataExporter: React.FC<DataExporterProps> = ({
         });
       }
 
-      showToast('success', `成功导出全部 ${records.length} 条数据！`);
+      showToast('success', `成功导出全部 ${records.length} 条数据（首列已包含数据ID）！`);
     } catch (e: any) {
       showToast('error', `导出异常: ${e.message}`);
     } finally {
@@ -154,7 +226,7 @@ export const DataExporter: React.FC<DataExporterProps> = ({
             <div>
               <h3 className="text-base font-semibold text-slate-900">批量数据导出中心 (支持全量滚动导出)</h3>
               <p className="text-[11px] text-slate-500">
-                支持选择对象、勾选字段范围、突破 100 条限制全量滚动导出为 Excel、CSV 或 JSON
+                支持选择对象、搜索勾选字段、默认包含主键数据ID (id)，突破 100 条限制全量导出为 Excel、CSV 或 JSON
               </p>
             </div>
           </div>
@@ -167,50 +239,112 @@ export const DataExporter: React.FC<DataExporterProps> = ({
           />
         </div>
 
-        {/* 字段勾选区域 */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
+        {/* 字段搜索与勾选区域 */}
+        <div className="space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center space-x-2 text-xs text-slate-700">
               <span className="font-semibold">选择要导出的字段列</span>
               <span className="text-slate-400 font-mono">
-                (已选 {selectedFieldKeys.length} / 共 {fields.length} 个字段)
+                (已选 {selectedFieldKeys.length} / 共 {fields.length} 个字段，首列固定包含数据ID)
               </span>
             </div>
-            <button
-              onClick={handleToggleAll}
-              className="text-xs text-sky-600 hover:text-sky-700 font-medium transition-colors"
-            >
-              {selectedFieldKeys.length === fields.length ? '取消全选' : '全选所有字段'}
-            </button>
+
+            <div className="flex items-center space-x-3">
+              {/* 字段实时搜索框 */}
+              <div className="relative w-64">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                <input
+                  type="text"
+                  value={fieldKeyword}
+                  onChange={(e) => setFieldKeyword(e.target.value)}
+                  placeholder="搜索字段中文名或 API Key..."
+                  className="w-full pl-8 pr-7 py-1 text-xs rounded-lg border border-slate-200 bg-slate-50/70 text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-sky-500 transition-all"
+                />
+                {fieldKeyword && (
+                  <button
+                    type="button"
+                    onClick={() => setFieldKeyword('')}
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {fieldKeyword.trim() && (
+                <button
+                  type="button"
+                  onClick={handleSelectFiltered}
+                  className="text-xs text-emerald-600 hover:text-emerald-700 font-medium transition-colors cursor-pointer"
+                >
+                  勾选/取消搜索结果 ({filteredFields.length})
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleResetDefault}
+                className="text-xs text-slate-500 hover:text-slate-700 font-medium transition-colors cursor-pointer"
+              >
+                重置默认
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleAll}
+                className="text-xs text-sky-600 hover:text-sky-700 font-medium transition-colors cursor-pointer"
+              >
+                {selectedFieldKeys.length === fields.length ? '仅保留数据ID' : '全选所有字段'}
+              </button>
+            </div>
           </div>
 
-          <div className="p-3 bg-slate-50/70 rounded-xl border border-slate-200 max-h-48 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          <div className="p-3 bg-slate-50/70 rounded-xl border border-slate-200 max-h-56 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
             {loadingFields ? (
               <div className="col-span-full py-8 text-center text-xs text-slate-500 flex items-center justify-center space-x-2">
                 <RefreshCw className="w-4 h-4 animate-spin text-sky-600" />
                 <span>正在加载字段元数据...</span>
               </div>
+            ) : filteredFields.length === 0 ? (
+              <div className="col-span-full py-6 text-center text-xs text-slate-400">
+                未找到匹配 “{fieldKeyword}” 的字段
+              </div>
             ) : (
-              fields.map((f) => {
-                const checked = selectedFieldKeys.includes(f.apiKey);
+              filteredFields.map((f) => {
+                const isPrimaryId = f.apiKey === 'id';
+                const checked = isPrimaryId || selectedFieldKeys.includes(f.apiKey);
                 return (
                   <label
                     key={f.apiKey}
                     onClick={() => handleToggleField(f.apiKey)}
-                    className={`flex items-center space-x-2 p-2 rounded-lg cursor-pointer text-xs select-none transition-colors border ${
-                      checked
+                    className={`flex items-center justify-between p-2 rounded-lg cursor-pointer text-xs select-none transition-colors border ${
+                      isPrimaryId
+                        ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950 font-semibold'
+                        : checked
                         ? 'bg-sky-50 border-sky-300 text-slate-900 font-medium'
                         : 'bg-white border-slate-200/80 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => {}}
-                      className="rounded border-slate-300 text-sky-600 focus:ring-0"
-                    />
-                    <span className="truncate" title={`${f.label} (${f.apiKey})`}>
-                      {f.label}
+                    <div className="flex items-center space-x-2 min-w-0 pr-1">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={isPrimaryId}
+                        onChange={() => {}}
+                        className="rounded border-slate-300 text-sky-600 focus:ring-0 shrink-0"
+                      />
+                      <span className="truncate" title={`${f.label} (${f.apiKey})`}>
+                        {isPrimaryId ? '数据ID' : f.label}
+                      </span>
+                    </div>
+                    <span
+                      className={`text-[10px] font-mono shrink-0 ${
+                        isPrimaryId
+                          ? 'px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-semibold'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {isPrimaryId ? 'id · 默认必含' : f.apiKey}
                     </span>
                   </label>
                 );
@@ -305,7 +439,7 @@ export const DataExporter: React.FC<DataExporterProps> = ({
           <button
             onClick={handleExport}
             disabled={isExporting}
-            className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center space-x-2 disabled:opacity-50"
+            className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center space-x-2 disabled:opacity-50 cursor-pointer"
           >
             <FileDown className={`w-4 h-4 ${isExporting ? 'animate-spin' : ''}`} />
             <span>{isExporting ? '正在全量拉取并生成文件...' : '开始导出数据文件'}</span>

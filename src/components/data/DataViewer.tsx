@@ -37,6 +37,7 @@ export const DataViewer: React.FC<DataViewerProps> = ({
   const [fields, setFields] = useState<FieldMetadata[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [fieldFilterKeyword, setFieldFilterKeyword] = useState<string>("");
 
   const [relatedNames, setRelatedNames] = useState<Record<string, string>>({});
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -101,7 +102,7 @@ export const DataViewer: React.FC<DataViewerProps> = ({
     setErrorMsg('');
     setRecordData(null);
     try {
-      const res = await window.neoApi.searchRecords(entityKey, name, 15);
+      const res = await window.neoApi.searchRecords(entityKey, name, 200);
       if (res.success && res.records.length > 0) {
         if (res.records.length === 1) {
           await executeQueryById(entityKey, res.records[0].id);
@@ -140,10 +141,14 @@ export const DataViewer: React.FC<DataViewerProps> = ({
     const targetMap: Record<string, (string | number)[]> = {};
 
     fieldList.forEach((f) => {
-      if (f.referObjectApiKey && data[f.apiKey]) {
+      if ((f.referObjectApiKey || f.apiKey === 'entityType') && data[f.apiKey]) {
         const refId = data[f.apiKey];
-        if (!targetMap[f.referObjectApiKey]) targetMap[f.referObjectApiKey] = [];
-        targetMap[f.referObjectApiKey].push(refId);
+        const refKey =
+          f.referObjectApiKey === 'entityBelongType' || f.apiKey === 'entityType'
+            ? `entityBelongType:${selectedEntityApiKey}`
+            : f.referObjectApiKey!;
+        if (!targetMap[refKey]) targetMap[refKey] = [];
+        targetMap[refKey].push(refId);
       }
     });
 
@@ -262,18 +267,39 @@ export const DataViewer: React.FC<DataViewerProps> = ({
               </p>
             </div>
 
-            <button
-              onClick={() => onNavigateToEdit(selectedEntityApiKey, recordData.id, recordData)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-              <span>以此记录进入编辑更新</span>
-            </button>
+            <div className="flex items-center space-x-2.5">
+              <div className="relative w-60">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                <input
+                  type="text"
+                  value={fieldFilterKeyword}
+                  onChange={(e) => setFieldFilterKeyword(e.target.value)}
+                  placeholder="搜索字段名、API Key 或值..."
+                  className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border border-slate-200 bg-slate-50/70 text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-sky-500"
+                />
+              </div>
+              <button
+                onClick={() => onNavigateToEdit(selectedEntityApiKey, recordData.id, recordData)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all shrink-0 cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>以此记录进入编辑更新</span>
+              </button>
+            </div>
           </div>
 
           {/* 字段明细网格 */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {Object.entries(recordData).map(([key, value]) => {
+            {Object.entries(recordData)
+              .filter(([key, value]) => {
+                const kw = fieldFilterKeyword.trim().toLowerCase();
+                if (!kw) return true;
+                const meta = fields.find((f) => f.apiKey === key);
+                const label = (meta?.label || key).toLowerCase();
+                const valStr = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? "");
+                return label.includes(kw) || key.toLowerCase().includes(kw) || valStr.toLowerCase().includes(kw);
+              })
+              .map(([key, value]) => {
               const meta = fields.find((f) => f.apiKey === key);
               const label = meta?.label || key;
               const isRefer = !!meta?.referObjectApiKey;
@@ -308,18 +334,20 @@ export const DataViewer: React.FC<DataViewerProps> = ({
                         </span>
                         <span className="text-[10px] font-mono text-slate-400">ID: {value}</span>
                       </div>
-                      <button
-                        onClick={() => {
-                          setDrawerEntity(meta!.referObjectApiKey!);
-                          setDrawerId(value);
-                          setDrawerOpen(true);
-                        }}
-                        className="px-2 py-1 bg-white hover:bg-sky-600 text-sky-700 hover:text-white rounded text-[10px] font-medium border border-sky-200 flex items-center space-x-1 flex-shrink-0 transition-colors shadow-2xs"
-                        title="穿透查看该关联对象的数据详情"
-                      >
-                        <span>钻取</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </button>
+                      {!meta?.referObjectApiKey?.startsWith('entityBelongType') && key !== 'entityType' && (
+                        <button
+                          onClick={() => {
+                            setDrawerEntity(meta!.referObjectApiKey!);
+                            setDrawerId(value);
+                            setDrawerOpen(true);
+                          }}
+                          className="px-2 py-1 bg-white hover:bg-sky-600 text-sky-700 hover:text-white rounded text-[10px] font-medium border border-sky-200 flex items-center space-x-1 flex-shrink-0 transition-colors shadow-2xs cursor-pointer"
+                          title="穿透查看该关联对象的数据详情"
+                        >
+                          <span>钻取</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center justify-between">

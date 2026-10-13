@@ -379,6 +379,22 @@ export const DEFAULT_AI_SETTINGS: AiHarnessSettings = {
  */
 export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
+    id: "autoflow-architect",
+    name: "自动流程架构与部署专家 (Automatic Flow)",
+    description: "销售易自动流程 (procType=1) 全生命周期专家：精通方案分析、拓扑与变量设计、代码级配置部署与运行验证",
+    iconName: "Workflow",
+    badge: "工作流专精",
+    enableCrmTools: true,
+    recommendedModel: "deepseek-chat",
+    systemPrompt: `[PROTECTED_PRESET::autoflow-architect]`,
+    quickPrompts: [
+      "请为【服务工单】设计一套创建或更新时自动分流派单的自动流程方案",
+      "根据文档规范，如何用代码配置一个包含查询关联记录、循环处理和字段回写的自动流程？",
+      "对比销售易自动流程 (automaticflow)、触发器 (Trigger) 与审批流 (approvalFlow) 的适用场景",
+      "我需要设计一个商机赢单时批量创建交付任务并发送通知的自动流程并生成部署方案",
+    ],
+  },
+  {
     id: 'harness-agent',
     name: 'NeoCRM 全能架构师 (Harness Agent)',
     description: '连接当前租户环境，支持自动调用元数据与数据工具查对象、查字段、执行 SQL 诊断',
@@ -407,12 +423,30 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     badge: 'SQL专精',
     enableCrmTools: true,
     recommendedModel: 'deepseek-chat',
-    systemPrompt: `你是一个精通销售易 (NeoCRM) SQL / XOQL 查询的专业数据分析师。
-销售易 SQL 规范与特性：
-- 支持标准 SELECT 字段 FROM 对象 WHERE 条件 ORDER BY 排序 LIMIT 限制。
-- 关联字段（如 accountId）查询关联对象名称时，销售易支持类似 accountId.name 或直接查 ID 并结合 lookup。
-- 绝不使用 DELETE/DROP/UPDATE，只编写查询语句。
-- 编写 SQL 时，请包裹在标准 sql 代码块中，并清晰说明各查询字段含义和过滤逻辑。`,
+    systemPrompt: `你是一个精通销售易 (NeoCRM) XOQL / SQL 查询的专业数据分析师。
+【销售易 XOQL 核心语法规范（必须严格遵守）】：
+1. 严禁使用 SELECT *（必须显式指定字段名），严禁使用 JOIN / LEFT JOIN / INNER JOIN 语法！
+2. 跨对象关联字段查询使用点号穿透（Lookup Dot-Notation）：
+   - 例如查询负责人姓名：ownerId.name、创建人姓名：createdBy.name、所属部门：dimDepart.departName
+   - 查询关联客户名称：accountId.accountName（注意客户对象的名称字段是 accountName 而非 name！）
+3. 销售易标准对象主名称字段对照表：
+   - 客户 (account) -> accountName
+   - 联系人 (contact) -> contactName
+   - 销售机会/商机 (opportunity) -> opportunityName
+   - 销售线索 (lead) -> name, companyName
+   - 订单 (order) -> po
+   - 合同 (contract) -> title
+   - 产品 (product) -> productName
+   - 部门 (department) -> departName
+   - 用户 (user) 及自定义对象 (*__c) -> name
+4. 聚合与分组规范：
+   - 支持 COUNT(id)、SUM(field)、AVG(field)、MAX(field)、MIN(field) 与 GROUP BY；
+   - 【重要】：ORDER BY 和 HAVING 中严禁直接写聚合列别名（如 ORDER BY cnt DESC 会报错），必须写原聚合表达式（如 ORDER BY COUNT(id) DESC）。
+5. 日期与选项值规范：
+   - 日期时间字段（createdAt、updatedAt、closeDate 等）底层存储为 13 位毫秒级时间戳；
+   - 空值过滤必须使用 IS NULL 或 IS NOT NULL；
+   - 编写 SQL 前，若不确定目标对象的字段 API Key，请先调用 get_entity_fields 工具核实真实字段列表。
+6. 编写 SQL 时请包裹在标准 sql 代码块中，清晰说明查询字段含义与过滤逻辑。`,
     quickPrompts: [
       '写一条查询今年所有已赢单商机及所属客户名称的 SQL',
       '查询最近创建的 50 条客户记录，包含负责人和创建时间',
@@ -560,6 +594,15 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     category: "builtin",
     iconName: "ShieldCheck",
     triggerKeywords: ["质检", "清洗", "校验", "格式检查", "脏数据"],
+    enabled: true,
+  },
+  {
+    id: "skill-autoflow-spec",
+    name: "销售易自动流程代码配置与验证规范",
+    description: "严格遵循自动流程 (procType=1) 三组 API 架构、原生 7 节点图模型、变量拼写与至少一个 ServiceTask 启停铁律。",
+    category: "builtin",
+    iconName: "Workflow",
+    triggerKeywords: ["自动流程", "流程", "creekflow", "autoflow", "工作流", "节点", "网关", "循环", "流部署"],
     enabled: true,
   },
 ];

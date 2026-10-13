@@ -326,10 +326,32 @@ export class AuthService {
 
             if (code) {
               isSettled = true;
+              let capturedCookies: any[] = [];
+              let cookieString = "";
+              try {
+                const rawCookies = await authSession.cookies.get({});
+                capturedCookies = rawCookies.map((c) => ({
+                  name: c.name,
+                  value: c.value,
+                  domain: c.domain,
+                  path: c.path,
+                  secure: c.secure,
+                  httpOnly: c.httpOnly,
+                }));
+                cookieString = rawCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+              } catch (cookieErr) {
+                console.warn("提取内嵌浏览器 Cookies 异常:", cookieErr);
+              }
+
               authWin.close();
               this.embeddedAuthWindow = null;
               try {
                 const token = await this.fetchTokenByCode(env, code, redirectUri);
+                if (cookieString) {
+                  token.cookieString = cookieString;
+                  token.cookies = capturedCookies;
+                  token.cookieSavedAt = Date.now();
+                }
                 resolve(token);
               } catch (e) {
                 reject(e);
@@ -557,6 +579,147 @@ export class AuthService {
   /**
    * 根据返回的 instance_uri 解析实际的根地址
    */
+  /**
+   * 独立唤起内嵌窗口访问实例后台以捕获/刷新 Web 管理员会话 Cookie (如 JSESSIONID)
+   */
+  public async captureWebSessionCookie(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    parentWindow?: BrowserWindow
+  ): Promise<{ cookieString: string; cookies: any[] }> {
+    const authPartition = "neocrm_auth_session";
+    const authSession = session.fromPartition(authPartition);
+    const effectiveBaseUrl = this.resolveEffectiveBaseUrl(env, tokenData.instance_uri);
+    let effectiveHost = "";
+    try {
+      effectiveHost = new URL(effectiveBaseUrl).hostname;
+    } catch {}
+
+    const targetUrl = `${effectiveBaseUrl}/admin/creekflow/autoflow-list.action`;
+
+    return new Promise((resolve, reject) => {
+      let isSettled = false;
+      const win = new BrowserWindow({
+        width: 980,
+        height: 740,
+        parent: parentWindow,
+        modal: true,
+        title: `登录并捕获 Web 后台管理会话 Cookie - ${env.name}`,
+        autoHideMenuBar: true,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          partition: authPartition,
+        },
+      });
+
+      const finishCapture = async () => {
+        if (isSettled) return;
+        isSettled = true;
+        try {
+          const rawCookies = await authSession.cookies.get({});
+          const cookies = rawCookies.map((c) => ({
+            name: c.name,
+            value: c.value,
+            domain: c.domain,
+            path: c.path,
+            secure: c.secure,
+            httpOnly: c.httpOnly,
+          }));
+          const cookieMap = new Map<string, string>();
+          for (const c of rawCookies) {
+            if (c.path && c.path !== "/") continue;
+            cookieMap.set(c.name, c.value);
+          }
+          const cookieString = Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
+          if (!win.isDestroyed()) win.close();
+          resolve({ cookieString, cookies });
+        } catch (err: any) {
+          if (!win.isDestroyed()) win.close();
+          reject(new Error(`读取 Cookies 失败: ${err.message}`));
+        }
+      };
+
+      const checkAndInjectStatus = async () => {
+        if (isSettled || win.isDestroyed()) return;
+        const curUrl = win.webContents.getURL();
+
+        // 判断是否仍在登录页或 SSO 跳转途中
+        const isLoginFlow =
+          curUrl.includes("login-sandbox") ||
+          curUrl.includes("login.xiaoshouyi") ||
+          curUrl.includes("/login.action") ||
+          curUrl.includes("/oauth2/auth") ||
+          curUrl.includes("/neologin/");
+
+        // 注入顶部状态引导条，允许用户随时点击完成捕获
+        win.webContents
+          .executeJavaScript(`
+            (function() {
+              if (document.getElementById("__neocrm_cookie_banner")) return;
+              var bar = document.createElement("div");
+              bar.id = "__neocrm_cookie_banner";
+              bar.style.cssText = "position:fixed;top:0;left:0;right:0;height:38px;background:linear-gradient(90deg,#0d9488,#059669);color:#fff;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:12px;font-family:sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.15);";
+              bar.innerHTML = "<span>🔐 <b>NeoCRM 后台会话捕获模式</b>：请在下方完成账号登录，进入系统后台后将自动提取管理员 Cookie 并关闭窗口。</span><button onclick=\"window.close()\" style=\"background:#fff;color:#0f766e;border:none;padding:4px 12px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:12px;\">我已登录，立即提取并关闭</button>";
+              document.body.appendChild(bar);
+            })();
+          `)
+          .catch(() => {});
+
+        if (!isLoginFlow && (effectiveHost ? curUrl.includes(effectiveHost) : curUrl.includes("/admin/"))) {
+          try {
+            const rawCookies = await authSession.cookies.get({});
+            const hasAdminPassport = rawCookies.some(
+              (c) =>
+                (c.name === "x-ienterprise-passport" ||
+                  c.name === "AUC_SESSION" ||
+                  c.name === "JSESSIONID") &&
+                c.value &&
+                c.value.length > 5
+            );
+            if (hasAdminPassport) {
+              setTimeout(finishCapture, 800);
+            }
+          } catch {}
+        }
+      };
+
+      win.webContents.on("did-finish-load", checkAndInjectStatus);
+      win.webContents.on("did-navigate", checkAndInjectStatus);
+
+      win.on("closed", async () => {
+        if (!isSettled) {
+          isSettled = true;
+          try {
+            const rawCookies = await authSession.cookies.get({});
+            const cookies = rawCookies.map((c) => ({
+              name: c.name,
+              value: c.value,
+              domain: c.domain,
+              path: c.path,
+            }));
+            const cookieMap = new Map<string, string>();
+          for (const c of rawCookies) {
+            if (c.path && c.path !== "/") continue;
+            cookieMap.set(c.name, c.value);
+          }
+          const cookieString = Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
+            resolve({ cookieString, cookies });
+          } catch {
+            reject(new Error("用户关闭了捕获窗口"));
+          }
+        }
+      });
+
+      win.loadURL(targetUrl).catch((err) => {
+        if (!isSettled) {
+          if (!win.isDestroyed()) win.close();
+          reject(new Error(`无法打开后台页面: ${err.message}`));
+        }
+      });
+    });
+  }
+
   private resolveEffectiveBaseUrl(env: NeoEnvironment, instanceUri?: string): string {
     if (instanceUri && typeof instanceUri === 'string' && instanceUri.trim()) {
       try {

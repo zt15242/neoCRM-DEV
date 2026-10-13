@@ -33,8 +33,25 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
   onNavigateToEdit,
   showToast,
 }) => {
-  const [selectedEntityApiKey, setSelectedEntityApiKey] = useState(defaultEntityApiKey || 'account');
-  const [sqlQuery, setSqlQuery] = useState(`SELECT id, createdAt FROM ${defaultEntityApiKey || 'account'} WHERE id > 0 LIMIT 20`);
+  const getEntityPrimaryNameCol = (apiKey: string) => {
+    const map: Record<string, string> = {
+      account: "accountName",
+      contact: "contactName",
+      opportunity: "opportunityName",
+      lead: "name",
+      order: "po",
+      contract: "title",
+      product: "productName",
+      user: "name",
+      department: "departName",
+    };
+    return map[apiKey] || "name";
+  };
+
+  const [selectedEntityApiKey, setSelectedEntityApiKey] = useState(defaultEntityApiKey || "account");
+  const [sqlQuery, setSqlQuery] = useState(
+    `SELECT id, ${getEntityPrimaryNameCol(defaultEntityApiKey || "account")}, createdAt FROM ${defaultEntityApiKey || "account"} WHERE id > 0 LIMIT 20`
+  );
   
   // 查询模式: 'normal' (普通模式) | 'scroll' (滚动全量模式)
   const [queryMode, setQueryMode] = useState<'normal' | 'scroll'>('normal');
@@ -57,14 +74,15 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
     };
   }, []);
 
-  const getRecommendedSql = (apiKey: string, type: 'default' | 'latest' | 'all' = 'default') => {
-    if (type === 'latest') {
-      return `SELECT id, createdAt FROM ${apiKey} ORDER BY createdAt DESC LIMIT 50`;
+  const getRecommendedSql = (apiKey: string, type: "default" | "latest" | "all" = "default") => {
+    const nameCol = getEntityPrimaryNameCol(apiKey);
+    if (type === "latest") {
+      return `SELECT id, ${nameCol}, createdAt FROM ${apiKey} ORDER BY createdAt DESC LIMIT 50`;
     }
-    if (type === 'all') {
-      return `SELECT id, createdAt FROM ${apiKey}`;
+    if (type === "all") {
+      return `SELECT id, ${nameCol}, createdAt FROM ${apiKey}`;
     }
-    return `SELECT id, createdAt FROM ${apiKey} WHERE id > 0 LIMIT 20`;
+    return `SELECT id, ${nameCol}, createdAt FROM ${apiKey} WHERE id > 0 LIMIT 20`;
   };
 
   useEffect(() => {

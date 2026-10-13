@@ -11,7 +11,8 @@ import {
   ShieldCheck,
   Plug,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Workflow
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -44,6 +45,20 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           badge: '字段字典',
           color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
         };
+      case "list_autoflows":
+        return {
+          title: "检索当前租户自动流程列表",
+          icon: Workflow,
+          badge: "流程中心",
+          color: "text-teal-600 bg-teal-50 border-teal-200",
+        };
+      case "inspect_autoflow":
+        return {
+          title: `调阅自动流程拓扑结构 (${toolCall.arguments?.procdefId || ""})`,
+          icon: Workflow,
+          badge: "图模型引擎",
+          color: "text-teal-600 bg-teal-50 border-teal-200",
+        };
       case 'execute_sql_query':
         return {
           title: '执行销售易只读数据查询',
@@ -64,7 +79,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_autoflows', 'inspect_autoflow'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">

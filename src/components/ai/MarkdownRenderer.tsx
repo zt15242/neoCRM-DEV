@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
-import { Check, Copy, Play } from 'lucide-react';
+import { Check, Copy, Play, Workflow } from 'lucide-react';
+import { WorkflowDeployPlan } from '../../../shared/types';
+import { extractWorkflowPlanFromText } from './workflowPlanHelper';
+import { WorkflowPlanCard } from './WorkflowPlanCard';
 
 interface MarkdownRendererProps {
   content: string;
   onExecuteSql?: (sql: string) => void;
+  onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = (text: string, id: string) => {
@@ -45,6 +49,23 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
     });
   }
 
+  // 预处理: 若存在机密工作流方案代码块，清除前驱文本中的引导说明文字
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (
+      p.type === "code" &&
+      (p.lang?.toLowerCase().includes("workflow") ||
+        (p.content.includes('"flow"') && p.content.includes('"nodes"')))
+    ) {
+      if (i > 0 && parts[i - 1].type === "text") {
+        parts[i - 1].content = parts[i - 1].content
+          .replace(/(?:\r?\n---\s*)?\r?\n#{1,6}\s*[^\n]*(?:结构化代码配置|代码配置交付|Workflow\s*Plan|部署契约)[\s\S]*$/i, "")
+          .replace(/\r?\n[^\n]*(?:捕获以下\s*JSON|JSON\s*契约|json:workflow-plan|以下\s*JSON)[^\n]*\s*$/i, "")
+          .trimEnd();
+      }
+    }
+  }
+
   return (
     <div className="space-y-3 text-slate-800 text-[13px] leading-relaxed break-words">
       {parts.map((part, index) => {
@@ -64,6 +85,36 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
             );
           }
 
+          const isWorkflowPlan =
+            part.lang?.toLowerCase() === "json:workflow-plan" ||
+            part.lang?.toLowerCase() === "workflow-plan" ||
+            (part.content.includes('"flow"') && part.content.includes('"nodes"'));
+
+          if (isWorkflowPlan) {
+            const parsedWorkflowPlan = extractWorkflowPlanFromText('```json\n' + part.content + '\n```');
+            if (parsedWorkflowPlan && onOpenDeployWorkflow) {
+              return (
+                <div key={index} className="my-2">
+                  <WorkflowPlanCard
+                    plan={parsedWorkflowPlan}
+                    onOpenConfirm={() => onOpenDeployWorkflow(parsedWorkflowPlan)}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div
+                key={index}
+                className="my-3 p-3.5 rounded-2xl border border-teal-200 bg-teal-50/50 flex items-center space-x-2.5 text-xs text-teal-800"
+              >
+                <span className="w-2 h-2 rounded-full bg-teal-600 animate-ping" />
+                <span className="font-medium">
+                  正在生成自动流程配置方案 (底层机密契约已受沙箱隔离保护)...
+                </span>
+              </div>
+            );
+          }
+
           const isSql =
             part.lang?.toLowerCase() === 'sql' ||
             (part.content.trim().toUpperCase().startsWith('SELECT') && !part.lang);
@@ -78,6 +129,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
                   {part.lang || 'code'}
                 </span>
                 <div className="flex items-center space-x-2">
+
                   {isSql && onExecuteSql && (
                     <button
                       onClick={() => onExecuteSql(part.content.trim())}

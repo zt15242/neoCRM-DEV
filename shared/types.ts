@@ -36,6 +36,10 @@ export interface TokenData {
   userInfo?: UserInfo;
   savedAt: number;
   expiresAt: number;
+  // Web 控制台与内部 /admin/ 接口会话 Cookie (如 JSESSIONID 等)
+  cookieString?: string;
+  cookies?: Array<{ name: string; value: string; domain?: string; path?: string }>;
+  cookieSavedAt?: number;
 }
 
 export interface SessionState {
@@ -76,6 +80,7 @@ export interface EntityMetadata {
   label: string;
   description?: string;
   isStandard: boolean;
+  objectId?: number | string;
   enableBusitype?: boolean;
   enableGroupMember?: boolean;
   enableScriptExecutor?: boolean;
@@ -396,4 +401,134 @@ export interface AiAgentPreset {
   recommendedModel?: string;
   enableCrmTools: boolean;
   quickPrompts: string[];
+}
+
+// ================= 销售易自动流程 (Automatic Flow) 代码配置与部署契约 =================
+export interface WorkflowNodeItem {
+  id: string; // 节点 ID, 如 StartEvent_1, ServiceTask_1, QueryLog_1, Gateway_1, Loop_1, Assignment_1, EndEvent_1
+  nodeType: "StartNoneEvent" | "ServiceTask" | "Assignment" | "QueryLog" | "Loop" | "ExclusiveGateway" | "EndNoneEvent";
+  name: string; // 节点显示名称
+  description?: string;
+  actionConfig?: {
+    actionName: string;
+    actionType: number; // 2: 更新记录, 1: 创建记录, 3: 系统通知, 4: 发送邮件, 5: 业务事件...
+    entityApiKey?: string;
+    valueConfig?: any;
+    description?: string;
+  };
+  queryConfig?: {
+    searchObject: string; // 目标对象 API Key
+    searchObjectLabel?: string;
+    searchDataLimit: "1" | "2"; // 1: 第一条, 2: 全部最多1000条
+    searchResultVariavle: string; // 存储结果的集合变量或对象变量名
+    searchSortDesc?: "1" | "2" | "3"; // 1默认, 3升序, 2降序
+    searchSortItem?: string;
+    conditions?: Array<{
+      field: string;
+      operator: string;
+      value: any;
+    }>;
+  };
+  loopConfig?: {
+    loopVariavle: string; // 循环遍历的多值集合变量
+    loopCursor: string; // 循环单值游标变量
+    loopDirect?: number; // 1: 正向, 0: 反向
+  };
+  assignmentConfig?: {
+    assignments: Array<{
+      targetVariable: string;
+      operator: string;
+      value: any;
+    }>;
+  };
+}
+
+export interface WorkflowVariableItem {
+  apiKey: string; // 变量 API Key (跨节点引用)
+  describe: string; // 描述与中文名
+  variavleType: 1 | 2; // 1: 单值, 2: 多值集合 (严格遵循源码拼写)
+  variavleDataType: string; // 1文本, 3单选, 5整数, 6实数, 1002货币, 7日期, 21时间, 31布尔, 10关联, 1003ID, 1004记录类型...
+  defaultValue?: any;
+  decimal?: number;
+  objectApiKey?: string; // 绑定对象 (当数据类型为关联或记录类型时)
+  objectLabel?: string;
+}
+
+export interface WorkflowGatewayBranch {
+  seqFlowId: string;
+  name: string;
+  targetNodeId: string; // 连线目标节点 ID
+  isDefault: boolean; // 是否为默认分支
+  conditionFormula?: string;
+}
+
+export interface WorkflowDeployPlan {
+  flow: {
+    processName: string; // 流程名称
+    actKey: string; // 流程 API Key (唯一, 字母开头, <=50 字符)
+    entityApiKey: string; // 主关联对象 API Key
+    entityLabel?: string;
+    executeType: string; // 1: 创建, 2: 编辑, 5: 平台事件, 6: 页面按钮, 7: 智能体操作 (逗号拼接)
+    description?: string;
+    enableIntelligentMode?: number; // 1: 开启, 2: 关闭 (默认 2)
+  };
+  variables: WorkflowVariableItem[];
+  nodes: WorkflowNodeItem[];
+  branches?: WorkflowGatewayBranch[];
+  edges?: Array<{ source: string; target: string; label?: string }>;
+}
+
+export interface WorkflowDeployResult {
+  success: boolean;
+  procId?: string | number;
+  procdefId?: string | number;
+  procdefApiKey?: string;
+  status?: number; // 1: 启用, 2: 禁用, 3: 设计态草稿
+  statusText?: string;
+  error?: string;
+  stepsLog?: Array<{
+    step: string;
+    status: "success" | "warn" | "error" | "skipped";
+    message: string;
+    timeMs?: number;
+    details?: any;
+  }>;
+}
+
+/**
+ * 自动流程代码配置功能 — 本地离线设备授权锁状态
+ */
+export interface WorkflowLicenseStatus {
+  /** 当前设备的唯一硬件机器码（一机一码，重装/刷机或换设备后必变） */
+  machineCode: string;
+  /** 当前是否已激活且在有效期内 */
+  isAuthorized: boolean;
+  /** 状态类型 */
+  status: "active" | "expired" | "device_mismatch" | "unactivated" | "clock_tampered";
+  /** 剩余有效天数 */
+  remainingDays: number;
+  /** 授权总天数（默认 30 天） */
+  totalDays?: number;
+  /** 签发时间戳 (ms) */
+  issuedAt?: number;
+  /** 到期时间戳 (ms) */
+  expiresAt?: number;
+  /** 到期日期字符串 (YYYY-MM-DD) */
+  expireDateStr?: string;
+  /** 脱敏后的随机凭证 ID (例如 xiaowukeji-2026-11-12-****A1B2) */
+  credentialSummary?: string;
+  /** 防暴力破解：当前是否处于错误冷却锁定期 */
+  isLockedOut: boolean;
+  /** 防暴力破解：剩余锁定冷却秒数 */
+  lockRemainingSeconds: number;
+  /** 防暴力破解：当前已连续失败次数 */
+  failedAttempts: number;
+  /** 状态说明或错误提示 */
+  message?: string;
+}
+
+export interface WorkflowLicenseActivateResult {
+  success: boolean;
+  message: string;
+  status: WorkflowLicenseStatus;
 }
