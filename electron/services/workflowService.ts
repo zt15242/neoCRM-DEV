@@ -820,6 +820,42 @@ export class WorkflowService {
         } catch {}
       }
 
+      // 当接口无法返回标准对象字段（如 case 对象通过元数据 API 查回为空）时，自动补充权威标准字段列表
+      const STANDARD_ENTITY_FALLBACK_FIELDS: Record<string, Array<{ apiKey: string; label: string; itemType: number }>> = {
+        case: [
+          { apiKey: "subject", label: "个案主题", itemType: 1 },
+          { apiKey: "description", label: "个案描述", itemType: 2 },
+          { apiKey: "status", label: "状态", itemType: 3 },
+          { apiKey: "priority", label: "优先级", itemType: 3 },
+          { apiKey: "caseNumber", label: "个案编号", itemType: 9 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+        account: [
+          { apiKey: "accountName", label: "客户名称", itemType: 1 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+        contact: [
+          { apiKey: "contactName", label: "联系人姓名", itemType: 1 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+        opportunity: [
+          { apiKey: "opportunityName", label: "商机名称", itemType: 1 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+        order: [
+          { apiKey: "po", label: "订单编号", itemType: 1 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+        contract: [
+          { apiKey: "title", label: "合同名称", itemType: 1 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+      };
+
+      if (availableFields.length === 0 && STANDARD_ENTITY_FALLBACK_FIELDS[entityApiKey.toLowerCase()]) {
+        availableFields = [...STANDARD_ENTITY_FALLBACK_FIELDS[entityApiKey.toLowerCase()]];
+      }
+
       // 挑选一个存在的合法可写文本字段供默认动作与条件使用（排除自动编号/计算/系统只读字段）
       const nonWritableKeys = new Set([
         "id",
@@ -849,9 +885,9 @@ export class WorkflowService {
       // 6. 若字段拉取失败：若是已知标准对象，使用权威对照表字段；否则才回退到 name
       let defaultField: { apiKey: string; label: string; itemType: number };
 
-      if (knownStandard && availableFields.some((f) => f.apiKey === knownStandard.apiKey)) {
-        const matched = availableFields.find((f) => f.apiKey === knownStandard.apiKey)!;
-        defaultField = { apiKey: matched.apiKey, label: matched.label, itemType: matched.itemType || 1 };
+      if (knownStandard) {
+        // 标准实体绝不回退到可能不存在的 name 字段，绝对使用标准核心主字段 (如 case -> subject, contract -> title)
+        defaultField = knownStandard;
       } else {
         const candidate =
           writableTextFields.find(
@@ -860,13 +896,11 @@ export class WorkflowService {
               (f.apiKey.includes("Title") || f.apiKey.includes("Desc") || f.apiKey.includes("Note") || f.apiKey.includes("Remark"))
           ) ||
           writableTextFields.find((f) => f.apiKey.endsWith("__c")) ||
-          (knownStandard ? null : writableTextFields.find((f) => f.apiKey === "name")) ||
+          writableTextFields.find((f) => f.apiKey === "name") ||
           writableTextFields[0];
 
         if (candidate) {
           defaultField = { apiKey: candidate.apiKey, label: candidate.label, itemType: candidate.itemType || 1 };
-        } else if (knownStandard) {
-          defaultField = knownStandard;
         } else {
           defaultField = { apiKey: "name", label: "名称", itemType: 1 };
         }
@@ -983,7 +1017,23 @@ export class WorkflowService {
           valueConfig: an.actionConfig?.valueConfig || [],
           conditionForm: {
             referFilter: { advancedFlag: 0, filterFormula: "" },
-            referFilterCriteria: [],
+            referFilterCriteria: [
+              {
+                filterRowNum: 1,
+                leftItemTypeEntry: defaultField.itemType || 1,
+                leftObjectId: resolvedEntityId,
+                leftReferItems: `${entityApiKey}.${defaultField.apiKey}`,
+                leftReferLabel: defaultField.label,
+                itemApiKey: defaultField.apiKey,
+                itemName: defaultField.label,
+                operator: "equals",
+                rightItemTypeEntry: 1,
+                rightValue: "【自动流程】处理中",
+                rightReferItems: "【自动流程】处理中",
+                rightReferLabel: "【自动流程】处理中",
+                criteriaType: 1,
+              },
+            ],
           },
         };
 
@@ -1483,7 +1533,23 @@ export class WorkflowService {
               operators: [{ label: '当前执行人', value: 'runtime___operator' }],
               conditionForm: {
                 referFilter: { advancedFlag: 0, filterFormula: "" },
-                referFilterCriteria: [],
+                referFilterCriteria: [
+                  {
+                    filterRowNum: 1,
+                    leftItemTypeEntry: defaultField.itemType || 1,
+                    leftObjectId: resolvedEntityId,
+                    leftReferItems: `${entityApiKey}.${defaultField.apiKey}`,
+                    leftReferLabel: defaultField.label,
+                    itemApiKey: defaultField.apiKey,
+                    itemName: defaultField.label,
+                    operator: "equals",
+                    rightItemTypeEntry: 1,
+                    rightValue: "【自动流程】处理中",
+                    rightReferItems: "【自动流程】处理中",
+                    rightReferLabel: "【自动流程】处理中",
+                    criteriaType: 1,
+                  },
+                ],
               },
             },
           ],
