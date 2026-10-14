@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 
 const pkgPath = new URL('../package.json', import.meta.url);
 const headerPath = new URL('../src/components/Header.tsx', import.meta.url);
+const appSidebarPath = new URL('../src/components/AppSidebar.tsx', import.meta.url);
 const notesPath = new URL('../RELEASE_NOTES.md', import.meta.url);
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
 
@@ -40,6 +41,11 @@ if (bumpType) {
     let headerContent = fs.readFileSync(headerPath, 'utf-8');
     headerContent = headerContent.replace(/<span>v\d+\.\d+\.\d+<\/span>/, `<span>v${newVer}</span>`);
     fs.writeFileSync(headerPath, headerContent, 'utf-8');
+  }
+  if (fs.existsSync(appSidebarPath)) {
+    let sidebarContent = fs.readFileSync(appSidebarPath, 'utf-8');
+    sidebarContent = sidebarContent.replace(/<span>v\d+\.\d+\.\d+<\/span>/, `<span>v${newVer}</span>`);
+    fs.writeFileSync(appSidebarPath, sidebarContent, 'utf-8');
   }
 }
 
@@ -95,7 +101,7 @@ console.log(`\n[Release] 更新说明已保存至 RELEASE_NOTES.md:\n-----------
 
 // 提交变更
 try {
-  execSync('git add package.json src/components/Header.tsx RELEASE_NOTES.md', { stdio: 'inherit' });
+  execSync('git add package.json src/components/Header.tsx src/components/AppSidebar.tsx RELEASE_NOTES.md', { stdio: 'inherit' });
   execSync(`git commit -m "chore(release): bump version to ${tag}"`, { stdio: 'inherit' });
 } catch {
   // 如果没有文件需要 commit 则继续

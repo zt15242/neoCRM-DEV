@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Header, AppNavTab } from './components/Header';
+import { AppSidebar, AppNavTab } from './components/AppSidebar';
 import { EnvironmentSelector } from './components/EnvironmentSelector';
 import { LoginCard } from './components/LoginCard';
 import { SessionDashboard } from './components/SessionDashboard';
@@ -11,9 +11,10 @@ import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { UpdateModal } from './components/UpdateModal';
-import { UpdateInfo } from '../shared/types';
-import { NeoEnvironment, SessionState, AccountRecord } from '../shared/types';
-import { ShieldAlert, LogIn } from 'lucide-react';
+import { FlowManagerModal } from './components/ai/FlowManagerModal';
+import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
+import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus } from '../shared/types';
+import { ShieldAlert, LogIn, Minus, Square, X } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [platform, setPlatform] = useState<string>('darwin');
@@ -47,6 +48,14 @@ export const App: React.FC = () => {
   // 页面导航 Tab
   const [activeTab, setActiveTab] = useState<AppNavTab>('dashboard');
   const [dataTargetEntity, setDataTargetEntity] = useState<string>('account');
+
+  // Codex 风格全局会话与智能体状态
+  const [sessions, setSessions] = useState<AiChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
+  const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
+  const [isFlowManagerOpen, setIsFlowManagerOpen] = useState(false);
+  const [isPrintManagerOpen, setIsPrintManagerOpen] = useState(false);
 
   // 模态框
   const [isCustomEnvOpen, setIsCustomEnvOpen] = useState(false);
@@ -91,6 +100,18 @@ export const App: React.FC = () => {
         const history = await window.neoApi.getAccountHistory();
         setAccountHistory(history);
         handleCheckUpdate(false);
+
+        if (window.neoApi?.aiGetSessions) {
+          const sList = await window.neoApi.aiGetSessions();
+          if (Array.isArray(sList)) {
+            setSessions(sList.filter((s) => s.messages && s.messages.length > 0));
+          }
+        }
+
+        if (window.neoApi?.workflowGetLicenseStatus) {
+          const lic = await window.neoApi.workflowGetLicenseStatus();
+          setWorkflowLicenseStatus(lic);
+        }
       }
     } catch (e: any) {
       console.error('初始化数据加载异常:', e);
@@ -251,6 +272,35 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleDeleteSession = async (sessionId: string) => {
+    if (window.neoApi?.aiDeleteSession) {
+      await window.neoApi.aiDeleteSession(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null);
+      }
+    }
+  };
+
+  const handleUpdateSessionTitle = async (sessionId: string, title: string) => {
+    if (window.neoApi?.aiSaveSession) {
+      const target = sessions.find((s) => s.id === sessionId);
+      if (target) {
+        const updated = { ...target, title, updatedAt: Date.now() };
+        await window.neoApi.aiSaveSession(updated);
+        setSessions((prev) => prev.map((s) => (s.id === sessionId ? updated : s)));
+      }
+    }
+  };
+
+  const handleClearSessions = async () => {
+    if (window.neoApi?.aiClearSessions) {
+      await window.neoApi.aiClearSessions();
+      setSessions([]);
+      setActiveSessionId(null);
+    }
+  };
+
   // 导航处理
   const handleTabChange = (tab: AppNavTab) => {
     if ((tab === 'metadata' || tab === 'data') && !session.isLoggedIn) {
@@ -268,21 +318,68 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-slate-50 text-slate-900 overflow-hidden font-sans">
-      {/* 顶部标题栏 & Tab 切换 */}
-      <Header
+    <div className="h-screen w-screen flex flex-row bg-white text-slate-900 overflow-hidden font-sans select-none">
+      {/* 全局 Codex 经典左侧项目树与功能导航栏 (彻底替代原顶部横条) */}
+      <AppSidebar
         platform={platform}
-        session={session}
         activeTab={activeTab}
-        onTabChange={handleTabChange}
+        onSelectTab={handleTabChange}
+        session={session}
         onOpenHistory={() => setIsHistoryOpen(true)}
         onOpenDocs={() => window.neoApi.openExternal('https://crm.xiaoshouyi.com')}
         hasUpdate={!!updateInfo?.hasUpdate}
         onCheckUpdate={() => handleCheckUpdate(true)}
+        onOpenFlowManager={() => setIsFlowManagerOpen(true)}
+        onOpenPrintManager={() => setIsPrintManagerOpen(true)}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={(id) => {
+          setActiveSessionId(id);
+          setActiveTab('ai');
+        }}
+        onNewChatDraft={() => {
+          setActiveSessionId(null);
+          setActiveTab('ai');
+        }}
+        onDeleteSession={handleDeleteSession}
+        onUpdateSessionTitle={handleUpdateSessionTitle}
+        onClearSessions={handleClearSessions}
+        selectedPresetId={selectedPresetId}
+        onSelectPreset={(pId) => {
+          setSelectedPresetId(pId);
+          setActiveTab('ai');
+        }}
+        workflowLicenseStatus={workflowLicenseStatus}
       />
 
-      {/* 主界面内容区 */}
-      <main className={activeTab === "ai" ? "flex-1 overflow-hidden h-[calc(100vh-56px)] w-full flex flex-col" : "flex-1 overflow-y-auto p-3.5 md:p-4 max-w-[1680px] w-full mx-auto"}>
+      {/* 右侧无缝主工作区 */}
+      <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0 bg-white relative">
+        {/* Windows / Linux 最小化、最大化、关闭窗口控制 */}
+        {platform !== 'darwin' && (
+          <div className="h-7 bg-slate-50/80 border-b border-slate-200 flex items-center justify-end px-2 space-x-1 window-drag shrink-0 select-none">
+            <button
+              onClick={() => window.neoApi.minimizeWindow()}
+              title="最小化"
+              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded transition-colors window-no-drag"
+            >
+              <Minus className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => window.neoApi.maximizeWindow()}
+              title="最大化 / 还原"
+              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded transition-colors window-no-drag"
+            >
+              <Square className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => window.neoApi.closeWindow()}
+              title="关闭"
+              className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors window-no-drag"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        )}
         {/* Tab 1: 控制台与登录环境 */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
@@ -381,6 +478,15 @@ export const App: React.FC = () => {
         {activeTab === 'ai' && (
           <AiHarnessStudio
             crmSession={session}
+            activeSessionId={activeSessionId}
+            onSelectSession={setActiveSessionId}
+            sessions={sessions}
+            onSessionsChange={setSessions}
+            selectedPresetId={selectedPresetId}
+            onSelectPreset={setSelectedPresetId}
+            workflowLicenseStatus={workflowLicenseStatus}
+            onOpenFlowManager={() => setIsFlowManagerOpen(true)}
+            onOpenPrintManager={() => setIsPrintManagerOpen(true)}
             onNavigateToSettings={() => setActiveTab('settings')}
             onNavigateToMetadata={() => setActiveTab('metadata')}
             onNavigateToData={() => setActiveTab('data')}
@@ -417,6 +523,31 @@ export const App: React.FC = () => {
         onClose={() => setIsHistoryOpen(false)}
         onSwitch={handleSwitchAccount}
         onDelete={handleDeleteHistoryRecord}
+      />
+
+      {/* 租户流程资产管理中心 (自动流程 & 新版审批流) */}
+      <FlowManagerModal
+        isOpen={isFlowManagerOpen}
+        crmSession={session}
+        licenseStatus={workflowLicenseStatus}
+        onClose={() => setIsFlowManagerOpen(false)}
+        onSendToAiPrompt={() => {
+          setIsFlowManagerOpen(false);
+          setActiveTab('ai');
+        }}
+        showToast={showToast}
+      />
+
+      {/* 租户打印模板资产管理中心 (免锁开放) */}
+      <PrintTemplateManagerModal
+        isOpen={isPrintManagerOpen}
+        crmSession={session}
+        onClose={() => setIsPrintManagerOpen(false)}
+        onSendToAiPrompt={() => {
+          setIsPrintManagerOpen(false);
+          setActiveTab('ai');
+        }}
+        showToast={showToast}
       />
 
       {/* 全局 Toast 通知 */}

@@ -59,6 +59,15 @@ interface AiHarnessStudioProps {
   onNavigateToMetadata?: () => void;
   onNavigateToData?: () => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
+  activeSessionId?: string | null;
+  onSelectSession?: (id: string | null) => void;
+  sessions?: AiChatSession[];
+  onSessionsChange?: (sessions: AiChatSession[]) => void;
+  selectedPresetId?: string;
+  onSelectPreset?: (presetId: string) => void;
+  workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  onOpenFlowManager?: () => void;
+  onOpenPrintManager?: () => void;
 }
 
 export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
@@ -67,6 +76,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   onNavigateToMetadata,
   onNavigateToData,
   showToast,
+  activeSessionId: propActiveSessionId,
+  onSelectSession: propOnSelectSession,
+  sessions: propSessions,
+  onSessionsChange: propOnSessionsChange,
+  selectedPresetId: propSelectedPresetId,
+  onSelectPreset: propOnSelectPreset,
+  workflowLicenseStatus: propWorkflowLicenseStatus,
+  onOpenFlowManager,
+  onOpenPrintManager,
 }) => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
@@ -76,9 +94,34 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [activeSkillIds, setActiveSkillIds] = useState<string[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [activeMcpServerIds, setActiveMcpServerIds] = useState<string[]>([]);
-  const [sessions, setSessions] = useState<AiChatSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
+  const [internalSessions, setInternalSessions] = useState<AiChatSession[]>([]);
+  const sessions = propSessions !== undefined ? propSessions : internalSessions;
+  const setSessions = (val: AiChatSession[] | ((prev: AiChatSession[]) => AiChatSession[])) => {
+    if (typeof val === 'function') {
+      setInternalSessions((prev) => {
+        const next = val(propSessions !== undefined ? propSessions : prev);
+        propOnSessionsChange?.(next);
+        return next;
+      });
+    } else {
+      setInternalSessions(val);
+      propOnSessionsChange?.(val);
+    }
+  };
+
+  const [internalActiveSessionId, setInternalActiveSessionId] = useState<string | null>(null);
+  const activeSessionId = propActiveSessionId !== undefined ? propActiveSessionId : internalActiveSessionId;
+  const setActiveSessionId = (id: string | null) => {
+    setInternalActiveSessionId(id);
+    propOnSelectSession?.(id);
+  };
+
+  const [internalSelectedPresetId, setInternalSelectedPresetId] = useState<string>('harness-agent');
+  const selectedPresetId = propSelectedPresetId !== undefined ? propSelectedPresetId : internalSelectedPresetId;
+  const setSelectedPresetId = (pid: string) => {
+    setInternalSelectedPresetId(pid);
+    propOnSelectPreset?.(pid);
+  };
 
   // 个人专属技能（系统内置技能受安全保护，仅由专属智能体角色驱动，禁止在其他对话随意挂载选择）
   const personalSkills = useMemo(
@@ -105,7 +148,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [isPrintManagerOpen, setIsPrintManagerOpen] = useState<boolean>(false);
 
   // 流程引擎 (自动流程 & 审批流) 本地离线设备锁状态
-  const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
+  const [internalLicenseStatus, setInternalLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
+  const workflowLicenseStatus = propWorkflowLicenseStatus !== undefined ? propWorkflowLicenseStatus : internalLicenseStatus;
+  const setWorkflowLicenseStatus = (l: WorkflowLicenseStatus | null) => setInternalLicenseStatus(l);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState<boolean>(false);
   const [pendingAfterUnlock, setPendingAfterUnlock] = useState<
     | { type: "preset"; presetId: string }
@@ -560,74 +605,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   return (
     <div className="bg-white border-t border-slate-200 overflow-hidden flex flex-1 h-full w-full">
-      {/* 左侧边栏：Codex 风格项目树与快速导航 */}
-      <AiSidebar
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        presets={AI_AGENT_PRESETS}
-        selectedPresetId={selectedPresetId}
-        crmSession={crmSession}
-        onOpenFlowManager={() => setIsFlowManagerOpen(true)}
-        onOpenPrintManager={() => setIsPrintManagerOpen(true)}
-        onOpenMetadata={onNavigateToMetadata}
-        onOpenData={onNavigateToData}
-        onOpenSettings={onNavigateToSettings}
-        workflowLicenseStatus={workflowLicenseStatus}
-        onSelectSession={async (id) => {
-          const target = sessions.find((s) => s.id === id);
-          if (isFlowEnginePreset(target?.presetId)) {
-            const latestLic = window.neoApi?.workflowGetLicenseStatus
-              ? await window.neoApi.workflowGetLicenseStatus()
-              : workflowLicenseStatus;
-            if (latestLic) setWorkflowLicenseStatus(latestLic);
-            if (!latestLic?.isAuthorized) {
-              setPendingAfterUnlock({ type: "session", sessionId: id });
-              setIsLicenseModalOpen(true);
-              return;
-            }
-          }
-          setActiveSessionId(id);
-          if (target) {
-            setSelectedPresetId(target.presetId || "harness-agent");
-            const sessProv = configuredProviders.find((p) => p.id === target.providerId);
-            if (sessProv) {
-              setCurrentProviderId(sessProv.id);
-              const hasMod = sessProv.models.some((m) => m.id === target.modelId);
-              setCurrentModelId(hasMod && target.modelId ? target.modelId : sessProv.models[0].id);
-            }
-            if (target.activeSkillIds) {
-              setActiveSkillIds(target.activeSkillIds.filter((sid) => personalSkillIds.has(sid)));
-            }
-          }
-        }}
-        onNewChatDraft={handleNewChatDraft}
-        onDeleteSession={handleDeleteSession}
-        onUpdateSessionTitle={handleUpdateSessionTitle}
-        onClearSessions={handleClearSessions}
-        onSelectPreset={async (presetId) => {
-          const p = AI_AGENT_PRESETS.find((item) => item.id === presetId);
-          if (!p || p.disabled) return;
-          if (isFlowEnginePreset(presetId)) {
-            const latestLic = window.neoApi?.workflowGetLicenseStatus
-              ? await window.neoApi.workflowGetLicenseStatus()
-              : workflowLicenseStatus;
-            if (latestLic) setWorkflowLicenseStatus(latestLic);
-            if (!latestLic?.isAuthorized) {
-              setPendingAfterUnlock({ type: "preset", presetId });
-              setIsLicenseModalOpen(true);
-              return;
-            }
-          }
-          setSelectedPresetId(presetId);
-          setEnableTools(p.enableCrmTools);
-          if (p.recommendedModel && currentProviderId === "deepseek") {
-            setCurrentModelId(p.recommendedModel);
-          }
-          if (activeSession && activeSession.messages.length > 0) {
-            setActiveSessionId(null);
-          }
-        }}
-      />
+
 
       {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
       <div className="flex-1 flex flex-col bg-white min-w-0">
@@ -647,7 +625,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           <div className="flex items-center space-x-1.5 shrink-0">
             <button
               type="button"
-              onClick={() => setIsFlowManagerOpen(true)}
+              onClick={() => onOpenFlowManager ? onOpenFlowManager() : setIsFlowManagerOpen(true)}
               className="text-[11px] px-2 py-0.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1 transition-all cursor-pointer font-medium"
               title="查看与管理租户现有工作流和审批流资产"
             >
@@ -656,7 +634,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setIsPrintManagerOpen(true)}
+              onClick={() => onOpenPrintManager ? onOpenPrintManager() : setIsPrintManagerOpen(true)}
               className="text-[11px] px-2 py-0.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 flex items-center space-x-1 transition-all cursor-pointer font-medium"
               title="查看与管理租户已配置的 Word/Excel 打印模板资产"
             >
