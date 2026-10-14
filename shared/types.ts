@@ -353,6 +353,7 @@ export interface AiChatMessage {
 export interface AiChatSession {
   id: string;
   title: string;
+  projectId?: string; // 关联的本地项目 ID
   presetId: string;
   providerId: string;
   modelId: string;
@@ -696,4 +697,14 @@ export interface PrintTemplateItem {
   createdBy?: number;
   updatedAt?: number;
   updatedBy?: number;
+}
+
+export interface WorkspaceProject {
+  id: string;
+  name: string;
+  localPath: string; // 本地物理目录路径 (如 /Users/xiiaowu/Desktop/销售易/neoCRM-DEV)
+  description?: string;
+  isDefault?: boolean;
+  createdAt: number;
+  updatedAt: number;
 }

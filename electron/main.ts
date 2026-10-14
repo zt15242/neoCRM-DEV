@@ -13,6 +13,7 @@ import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
+import { ProjectService } from './services/projectService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 
@@ -36,6 +37,7 @@ const aiService = new AiService(sessionStore, metadataService, dataService);
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
+const projectService = new ProjectService();
 
 function createWindow() {
   win = new BrowserWindow({
@@ -604,3 +606,10 @@ ipcMain.handle("print:renderDocument", async (_, params) => {
   }
   return printTemplateService.renderPrintDocument(current.environment, current.tokenData, params);
 });
+
+// ================= 本地工作区项目 (Workspace Projects) =================
+
+ipcMain.handle("project:getProjects", async () => projectService.getProjects());
+ipcMain.handle("project:saveProject", async (_, payload) => projectService.saveProject(payload));
+ipcMain.handle("project:deleteProject", async (_, projectId: string) => projectService.deleteProject(projectId));
+ipcMain.handle("project:openFolder", async (_, folderPath: string) => projectService.openFolder(folderPath));

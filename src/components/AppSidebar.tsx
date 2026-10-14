@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   SquarePen, 
   Search, 
@@ -34,8 +34,10 @@ import {
   AiAgentPreset, 
   WorkflowLicenseStatus, 
   SessionState, 
-  NeoEnvironment 
+  NeoEnvironment,
+  WorkspaceProject 
 } from '../../shared/types';
+import { Plus, ExternalLink, FolderPlus } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
 export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings';
@@ -61,6 +63,13 @@ interface AppSidebarProps {
   selectedPresetId: string;
   onSelectPreset: (presetId: string) => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  projects?: WorkspaceProject[];
+  activeProjectId?: string | null;
+  onSelectProject?: (projectId: string) => void;
+  onOpenCreateProject?: () => void;
+  onEditProject?: (project: WorkspaceProject) => void;
+  onDeleteProject?: (projectId: string) => void;
+  onOpenFolderInExplorer?: (folderPath: string) => void;
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -84,13 +93,33 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   selectedPresetId,
   onSelectPreset,
   workflowLicenseStatus,
+  projects = [],
+  activeProjectId,
+  onSelectProject,
+  onOpenCreateProject,
+  onEditProject,
+  onDeleteProject,
+  onOpenFolderInExplorer,
 }) => {
   const isMac = platform === 'darwin';
   const [keyword, setKeyword] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [isProjectExpanded, setIsProjectExpanded] = useState(true);
+  const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
+
+  // 默认展开所有项目
+  useEffect(() => {
+    if (projects.length > 0 && expandedProjectIds.length === 0) {
+      setExpandedProjectIds(projects.map((p) => p.id));
+    }
+  }, [projects.length]);
+
+  const toggleProjectExpand = (id: string) => {
+    setExpandedProjectIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  };
   const [presetDropdownOpen, setPresetDropdownOpen] = useState(false);
 
   const getPresetIcon = (iconName: string) => {
@@ -309,114 +338,188 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         </button>
       </div>
 
-      {/* 4. Projects 租户与会话树形列表 (Codex 核心设计) */}
+      {/* 4. Projects 本地项目工作区文件夹列表 (完全对齐 Codex 多项目本地目录树) */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         <div className="px-2 pt-1 pb-1 flex items-center justify-between text-[11px] font-semibold text-slate-400">
-          <span>Projects</span>
-          {validSessions.length > 0 && (
-            <span className="font-mono text-[10px] text-slate-400">{validSessions.length}</span>
-          )}
-        </div>
-
-        {/* 主项目文件夹 (当前租户或开发项目) */}
-        <div className="space-y-0.5">
-          <div
-            onClick={() => setIsProjectExpanded(!isProjectExpanded)}
-            className="px-2 py-1 rounded-lg hover:bg-slate-200/60 text-slate-700 text-xs font-semibold flex items-center justify-between cursor-pointer group"
-          >
-            <div className="flex items-center space-x-2 truncate">
-              {isProjectExpanded ? (
-                <FolderOpen className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-              ) : (
-                <Folder className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-              )}
-              <span className="truncate">{activeTenantName}</span>
-            </div>
-            <ChevronRight
-              className={`w-3 h-3 text-slate-400 transition-transform ${isProjectExpanded ? 'rotate-90' : ''}`}
-            />
+          <div className="flex items-center space-x-1">
+            <span>Projects</span>
+            <span className="font-mono text-[10px] text-slate-400">({projects.length})</span>
           </div>
-
-          {/* 文件夹展开下的子会话列表 (Codex Pill 样式) */}
-          {isProjectExpanded && (
-            <div className="pl-2 space-y-0.5">
-              {filteredSessions.length === 0 ? (
-                <div className="py-4 text-center text-[11px] text-slate-400">
-                  {keyword ? '无匹配会话' : '点击 New chat 开始新对话'}
-                </div>
-              ) : (
-                filteredSessions.map((sess) => {
-                  const isActive = activeTab === 'ai' && activeSessionId === sess.id;
-                  const isEditing = editingId === sess.id;
-
-                  return (
-                    <div
-                      key={sess.id}
-                      onClick={() => onSelectSession(sess.id)}
-                      className={`group relative px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition-all flex items-center justify-between ${
-                        isActive
-                          ? 'bg-slate-200/90 text-slate-900 font-semibold shadow-2xs'
-                          : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-900'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2 min-w-0 flex-1">
-                        {isEditing ? (
-                          <form onSubmit={(e) => handleSaveRename(sess.id, e)} className="flex items-center space-x-1 flex-1">
-                            <input
-                              type="text"
-                              autoFocus
-                              value={editingTitle}
-                              onChange={(e) => setEditingTitle(e.target.value)}
-                              className="w-full px-1.5 py-0.5 text-xs rounded border border-sky-400 focus:outline-none bg-white font-normal"
-                            />
-                            <button type="submit" className="p-0.5 text-emerald-600 hover:bg-emerald-50 rounded">
-                              <Check className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingId(null);
-                              }}
-                              className="p-0.5 text-slate-400 hover:bg-slate-100 rounded"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </form>
-                        ) : (
-                          <span className="truncate">{sess.title}</span>
-                        )}
-                      </div>
-
-                      {/* 悬停快捷重命名与删除 */}
-                      {!isEditing && (
-                        <div className="hidden group-hover:flex items-center space-x-0.5 shrink-0 ml-1">
-                          <button
-                            onClick={(e) => handleStartRename(sess, e)}
-                            title="重命名"
-                            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded"
-                          >
-                            <Edit3 className="w-2.5 h-2.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteSession(sess.id);
-                            }}
-                            title="删除"
-                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
-                          >
-                            <Trash2 className="w-2.5 h-2.5" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
+          {onOpenCreateProject && (
+            <button
+              onClick={onOpenCreateProject}
+              title="添加 / 关联本地项目文件夹"
+              className="p-1 rounded-md hover:bg-slate-200/70 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
+
+        {/* 渲染所有关联的本地项目文件夹 */}
+        {projects.length === 0 ? (
+          <div className="py-6 text-center text-[11px] text-slate-400">
+            暂无项目，点击右上角「+」关联本地文件夹
+          </div>
+        ) : (
+          projects.map((proj) => {
+            const isExpanded = expandedProjectIds.includes(proj.id);
+            const isCurrentActive = activeProjectId === proj.id;
+            // 过滤属于当前项目的会话 (未分配项目时默认归入 default 项目)
+            const projSessions = filteredSessions.filter((s) => s.projectId === proj.id || (!s.projectId && proj.isDefault));
+
+            return (
+              <div key={proj.id} className="space-y-0.5">
+                <div
+                  onClick={() => {
+                    onSelectProject?.(proj.id);
+                    toggleProjectExpand(proj.id);
+                  }}
+                  title={`本地路径: ${proj.localPath}`}
+                  className={`group px-2 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors ${
+                    isCurrentActive
+                      ? 'bg-amber-50/80 text-amber-900 border border-amber-200/70 shadow-2xs'
+                      : 'hover:bg-slate-200/60 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2 truncate min-w-0 pr-1">
+                    {isExpanded ? (
+                      <FolderOpen className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    ) : (
+                      <Folder className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    )}
+                    <span className="truncate">{proj.name}</span>
+                  </div>
+
+                  <div className="flex items-center space-x-0.5 shrink-0">
+                    {/* 在系统访达/资源管理器中打开 */}
+                    {onOpenFolderInExplorer && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenFolderInExplorer(proj.localPath);
+                        }}
+                        title={`在访达/资源管理器中打开: ${proj.localPath}`}
+                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                    {/* 编辑项目 */}
+                    {onEditProject && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditProject(proj);
+                        }}
+                        title="编辑项目信息"
+                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/80 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Edit3 className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                    {/* 移除项目 (默认项目不可删除) */}
+                    {!proj.isDefault && onDeleteProject && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteProject(proj.id);
+                        }}
+                        title="从工作台移除项目"
+                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                    <ChevronRight
+                      className={`w-3 h-3 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                    />
+                  </div>
+                </div>
+
+                {/* 项目展开下的子会话列表 (Codex Pill 样式) */}
+                {isExpanded && (
+                  <div className="pl-3 space-y-0.5">
+                    {projSessions.length === 0 ? (
+                      <div className="py-2 pl-3 text-[10px] text-slate-400 italic">
+                        暂无会话，点击 New chat 在此项目下提问
+                      </div>
+                    ) : (
+                      projSessions.map((sess) => {
+                        const isActive = activeTab === 'ai' && activeSessionId === sess.id;
+                        const isEditing = editingId === sess.id;
+
+                        return (
+                          <div
+                            key={sess.id}
+                            onClick={() => onSelectSession(sess.id)}
+                            className={`group relative px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition-all flex items-center justify-between ${
+                              isActive
+                                ? 'bg-slate-200/90 text-slate-900 font-semibold shadow-2xs'
+                                : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-900'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2 min-w-0 flex-1">
+                              {isEditing ? (
+                                <form onSubmit={(e) => handleSaveRename(sess.id, e)} className="flex items-center space-x-1 flex-1">
+                                  <input
+                                    type="text"
+                                    autoFocus
+                                    value={editingTitle}
+                                    onChange={(e) => setEditingTitle(e.target.value)}
+                                    className="w-full px-1.5 py-0.5 text-xs rounded border border-sky-400 focus:outline-none bg-white font-normal"
+                                  />
+                                  <button type="submit" className="p-0.5 text-emerald-600 hover:bg-emerald-50 rounded">
+                                    <Check className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingId(null);
+                                    }}
+                                    className="p-0.5 text-slate-400 hover:bg-slate-100 rounded"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </form>
+                              ) : (
+                                <span className="truncate">{sess.title}</span>
+                              )}
+                            </div>
+
+                            {/* 悬停快捷重命名与删除 */}
+                            {!isEditing && (
+                              <div className="hidden group-hover:flex items-center space-x-0.5 shrink-0 ml-1">
+                                <button
+                                  onClick={(e) => handleStartRename(sess, e)}
+                                  title="重命名"
+                                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded"
+                                >
+                                  <Edit3 className="w-2.5 h-2.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteSession(sess.id);
+                                  }}
+                                  title="删除"
+                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                                >
+                                  <Trash2 className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* 5. 底部账号与系统设置栏 (Codex 底栏胶囊) */}

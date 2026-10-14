@@ -28,6 +28,11 @@ export const neoApi = {
   // 凭证同步与通用
   syncToNeoCli: (targetDirPath?: string) => ipcRenderer.invoke('cli:sync', targetDirPath),
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
+  // 本地项目工作区 (Projects)
+  projectGetProjects: () => ipcRenderer.invoke('project:getProjects'),
+  projectSaveProject: (payload: any) => ipcRenderer.invoke('project:saveProject', payload),
+  projectDeleteProject: (projectId: string) => ipcRenderer.invoke('project:deleteProject', projectId),
+  projectOpenFolder: (folderPath: string) => ipcRenderer.invoke('project:openFolder', folderPath),
   testApiCall: () => ipcRenderer.invoke('api:testCall'),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   openDesigner: (type: 'web' | 'h5') => ipcRenderer.invoke('app:openDesigner', type),

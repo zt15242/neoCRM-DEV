@@ -22,6 +22,7 @@ import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
 import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
 import { ConfirmDeployApprovalModal } from "./ConfirmDeployApprovalModal";
 import { FlowManagerModal } from "./FlowManagerModal";
+import { WorkspaceProject } from "../../../shared/types";
 import { PrintTemplateManagerModal } from "./PrintTemplateManagerModal";
 import { CodexTerminalPanel } from "./CodexTerminalPanel";
 import { ApprovalDeployPlan } from "../../../shared/types";
@@ -66,6 +67,7 @@ interface AiHarnessStudioProps {
   selectedPresetId?: string;
   onSelectPreset?: (presetId: string) => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  activeProject?: WorkspaceProject;
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
 }
@@ -83,6 +85,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   selectedPresetId: propSelectedPresetId,
   onSelectPreset: propOnSelectPreset,
   workflowLicenseStatus: propWorkflowLicenseStatus,
+  activeProject,
   onOpenFlowManager,
   onOpenPrintManager,
 }) => {
@@ -480,6 +483,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       targetSession = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         title: effectiveTitle,
+        projectId: activeProject?.id,
         presetId: preset.id,
         providerId: currentProvider?.id || currentProviderId,
         modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
@@ -920,7 +924,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}
         toolCalls={activeToolCalls}
-        projectName={crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "neoCRM-DEV"}
+        projectName={activeProject?.name || crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "neoCRM-DEV"}
       />
 
       {/* 引用业务对象弹窗 */}

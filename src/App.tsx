@@ -13,7 +13,8 @@ import { ToastContainer, ToastMessage } from './components/Toast';
 import { UpdateModal } from './components/UpdateModal';
 import { FlowManagerModal } from './components/ai/FlowManagerModal';
 import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
-import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus } from '../shared/types';
+import { CreateProjectModal } from './components/ai/CreateProjectModal';
+import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject } from '../shared/types';
 import { ShieldAlert, LogIn, Minus, Square, X } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -56,6 +57,12 @@ export const App: React.FC = () => {
   const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
   const [isFlowManagerOpen, setIsFlowManagerOpen] = useState(false);
   const [isPrintManagerOpen, setIsPrintManagerOpen] = useState(false);
+
+  // 本地工程工作区项目列表与活动项目
+  const [projects, setProjects] = useState<WorkspaceProject[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<WorkspaceProject | null>(null);
 
   // 模态框
   const [isCustomEnvOpen, setIsCustomEnvOpen] = useState(false);
@@ -111,6 +118,16 @@ export const App: React.FC = () => {
         if (window.neoApi?.workflowGetLicenseStatus) {
           const lic = await window.neoApi.workflowGetLicenseStatus();
           setWorkflowLicenseStatus(lic);
+        }
+
+        if (window.neoApi?.projectGetProjects) {
+          const pList = await window.neoApi.projectGetProjects();
+          if (Array.isArray(pList) && pList.length > 0) {
+            setProjects(pList);
+            if (!activeProjectId) {
+              setActiveProjectId(pList[0].id);
+            }
+          }
         }
       }
     } catch (e: any) {
@@ -301,6 +318,47 @@ export const App: React.FC = () => {
     }
   };
 
+  // 项目工作区管理
+  const handleSaveProject = async (payload: { id?: string; name: string; localPath: string; description?: string }) => {
+    try {
+      if (window.neoApi?.projectSaveProject) {
+        const saved = await window.neoApi.projectSaveProject(payload);
+        const pList = await window.neoApi.projectGetProjects();
+        setProjects(pList);
+        setActiveProjectId(saved.id);
+        showToast('success', `本地项目工作区 [${saved.name}] 保存成功`);
+      }
+    } catch (e: any) {
+      showToast('error', `保存项目失败: ${e.message}`);
+    }
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      if (window.neoApi?.projectDeleteProject) {
+        await window.neoApi.projectDeleteProject(projectId);
+        const pList = await window.neoApi.projectGetProjects();
+        setProjects(pList);
+        if (activeProjectId === projectId && pList.length > 0) {
+          setActiveProjectId(pList[0].id);
+        }
+        showToast('info', '已移除项目工作区');
+      }
+    } catch (e: any) {
+      showToast('error', `移除项目失败: ${e.message}`);
+    }
+  };
+
+  const handleOpenFolderInExplorer = async (folderPath: string) => {
+    try {
+      if (window.neoApi?.projectOpenFolder) {
+        await window.neoApi.projectOpenFolder(folderPath);
+      }
+    } catch (e: any) {
+      showToast('error', `打开目录失败: ${e.message}`);
+    }
+  };
+
   // 导航处理
   const handleTabChange = (tab: AppNavTab) => {
     if ((tab === 'metadata' || tab === 'data') && !session.isLoggedIn) {
@@ -350,6 +408,19 @@ export const App: React.FC = () => {
           setActiveTab('ai');
         }}
         workflowLicenseStatus={workflowLicenseStatus}
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onSelectProject={setActiveProjectId}
+        onOpenCreateProject={() => {
+          setEditingProject(null);
+          setIsCreateProjectOpen(true);
+        }}
+        onEditProject={(p) => {
+          setEditingProject(p);
+          setIsCreateProjectOpen(true);
+        }}
+        onDeleteProject={handleDeleteProject}
+        onOpenFolderInExplorer={handleOpenFolderInExplorer}
       />
 
       {/* 右侧无缝主工作区 */}
@@ -485,6 +556,7 @@ export const App: React.FC = () => {
             selectedPresetId={selectedPresetId}
             onSelectPreset={setSelectedPresetId}
             workflowLicenseStatus={workflowLicenseStatus}
+            activeProject={projects.find((p) => p.id === activeProjectId) || projects[0]}
             onOpenFlowManager={() => setIsFlowManagerOpen(true)}
             onOpenPrintManager={() => setIsPrintManagerOpen(true)}
             onNavigateToSettings={() => setActiveTab('settings')}
@@ -547,6 +619,15 @@ export const App: React.FC = () => {
           setIsPrintManagerOpen(false);
           setActiveTab('ai');
         }}
+        showToast={showToast}
+      />
+
+      {/* 创建 / 编辑本地项目工作区弹窗 */}
+      <CreateProjectModal
+        isOpen={isCreateProjectOpen}
+        editingProject={editingProject}
+        onClose={() => setIsCreateProjectOpen(false)}
+        onSave={handleSaveProject}
         showToast={showToast}
       />
 

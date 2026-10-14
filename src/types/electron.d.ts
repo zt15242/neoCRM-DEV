@@ -51,6 +51,11 @@ declare global {
 
       syncToNeoCli: (targetDirPath?: string) => Promise<CliSyncResult>;
       selectFolder: () => Promise<string | null>;
+      // 本地项目工作区 (Projects)
+      projectGetProjects: () => Promise<WorkspaceProject[]>;
+      projectSaveProject: (payload: Partial<WorkspaceProject> & { name: string; localPath: string }) => Promise<WorkspaceProject>;
+      projectDeleteProject: (projectId: string) => Promise<boolean>;
+      projectOpenFolder: (folderPath: string) => Promise<string>;
       testApiCall: () => Promise<{ success: boolean; data?: any; error?: string }>;
       openExternal: (url: string) => Promise<void>;
       openDesigner: (type: 'web' | 'h5') => Promise<void>;
