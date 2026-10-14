@@ -22,25 +22,28 @@ export function extractApprovalPlanFromText(content: string): ApprovalDeployPlan
     const candidate = sanitizeJsonString(blockMatch[1].trim());
     if (
       candidate.startsWith('{') &&
-      candidate.includes('"flow"') &&
-      candidate.includes('"nodes"') &&
+      (candidate.includes('"flow"') || candidate.includes('"baseInfo"') || candidate.includes('"processName"') || candidate.includes('"title"')) &&
+      (candidate.includes('"nodes"') || candidate.includes('"tasks"')) &&
       (candidate.includes('approval') || candidate.includes('approver') || candidate.includes('UserTask') || candidate.includes('withdrawFlag'))
     ) {
       try {
         const parsed = JSON.parse(candidate);
-        if (parsed.flow && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
+        const flowObj = parsed.flow || parsed.baseInfo || (parsed.entityApiKey ? parsed : null);
+        const nodesArr = parsed.nodes || parsed.tasks;
+        if (flowObj && Array.isArray(nodesArr) && nodesArr.length > 0) {
           return normalizeApprovalPlan(parsed);
         }
       } catch {}
     }
   }
 
-  // 2. 尝试从全文本中寻找第一个包含 {"flow": ... "nodes": ...} 的完整 JSON 块
+  // 2. 尝试从全文本中寻找第一个完整 JSON 块
   const firstBrace = content.indexOf('{"flow"');
-  const altBrace = firstBrace === -1 ? content.indexOf('{\n  "flow"') : firstBrace;
-  const startIdx = altBrace !== -1 ? altBrace : content.indexOf('{');
+  const baseBrace = firstBrace === -1 ? content.indexOf('{"baseInfo"') : firstBrace;
+  const titleBrace = baseBrace === -1 ? content.indexOf('{"title"') : baseBrace;
+  const startIdx = titleBrace !== -1 ? titleBrace : content.indexOf('{');
 
-  if (startIdx !== -1 && content.includes('"nodes"') && (content.includes('UserTask') || content.includes('approverRules'))) {
+  if (startIdx !== -1 && (content.includes('"nodes"') || content.includes('"tasks"')) && (content.includes('UserTask') || content.includes('approverRules'))) {
     let openCount = 0;
     let endIdx = -1;
     for (let i = startIdx; i < content.length; i++) {
@@ -58,7 +61,9 @@ export function extractApprovalPlanFromText(content: string): ApprovalDeployPlan
       const jsonCandidate = sanitizeJsonString(content.slice(startIdx, endIdx));
       try {
         const parsed = JSON.parse(jsonCandidate);
-        if (parsed.flow && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
+        const flowObj = parsed.flow || parsed.baseInfo || (parsed.entityApiKey ? parsed : null);
+        const nodesArr = parsed.nodes || parsed.tasks;
+        if (flowObj && Array.isArray(nodesArr) && nodesArr.length > 0) {
           return normalizeApprovalPlan(parsed);
         }
       } catch {}
@@ -69,8 +74,8 @@ export function extractApprovalPlanFromText(content: string): ApprovalDeployPlan
 }
 
 export function normalizeApprovalPlan(parsed: any): ApprovalDeployPlan {
-  const flow = parsed.flow || {};
-  const rawNodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
+  const flow = parsed.flow || parsed.baseInfo || {};
+  const rawNodes = Array.isArray(parsed.nodes) ? parsed.nodes : (Array.isArray(parsed.tasks) ? parsed.tasks : []);
 
   const nodes: ApprovalNodeItem[] = rawNodes.map((n: any, idx: number) => {
     const rawRules = Array.isArray(n.approverRules) ? n.approverRules : [];
@@ -96,9 +101,9 @@ export function normalizeApprovalPlan(parsed: any): ApprovalDeployPlan {
     }));
 
     return {
-      id: n.id || `node_${idx + 1}`,
+      id: n.id || n.taskDefKey || `node_${idx + 1}`,
       nodeType: n.nodeType || 'UserTask',
-      name: n.name || n.label || `节点 ${idx + 1}`,
+      name: n.name || n.nodeName || n.taskDefName || n.label || `节点 ${idx + 1}`,
       description: n.description,
       taskType: String(n.taskType || '1') as any,
       countersign: n.countersign,
@@ -114,13 +119,13 @@ export function normalizeApprovalPlan(parsed: any): ApprovalDeployPlan {
 
   return {
     flow: {
-      processName: flow.processName || flow.name || '审批流配置方案',
-      entityApiKey: flow.entityApiKey || flow.entity || 'contract',
-      entityLabel: flow.entityLabel || flow.entityApiKey || '业务实体',
+      processName: flow.processName || flow.name || parsed.title || '审批流配置方案',
+      entityApiKey: flow.entityApiKey || flow.entity || parsed.entityApiKey || 'contract',
+      entityLabel: flow.entityLabel || flow.entityApiKey || parsed.entityLabel || parsed.entityApiKey || '业务实体',
       bizTypeApiKey: flow.bizTypeApiKey,
       bizTypeLabel: flow.bizTypeLabel,
       startupOrder: Number(flow.startupOrder) || 1,
-      description: flow.description || '',
+      description: flow.description || parsed.description || '',
       withdrawFlag: flow.withdrawFlag ?? 1,
       singleStepWithdrawFlag: flow.singleStepWithdrawFlag ?? 2,
       sendApprovalNotice: flow.sendApprovalNotice ?? 1,

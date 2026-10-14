@@ -7,7 +7,9 @@ import { InlineSqlResultTable } from './InlineSqlResultTable';
 import { extractSchemaPlanFromText } from './schemaPlanHelper';
 import { SchemaPlanCard } from './SchemaPlanCard';
 import { extractWorkflowPlanFromText } from './workflowPlanHelper';
-import { WorkflowPlanCard } from './WorkflowPlanCard';
+import { WorkflowPlanCard } from "./WorkflowPlanCard";
+import { InlineDecisionCard } from "./InlineDecisionCard";
+import { extractDecisionsFromText, DecisionRequestPayload } from "./decisionHelper";
 import { Copy, Check, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
 
 interface AiMessageItemProps {
@@ -16,6 +18,7 @@ interface AiMessageItemProps {
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
+  onSendMessage?: (text: string) => void;
 }
 
 export const AiMessageItem: React.FC<AiMessageItemProps> = ({
@@ -24,7 +27,9 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
   onOpenCreateSchema,
   onOpenDeployWorkflow,
   onOpenDeployApproval,
+  onSendMessage,
 }) => {
+
   const [copied, setCopied] = useState(false);
   const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
 
@@ -74,6 +79,10 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
       </div>
     );
   }
+
+  // 检测是否包含待决策确认项 (Codex / Cursor 交互决策)
+  const detectedDecisions = !isStreamingCurrent && message.content ? extractDecisionsFromText(message.content) : null;
+  const hasPendingDecisions = Boolean(detectedDecisions && detectedDecisions.items.length > 0);
 
   // 检测是否包含可执行的数据建模方案
   const detectedPlan = !isStreamingCurrent && message.content ? extractSchemaPlanFromText(message.content) : null;
@@ -141,12 +150,27 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
         {/* 正文 Markdown 渲染 */}
         <div className="bg-white rounded-2xl rounded-tl-xs border border-slate-200/80 p-4 shadow-2xs">
           {message.content ? (
-            <MarkdownRenderer
-              content={message.content}
-              onExecuteSql={(sql) => setActiveExecutedSql(sql)}
-              onOpenDeployWorkflow={onOpenDeployWorkflow}
-              onOpenDeployApproval={onOpenDeployApproval}
-            />
+            <>
+              <MarkdownRenderer
+                content={message.content}
+                onExecuteSql={(sql) => setActiveExecutedSql(sql)}
+                onOpenDeployWorkflow={onOpenDeployWorkflow}
+                onOpenDeployApproval={onOpenDeployApproval}
+                suppressDeploymentCards={hasPendingDecisions}
+              />
+
+              {/* 当存在待决策确认项时，直接内联渲染交互式选项卡片（完全非弹窗式），并在确认前严格抑制部署卡片 */}
+              {hasPendingDecisions && detectedDecisions && (
+                <InlineDecisionCard
+                  decisionData={detectedDecisions}
+                  onSubmit={(confirmedText) => {
+                    if (onSendMessage) {
+                      onSendMessage(confirmedText);
+                    }
+                  }}
+                />
+              )}
+            </>
           ) : isStreamingCurrent ? (
             <div className="flex items-center space-x-2 py-1 text-slate-400 text-xs">
               <span className="inline-block w-2 h-2 rounded-full bg-sky-500 animate-ping" />

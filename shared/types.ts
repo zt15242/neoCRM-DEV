@@ -418,6 +418,12 @@ export interface WorkflowNodeItem {
     actionType: number; // 2: 更新记录, 1: 创建记录, 3: 系统通知, 4: 发送邮件, 5: 业务事件...
     entityApiKey?: string;
     valueConfig?: any;
+    fieldUpdates?: Array<{
+      fieldApiKey?: string;
+      fieldLabel?: string;
+      operator?: string;
+      value?: any;
+    }>;
     description?: string;
   };
   queryConfig?: {
@@ -475,11 +481,40 @@ export interface WorkflowDeployPlan {
     executeType: string; // 1: 创建, 2: 编辑, 5: 平台事件, 6: 页面按钮, 7: 智能体操作 (逗号拼接)
     description?: string;
     enableIntelligentMode?: number; // 1: 开启, 2: 关闭 (默认 2)
+    targetMode?: "update" | "create";
+    targetProcdefId?: string | number;
+    targetStatus?: number;
   };
   variables: WorkflowVariableItem[];
   nodes: WorkflowNodeItem[];
   branches?: WorkflowGatewayBranch[];
   edges?: Array<{ source: string; target: string; label?: string }>;
+}
+
+export interface TenantFlowItem {
+  id: string; // 流程家族 ID (procInfoId)
+  procInfoId: string;
+  procdefId: string;
+  procdefApiKey?: string;
+  actKey?: string;
+  name: string;
+  objectName: string;
+  entityApiKey?: string;
+  entityId?: string | number;
+  bizTypeId?: string | number;
+  startupOrder?: number;
+  executeType?: string;
+  statusName: string; // "启用" | "设计" | "禁用"
+  status: number; // 1: 启用, 3: 设计, 2: 禁用
+  version?: number; // 当前版本号 (如 1, 2)
+  latestVersion?: number; // 流程族下的最新版本号
+  versionsCount?: number; // 版本总数
+  createdByName?: string;
+  createdAt?: string;
+  updatedByName?: string;
+  updatedAt?: string;
+  description?: string;
+  procType: 1 | 2; // 1: 自动流程, 2: 审批流
 }
 
 export interface WorkflowDeployResult {
@@ -616,6 +651,9 @@ export interface ApprovalDeployPlan {
     sendApprovalNotice?: 1 | 2;
     /** 准入初始条件公式 (可选，如留空则默认满足) */
     entryFormula?: string;
+    targetMode?: "update" | "create";
+    targetProcdefId?: string | number;
+    targetStatus?: number;
   };
   nodes: ApprovalNodeItem[];
   edges?: Array<{

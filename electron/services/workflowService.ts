@@ -1,9 +1,10 @@
 import axios from 'axios';
-import { NeoEnvironment, TokenData, WorkflowDeployPlan, WorkflowDeployResult, ApprovalDeployPlan } from '../../shared/types';
+import { NeoEnvironment, TokenData, WorkflowDeployPlan, WorkflowDeployResult, ApprovalDeployPlan, TenantFlowItem, WorkflowNodeItem } from '../../shared/types';
 import { MetadataService } from './metadataService';
+import { DataService } from './dataService';
 
 export class WorkflowService {
-  constructor(private metadataService: MetadataService) {}
+  constructor(private metadataService: MetadataService, private dataService: DataService = new DataService()) {}
 
   /**
    * 解析基础实例 URL
@@ -50,6 +51,248 @@ export class WorkflowService {
   /**
    * 查询当前租户已存在的自动流程列表 (POST /admin/creekflow/autoflow-list.action)
    */
+  /**
+   * 查询当前租户流程资产列表 (包含自动流程 procType=1 与新版审批流 procType=2)
+   */
+    public async listTenantFlows(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    params?: { procType?: 1 | 2; keyword?: string; pageNo?: number; pageSize?: number; status?: number }
+  ): Promise<{ 
+    success: boolean; 
+    data?: TenantFlowItem[]; 
+    total?: number; 
+    totalInTenant?: number; 
+    matchedKeyword?: string;
+    allFlowsSummary?: Array<{ name: string; objectName: string; entityApiKey: string; status: string; procType: number }>;
+    error?: string 
+  }> {
+    const baseUrl = this.resolveBaseUrl(env, tokenData);
+    const headers = this.buildAdminHeaders(baseUrl, tokenData);
+    const targetProcTypes = params?.procType ? [params.procType] : [1, 2];
+    const allItems: TenantFlowItem[] = [];
+
+    // 预热获取租户实体字典，建立双向映射 (如: opportunity <-> 商机, contract <-> 合同)，消除中英文搜索壁垒与空对象名缺陷
+    const entityMap: Record<string, string> = {};
+    try {
+      const entities = await this.metadataService.fetchEntityList(env, tokenData);
+      for (const ent of entities) {
+        if (ent.apiKey && ent.label) {
+          entityMap[ent.apiKey.toLowerCase()] = ent.label;
+          entityMap[ent.label.toLowerCase()] = ent.apiKey;
+        }
+      }
+    } catch {}
+
+    try {
+      for (const pt of targetProcTypes) {
+        const body = new URLSearchParams();
+        body.append("procType", String(pt));
+        // 关键修复: 销售易 Struts2 后端依赖 pagination.pageNo / pagination.pageSize 接收分页参数
+        body.append("pagination.pageNo", String(params?.pageNo || 1));
+        body.append("pagination.pageSize", String(params?.pageSize || 200));
+        body.append("pageNo", String(params?.pageNo || 1));
+        body.append("pageSize", String(params?.pageSize || 200));
+        if (params?.keyword) body.append("name", params.keyword);
+        if (params?.status !== undefined) body.append("status", String(params.status));
+
+        const res = await axios.post(`${baseUrl}/admin/creekflow/autoflow-list.action`, body.toString(), {
+          headers,
+          timeout: 15000,
+        });
+
+        const rawList = res.data?.body?.gridData || res.data?.data?.records || [];
+        
+        // 并行批量调阅每个流程族的精确版本列表 (designer-list.action)，获取真实生效版本、最新版本与关联实体
+        const enrichedItems = await Promise.all(
+          rawList.map(async (item: any) => {
+            const dc = item.datacell || [];
+            const procInfoId = String(item.id);
+            let versions: any[] = [];
+
+            try {
+              const dForm = new URLSearchParams();
+              dForm.append("baseInfoId", procInfoId);
+              const vRes = await axios.post(`${baseUrl}/admin/creekflow/designer-list.action`, dForm.toString(), {
+                headers,
+                timeout: 8000,
+              });
+              versions = vRes.data?.data || [];
+            } catch {}
+
+            // 版本按版本号倒序排
+            versions.sort((a, b) => (b.version || 0) - (a.version || 0));
+
+            // 优先匹配当前启用中的版本，其次匹配设计态草稿，再其次最新版本
+            const activeV =
+              versions.find((v) => v.status === 1) ||
+              versions.find((v) => v.status === 3) ||
+              versions[0];
+
+            const statusText = activeV?.statusName || dc[3] || "设计";
+            const statusNum = activeV?.status !== undefined ? Number(activeV.status) : statusText === "启用" ? 1 : statusText === "禁用" ? 2 : 3;
+            const procdefId = activeV ? String(activeV.procdefId) : (BigInt(procInfoId) + 1n).toString();
+            const currentVer = activeV?.version || 1;
+            const maxVer = versions.length > 0 ? Math.max(...versions.map((v) => Number(v.version) || 1)) : currentVer;
+
+            const rawEntityApiKey = activeV?.entityApiKey || "";
+            const rawObjectName = activeV?.objectName || dc[1] || "";
+            const resolvedEntityApiKey = rawEntityApiKey || (rawObjectName ? entityMap[rawObjectName.toLowerCase()] || "" : "");
+            const resolvedObjectName = rawObjectName || (rawEntityApiKey ? entityMap[rawEntityApiKey.toLowerCase()] || "" : "");
+
+            return {
+              id: procInfoId,
+              procInfoId,
+              procdefId,
+              procdefApiKey: activeV?.procdefApiKey || dc[dc.length - 1] || "",
+              actKey: activeV?.actKey || "",
+              name: activeV?.procName || dc[0] || "未命名流程",
+              objectName: resolvedObjectName,
+              entityApiKey: resolvedEntityApiKey,
+              entityId: activeV?.entityId || "",
+              bizTypeId: activeV?.bizTypeId || "",
+              startupOrder: activeV?.startupOrder || activeV?.order || 1,
+              executeType: activeV?.executeType || dc[2] || "",
+              statusName: statusText,
+              status: statusNum,
+              version: currentVer,
+              latestVersion: maxVer,
+              versionsCount: versions.length || 1,
+              createdByName: activeV?.createBy || dc[4] || "",
+              createdAt: activeV?.createAt || dc[6] || "",
+              updatedByName: activeV?.updateBy || dc[7] || "",
+              updatedAt: activeV?.updateAt || dc[9] || dc[6] || "",
+              description: activeV?.description || dc[10] || "",
+              procType: pt as (1 | 2),
+            };
+          })
+        );
+
+        allItems.push(...enrichedItems);
+      }
+
+      // 如果有关键词搜索，做二次双向模糊过滤 (中英文名协同匹配)
+      let filtered = allItems;
+      if (params?.keyword) {
+        const kw = params.keyword.trim().toLowerCase();
+        const searchTerms = [kw];
+        const related = entityMap[kw];
+        if (related && !searchTerms.includes(related.toLowerCase())) {
+          searchTerms.push(related.toLowerCase());
+        }
+
+        filtered = filtered.filter((f) =>
+          searchTerms.some(
+            (term) =>
+              (f.name && f.name.toLowerCase().includes(term)) ||
+              (f.objectName && f.objectName.toLowerCase().includes(term)) ||
+              (f.entityApiKey && f.entityApiKey.toLowerCase().includes(term)) ||
+              (f.description && f.description.toLowerCase().includes(term))
+          )
+        );
+      }
+
+      return {
+        success: true,
+        data: filtered,
+        total: filtered.length,
+        totalInTenant: allItems.length,
+        matchedKeyword: params?.keyword,
+        allFlowsSummary: allItems.map((f) => ({
+          name: f.name,
+          objectName: f.objectName,
+          entityApiKey: f.entityApiKey || "",
+          status: f.statusName,
+          procType: f.procType,
+        })),
+      };
+    } catch (e: any) {
+      return { success: false, error: `获取流程列表失败: ${e.response?.data?.message || e.message}` };
+    }
+  }
+
+  public async copyFlow(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    params: {
+      procdefId: string | number;
+      processName: string;
+      description?: string;
+      actKey?: string;
+      entityApiKey: string;
+      entityId: string | number;
+      bizTypeId?: string | number;
+      startupOrder?: number;
+      executeType?: string;
+      procType: 1 | 2;
+      enableIntelligentMode?: number;
+    }
+  ): Promise<{ success: boolean; newProcdefId?: string | number; error?: string }> {
+    const baseUrl = this.resolveBaseUrl(env, tokenData);
+    const headers = this.buildAdminHeaders(baseUrl, tokenData);
+    const url = `${baseUrl}/admin/creekflow/copy-baseInfo.action`;
+
+    const body = new URLSearchParams();
+    body.append("procdefId", String(params.procdefId));
+    body.append("processName", params.processName.trim());
+    body.append("description", params.description || "");
+    body.append("actKey", params.actKey || `flow_${Date.now()}`);
+    body.append("entityApiKey", params.entityApiKey);
+    body.append("entityId", String(params.entityId));
+    body.append("procType", String(params.procType));
+
+    if (params.procType === 1) {
+      body.append("executeType", params.executeType || "1,2");
+      body.append("enableIntelligentMode", String(params.enableIntelligentMode ?? 2));
+    } else {
+      body.append("bizTypeId", String(params.bizTypeId || "0"));
+      body.append("startupOrder", String(params.startupOrder || 99));
+    }
+
+    try {
+      const res = await axios.post(url, body.toString(), { headers, timeout: 20000 });
+      const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      if (data.status === 200 || data.status === "200" || data.data) {
+        const newId = data.data || data.procdefId;
+        return { success: true, newProcdefId: newId };
+      } else {
+        return { success: false, error: data.msg || JSON.stringify(data) };
+      }
+    } catch (e: any) {
+      return { success: false, error: `复制流程失败: ${e.response?.data?.message || e.message}` };
+    }
+  }
+
+  /**
+   * 删除流程版本或草稿 (delete-designer.action)
+   */
+  public async deleteFlowVersion(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    procdefId: string | number,
+    procType: 1 | 2 = 1
+  ): Promise<{ success: boolean; error?: string }> {
+    const baseUrl = this.resolveBaseUrl(env, tokenData);
+    const headers = this.buildAdminHeaders(baseUrl, tokenData);
+    const url = `${baseUrl}/admin/creekflow/delete-designer.action`;
+
+    const body = new URLSearchParams();
+    body.append("procdefId", String(procdefId));
+    body.append("procType", String(procType));
+
+    try {
+      const res = await axios.post(url, body.toString(), { headers, timeout: 15000 });
+      const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+      if (data.status === 200 || data.status === "200" || data.data) {
+        return { success: true };
+      } else {
+        return { success: false, error: data.msg || "删除失败" };
+      }
+    } catch (e: any) {
+      return { success: false, error: `删除流程失败: ${e.message}` };
+    }
+  }
+
   public async listAutoFlows(
     env: NeoEnvironment,
     tokenData: TokenData,
@@ -61,8 +304,10 @@ export class WorkflowService {
 
     const body = new URLSearchParams();
     body.append('procType', '1');
+    body.append('pagination.pageNo', String(params?.pageNo || 1));
+    body.append('pagination.pageSize', String(params?.pageSize || 100));
     body.append('pageNo', String(params?.pageNo || 1));
-    body.append('pageSize', String(params?.pageSize || 20));
+    body.append('pageSize', String(params?.pageSize || 100));
     if (params?.keyword) body.append('name', params.keyword);
     if (params?.status !== undefined) body.append('status', String(params.status));
 
@@ -83,18 +328,19 @@ export class WorkflowService {
   public async getFlowDetail(
     env: NeoEnvironment,
     tokenData: TokenData,
-    procdefId: string | number
+    procdefId: string | number,
+    procType: 1 | 2 = 1
   ): Promise<{ success: boolean; definition?: any; property?: any; error?: string }> {
     const baseUrl = this.resolveBaseUrl(env, tokenData);
     const headers = this.buildAdminHeaders(baseUrl, tokenData);
 
     try {
       const [defRes, propRes] = await Promise.all([
-        axios.get(`${baseUrl}/admin/creekflow/find-procdef.action?procdefId=${procdefId}&procType=1`, {
+        axios.get(`${baseUrl}/admin/creekflow/find-procdef.action?procdefId=${procdefId}&procType=${procType}`, {
           headers,
           timeout: 15000,
         }),
-        axios.get(`${baseUrl}/admin/creekflow/find-property.action?procdefId=${procdefId}&procType=1`, {
+        axios.get(`${baseUrl}/admin/creekflow/find-property.action?procdefId=${procdefId}&procType=${procType}`, {
           headers,
           timeout: 15000,
         }),
@@ -123,7 +369,8 @@ export class WorkflowService {
     env: NeoEnvironment,
     tokenData: TokenData,
     procdefId: string | number,
-    enable: boolean
+    enable: boolean,
+    procType: 1 | 2 = 1
   ): Promise<{ success: boolean; status?: number; error?: string }> {
     const baseUrl = this.resolveBaseUrl(env, tokenData);
     const headers = this.buildAdminHeaders(baseUrl, tokenData);
@@ -132,7 +379,7 @@ export class WorkflowService {
 
     const body = new URLSearchParams();
     body.append('procdefId', String(procdefId));
-    body.append('procType', '1');
+    body.append('procType', String(procType));
 
     try {
       const res = await axios.post(url, body.toString(), { headers, timeout: 15000 });
@@ -158,7 +405,8 @@ export class WorkflowService {
   public async reviseFlowVersion(
     env: NeoEnvironment,
     tokenData: TokenData,
-    procdefId: string | number
+    procdefId: string | number,
+    procType: 1 | 2 = 1
   ): Promise<{ success: boolean; newProcdefId?: string | number; error?: string }> {
     const baseUrl = this.resolveBaseUrl(env, tokenData);
     const headers = this.buildAdminHeaders(baseUrl, tokenData);
@@ -166,7 +414,7 @@ export class WorkflowService {
 
     const body = new URLSearchParams();
     body.append('procdefId', String(procdefId));
-    body.append('procType', '1');
+    body.append('procType', String(procType));
 
     try {
       const res = await axios.post(url, body.toString(), { headers, timeout: 15000 });
@@ -189,6 +437,114 @@ export class WorkflowService {
    * 包含流程身份创建 -> 图模型编排 -> 审批人/编辑字段/按钮策略 -> update-procdef -> 回读核验
    * =========================================================================
    */
+  /**
+   * 查询当前租户审批流与工作流中可用的真实资源 (角色、人员、部门、业务类型、字段选项)
+   */
+  public async getApprovalResources(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    entityApiKey?: string
+  ): Promise<{
+    roles: Array<{ apiKey: string; name: string; id: number }>;
+    users: Array<{ id: string; name: string; personalEmail?: string; departName?: string }>;
+    departments: Array<{ id: string; departName: string }>;
+    busiTypes: Array<{ id: number | string; apiKey: string; label: string }>;
+    picklistFields: Array<{ apiKey: string; label: string; options: Array<{ code: number | string; label: string }> }>;
+  }> {
+    const baseUrl = this.resolveBaseUrl(env, tokenData);
+    const headers = this.buildAdminHeaders(baseUrl, tokenData);
+
+    const result = {
+      roles: [] as any[],
+      users: [] as any[],
+      departments: [] as any[],
+      busiTypes: [] as any[],
+      picklistFields: [] as any[],
+    };
+
+    // 1. Roles
+    try {
+      const rolesRes = await axios.get(
+        `${baseUrl}/admin/creekflow/findApprover.action?findApproverWays=401&procType=2`,
+        { headers, timeout: 10000 }
+      );
+      result.roles = (rolesRes.data?.list || []).map((r: any) => ({
+        apiKey: r.apiKey,
+        name: r.name,
+        id: r.id,
+      }));
+    } catch {}
+
+    // 2. Departments
+    try {
+      const xoqlRes = await axios.post(
+        `${baseUrl}/rest/data/v2.0/query/xoql`,
+        "xoql=" + encodeURIComponent("SELECT id, departName FROM department LIMIT 30"),
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "xsy-inner-source": "bff",
+          },
+          timeout: 10000,
+        }
+      );
+      result.departments = xoqlRes.data?.data?.records || [];
+    } catch {}
+
+    // 3. Users
+    try {
+      const xoqlRes = await axios.post(
+        `${baseUrl}/rest/data/v2.0/query/xoql`,
+        "xoql=" + encodeURIComponent("SELECT id, name, personalEmail, dimDepart.departName FROM user LIMIT 30"),
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "xsy-inner-source": "bff",
+          },
+          timeout: 10000,
+        }
+      );
+      const rawUsers = xoqlRes.data?.data?.records || [];
+      result.users = rawUsers.map((u: any) => ({
+        id: String(u.id),
+        name: u.name,
+        personalEmail: u.personalEmail,
+        departName: u["dimDepart.departName"] || "",
+      }));
+    } catch {}
+
+    // 4. BusiTypes & Picklists
+    if (entityApiKey) {
+      try {
+        const btRes = await axios.get(`${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}/busiType`, {
+          headers,
+          timeout: 10000,
+        });
+        const bts = btRes.data?.data?.records || btRes.data?.records || [];
+        result.busiTypes = bts.map((b: any) => ({
+          id: b.id,
+          apiKey: b.apiKey,
+          label: b.label || b.name,
+        }));
+      } catch {}
+
+      try {
+        const fields = await this.metadataService.fetchEntityFields(env, tokenData, entityApiKey);
+        result.picklistFields = fields
+          .filter((f) => [3, 4].includes(f.itemType) && f.pickOption?.length)
+          .map((f) => ({
+            apiKey: f.apiKey,
+            label: f.label,
+            options: (f.pickOption || []).map((p) => ({ code: p.optionCode ?? "", label: p.optionLabel })),
+          }));
+      } catch {}
+    }
+
+    return result;
+  }
+
   public async deployApprovalPlan(
     env: NeoEnvironment,
     tokenData: TokenData,
@@ -215,7 +571,64 @@ export class WorkflowService {
       const entityApiKey = plan.flow.entityApiKey.trim();
       let resolvedEntityId = "0";
       let resolvedBizTypeId = "0";
-      let availableFields: Array<{ apiKey: string; label: string; itemType: number }> = [];
+      let availableFields: Array<{ apiKey: string; label: string; itemType: number; pickOption?: any[] }> = [];
+
+      try {
+        const fetched = await this.metadataService.fetchEntityFields(env, tokenData, entityApiKey);
+        if (fetched && fetched.length > 0) {
+          availableFields = fetched.map((f) => ({
+            apiKey: f.apiKey,
+            label: f.label || f.apiKey,
+            itemType: f.itemType || 1,
+            pickOption: (f as any).pickOption,
+          }));
+        }
+      } catch {}
+
+      if (availableFields.length === 0) {
+        try {
+          const itemsRes = await axios.get(`${baseUrl}/rest/metadata/v2.0/xobjects/${entityApiKey}/items`, {
+            headers: this.buildAdminHeaders(baseUrl, tokenData),
+            timeout: 10000,
+          });
+          const recs = itemsRes.data?.data?.records || itemsRes.data?.records || [];
+          if (Array.isArray(recs) && recs.length > 0) {
+            availableFields = recs.map((f: any) => ({
+              apiKey: f.apiKey,
+              label: f.label || f.apiKey,
+              itemType: Number(f.itemType || 1),
+              pickOption: f.pickOption,
+            }));
+          }
+        } catch {}
+      }
+
+      // 标准实体字段保底
+      const STANDARD_ENTITY_FALLBACK_FIELDS: Record<string, Array<{ apiKey: string; label: string; itemType: number; pickOption?: any[] }>> = {
+        contract: [
+          { apiKey: "amount", label: "总金额", itemType: 6 },
+          { apiKey: "title", label: "主题", itemType: 1 },
+          { apiKey: "contractType", label: "合同类型", itemType: 3 },
+          { apiKey: "status", label: "合同状态", itemType: 3 },
+          { apiKey: "payMode", label: "付款方式", itemType: 3 },
+          { apiKey: "ownerId", label: "所有人", itemType: 10 },
+        ],
+        opportunity: [
+          { apiKey: "money", label: "销售金额", itemType: 6 },
+          { apiKey: "opportunityName", label: "商机名称", itemType: 1 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+        case: [
+          { apiKey: "subject", label: "个案主题", itemType: 1 },
+          { apiKey: "status", label: "状态", itemType: 3 },
+          { apiKey: "priority", label: "优先级", itemType: 3 },
+          { apiKey: "ownerId", label: "负责人", itemType: 10 },
+        ],
+      };
+
+      if (availableFields.length === 0 && STANDARD_ENTITY_FALLBACK_FIELDS[entityApiKey.toLowerCase()]) {
+        availableFields = [...STANDARD_ENTITY_FALLBACK_FIELDS[entityApiKey.toLowerCase()]];
+      }
 
       try {
         const metaUrl = `${baseUrl}/rest/metadata/v2.0/xobjects/${entityApiKey}`;
@@ -278,37 +691,103 @@ export class WorkflowService {
         Date.now() - startT1
       );
 
-      // ================= 步骤 2: 创建审批流基本信息 (add-baseinfo.action, procType=2) =================
+      // ================= 步骤 2: 流程身份定位与创建 (模式分支: 更新草稿 / 修订新版本 / 新建流程) =================
       const startT2 = Date.now();
-      const baseInfoUrl = `${baseUrl}/admin/creekflow/add-baseinfo.action?decorator=ajaxformat&confirm=true`;
-      const baseInfoBody = new URLSearchParams();
-      baseInfoBody.append("processName", plan.flow.processName.trim());
-      baseInfoBody.append("entityApiKey", entityApiKey);
-      baseInfoBody.append("entityId", resolvedEntityId);
-      baseInfoBody.append("bizTypeId", resolvedBizTypeId);
-      baseInfoBody.append("startupOrder", String(plan.flow.startupOrder || 1));
-      baseInfoBody.append("nodeProcFlag", "2");
-      baseInfoBody.append("procType", "2"); // 2: 新版审批流程
-      baseInfoBody.append("description", plan.flow.description || "");
+      let procId = "0";
+      let procdefId = "0";
+      let procdefApiKey = "";
 
-      const baseInfoRes = await axios.post(baseInfoUrl, baseInfoBody.toString(), { headers, timeout: 15000 });
-      const baseInfoData = typeof baseInfoRes.data === "string" ? JSON.parse(baseInfoRes.data) : baseInfoRes.data;
+      const isUpdateMode = plan.flow.targetMode === "update" && plan.flow.targetProcdefId;
 
-      if (!baseInfoData || (!baseInfoData.procdefId && !baseInfoData.data?.procdefId)) {
-        throw new Error(`创建审批流程基本信息失败: ${baseInfoData.msg || JSON.stringify(baseInfoData)}`);
+      if (isUpdateMode) {
+        const targetId = String(plan.flow.targetProcdefId);
+        const existingDetail = await this.getFlowDetail(env, tokenData, targetId, 2);
+        if (!existingDetail.success || !existingDetail.definition?.baseInfo) {
+          throw new Error(`未找到目标现有流程 (${targetId}): ${existingDetail.error || "流程不存在"}`);
+        }
+
+        const base = existingDetail.definition.baseInfo;
+        const currentStatus = Number(base.status ?? plan.flow.targetStatus ?? 3);
+        procId = String(base.procInfoId || base.id);
+
+        if (currentStatus === 3) {
+          // 场景 A: 目标现有流程当前为【设计态草稿】，直接更新覆盖该版本，无需重新创建基本信息，彻底规避序号冲突
+          procdefId = String(base.procdefId || targetId);
+          procdefApiKey = String(base.procdefApiKey || "");
+          logStep(
+            "步骤 2: 定位目标现有流程 (更新设计态草稿)",
+            "success",
+            `已对齐现有草稿版本 procdefId=${procdefId}, procdefApiKey=${procdefApiKey}`,
+            Date.now() - startT2,
+            { procId, procdefId, procdefApiKey }
+          );
+        } else {
+          // 场景 B: 目标现有流程当前为【已启用】或【已禁用】，自动调用官方 revise-designer.action 修订为新版本 V2
+          const reviseRes = await this.reviseFlowVersion(env, tokenData, targetId, 2);
+          if (!reviseRes.success || !reviseRes.newProcdefId) {
+            throw new Error(`现有流程创建新修订版本失败: ${reviseRes.error}`);
+          }
+          procdefId = String(reviseRes.newProcdefId);
+          const newDef = await this.getFlowDetail(env, tokenData, procdefId, 2);
+          procdefApiKey = String(newDef.definition?.baseInfo?.procdefApiKey || "");
+          logStep(
+            "步骤 2: 现有流程自动创建新修订版本 (Revise Version)",
+            "success",
+            `已为 [${plan.flow.processName}] 创建新修订版本！新版本ID=${procdefId}, 继承原流程族`,
+            Date.now() - startT2,
+            { procId, procdefId, procdefApiKey }
+          );
+        }
+      } else {
+        // 场景 C: 创建全新独立流程族 (add-baseinfo.action)，自动递增规避序号已被占用的冲突
+        let candidateOrder = Number(plan.flow.startupOrder) || 1;
+        let created = false;
+        let lastErr = "";
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const baseInfoUrl = `${baseUrl}/admin/creekflow/add-baseinfo.action?decorator=ajaxformat&confirm=true`;
+          const baseInfoBody = new URLSearchParams();
+          baseInfoBody.append("processName", plan.flow.processName.trim());
+          baseInfoBody.append("entityApiKey", entityApiKey);
+          baseInfoBody.append("entityId", resolvedEntityId);
+          baseInfoBody.append("bizTypeId", resolvedBizTypeId);
+          baseInfoBody.append("startupOrder", String(candidateOrder));
+          baseInfoBody.append("nodeProcFlag", "2");
+          baseInfoBody.append("procType", "2");
+          baseInfoBody.append("description", plan.flow.description || "");
+
+          const baseInfoRes = await axios.post(baseInfoUrl, baseInfoBody.toString(), { headers, timeout: 15000 });
+          const baseInfoData = typeof baseInfoRes.data === "string" ? JSON.parse(baseInfoRes.data) : baseInfoRes.data;
+
+          if (baseInfoData && (baseInfoData.procdefId || baseInfoData.data?.procdefId)) {
+            procId = baseInfoData.procId || baseInfoData.data?.procId;
+            procdefId = baseInfoData.procdefId || baseInfoData.data?.procdefId;
+            procdefApiKey = baseInfoData.procdefApiKey || baseInfoData.data?.procdefApiKey;
+            created = true;
+            break;
+          } else {
+            const msg = String(baseInfoData?.msg || JSON.stringify(baseInfoData));
+            lastErr = msg;
+            if (msg.includes("序号已被其他审批流占用") || msg.includes("序号")) {
+              candidateOrder += 1;
+            } else {
+              throw new Error(`创建审批流程基本信息失败: ${msg}`);
+            }
+          }
+        }
+
+        if (!created) {
+          throw new Error(`创建审批流程基本信息失败: ${lastErr}`);
+        }
+
+        logStep(
+          "步骤 2: 创建审批流程身份 (add-baseinfo)",
+          "success",
+          `服务端成功创建审批流草稿！procdefId=${procdefId}, 启动序号=${candidateOrder}`,
+          Date.now() - startT2,
+          { procId, procdefId, procdefApiKey }
+        );
       }
-
-      const procId = baseInfoData.procId || baseInfoData.data?.procId;
-      const procdefId = baseInfoData.procdefId || baseInfoData.data?.procdefId;
-      const procdefApiKey = baseInfoData.procdefApiKey || baseInfoData.data?.procdefApiKey;
-
-      logStep(
-        "步骤 2: 创建审批流程身份 (add-baseinfo)",
-        "success",
-        `服务端成功创建审批流草稿！procdefId=${procdefId}, procdefApiKey=${procdefApiKey}`,
-        Date.now() - startT2,
-        { procId, procdefId, procdefApiKey }
-      );
 
       // ================= 步骤 3: 回读初始定义与根模型 resourceId =================
       const startT3 = Date.now();
@@ -330,12 +809,33 @@ export class WorkflowService {
       // ================= 步骤 4: 拓扑节点、审批策略与连线编码 =================
       const startT4 = Date.now();
 
-      // 标准固定提交节点
+      // 获取当前租户真实审批人资源 (401 真实角色，真实用户，真实部门)
+      let tenantRoles: Array<{ apiKey: string; name: string; id: number }> = [];
+      try {
+        const rolesRes = await axios.get(
+          `${baseUrl}/admin/creekflow/findApprover.action?findApproverWays=401&objectId=${resolvedEntityId}&entityApiKey=${entityApiKey}&procType=2`,
+          { headers, timeout: 10000 }
+        );
+        tenantRoles = rolesRes.data?.list || [];
+      } catch {}
+
+      let tenantUsers: Array<{ id: string; name: string }> = [];
+      try {
+        const xoqlUsers = await this.dataService.executeQuery(env, tokenData, "SELECT id, name FROM user LIMIT 30");
+        tenantUsers = (xoqlUsers.data?.records || []).map((u: any) => ({ id: String(u.id), name: String(u.name) }));
+      } catch {}
+
+      // 提取提交申请节点 (销售易审批流底层的提交任务必须严格使用固定标识 "___submitUserTaskDefKey___")
+      const existingSubmitNode = plan.nodes.find(
+        (n) => n.nodeType === "SubmitTask" || n.id === "___submitUserTaskDefKey___" || n.id.toLowerCase().includes("submittask")
+      );
       const submitNodeKey = "___submitUserTaskDefKey___";
+      const originalSubmitId = existingSubmitNode ? existingSubmitNode.id : null;
+
       const submitTaskConfig = {
         taskDefKey: submitNodeKey,
-        taskDefName: "提交申请",
-        ccFlag: 2,
+        taskDefName: existingSubmitNode?.name || "提交申请",
+        ccFlag: (existingSubmitNode as any)?.ccFlag || 2,
         buttons: [
           { customBtn: 2, name: "提交申请", devPlatformClass: "", btnType: 1 },
         ],
@@ -345,17 +845,53 @@ export class WorkflowService {
         assignments: [],
       };
 
-      // 组装连线 edges (确保包含 Start -> SubmitTask -> FirstNode)
-      const edges = plan.edges && plan.edges.length > 0 ? [...plan.edges] : [];
-      if (edges.length === 0 && plan.nodes.length > 1) {
-        const startNode = plan.nodes.find((n) => n.nodeType === "StartNoneEvent") || plan.nodes[0];
+      // 确保全图包含且仅包含一个合法的提交申请节点，并将其 ID 规范化映射为 "___submitUserTaskDefKey___"
+      const fullOrderedNodes: any[] = [];
+      let submitNodeInserted = false;
+
+      for (const n of plan.nodes) {
+        if (n.nodeType === "SubmitTask" || n.id === originalSubmitId || n.id === submitNodeKey) {
+          if (!submitNodeInserted) {
+            fullOrderedNodes.push({
+              ...n,
+              id: submitNodeKey,
+              nodeType: "SubmitTask",
+              name: n.name || "提交申请",
+            });
+            submitNodeInserted = true;
+          }
+        } else {
+          fullOrderedNodes.push({ ...n });
+        }
+      }
+
+      if (!submitNodeInserted) {
+        const startIdx = fullOrderedNodes.findIndex((n) => n.nodeType === "StartNoneEvent");
+        fullOrderedNodes.splice(startIdx >= 0 ? startIdx + 1 : 1, 0, {
+          id: submitNodeKey,
+          nodeType: "SubmitTask",
+          name: "提交申请",
+        });
+      }
+
+      // 将连线 edges 中指向/发自原有提交节点 ID (如 SubmitTask_1) 的引用无缝重定向到 ___submitUserTaskDefKey___
+      const edges = (plan.edges || []).map((e) => ({
+        source: (originalSubmitId && e.source === originalSubmitId) ? submitNodeKey : e.source,
+        target: (originalSubmitId && e.target === originalSubmitId) ? submitNodeKey : e.target,
+        label: (e as any).label || (e as any).name,
+        isDefault: (e as any).isDefault || (e as any).defaultFlow,
+        condition: (e as any).condition,
+        conditionFormula: (e as any).conditionFormula,
+      }));
+
+      if (edges.length === 0 && fullOrderedNodes.length > 1) {
+        const startNode = fullOrderedNodes.find((n) => n.nodeType === "StartNoneEvent") || fullOrderedNodes[0];
         let prevNodeId = startNode.id;
-        // 如果没有显式连 submitNodeKey，由 startNode 连到 submitNodeKey
-        if (!plan.nodes.some((n) => n.id === submitNodeKey)) {
+        if (!fullOrderedNodes.some((n) => n.id === submitNodeKey)) {
           edges.push({ source: startNode.id, target: submitNodeKey });
           prevNodeId = submitNodeKey;
         }
-        for (const n of plan.nodes) {
+        for (const n of fullOrderedNodes) {
           if (n.id === startNode.id || n.id === submitNodeKey) continue;
           edges.push({ source: prevNodeId, target: n.id });
           prevNodeId = n.id;
@@ -372,13 +908,39 @@ export class WorkflowService {
 
         if (un.approverRules && un.approverRules.length > 0) {
           un.approverRules.forEach((rule, rIdx) => {
-            const assignmentInfoS = (rule.approvers || []).map((ap, apIdx) => ({
-              defaultFlag: 1,
-              orderId: apIdx + 1,
-              label: ap.label,
-              assignmentInfoType: ap.infoType || (rule.assignmentType === "401" ? 4 : 1),
-              objectDataApiKey: ap.apiKey || "dfd5e3151f4c4575d626952fe3f6bb31",
-            }));
+            const assignmentInfoS = (rule.approvers || []).map((ap, apIdx) => {
+              let objApiKey = ap.apiKey || "";
+              let objLabel = ap.label || "";
+
+              if (rule.assignmentType === "401") {
+                const hitRole = tenantRoles.find((tr) => tr.apiKey.toLowerCase() === objApiKey.toLowerCase() || tr.name === objLabel);
+                if (hitRole) {
+                  objApiKey = hitRole.apiKey;
+                  objLabel = hitRole.name;
+                } else if (tenantRoles.length > 0) {
+                  const kwMatch = tenantRoles.find((tr) => /经理|主管|财务|领导/i.test(tr.name)) || tenantRoles[0];
+                  objApiKey = kwMatch.apiKey;
+                  objLabel = kwMatch.name;
+                }
+              } else if (rule.assignmentType === "202") {
+                const hitUser = tenantUsers.find((tu) => tu.id === objApiKey || tu.name === objLabel);
+                if (hitUser) {
+                  objApiKey = hitUser.id;
+                  objLabel = hitUser.name;
+                } else if (tenantUsers.length > 0) {
+                  objApiKey = tenantUsers[0].id;
+                  objLabel = tenantUsers[0].name;
+                }
+              }
+
+              return {
+                defaultFlag: 1,
+                orderId: apIdx + 1,
+                label: objLabel || ap.label || "指定人员/角色",
+                assignmentInfoType: ap.infoType || (rule.assignmentType === "401" ? 4 : 1),
+                objectDataApiKey: objApiKey || "DefaultAdmin",
+              };
+            });
 
             assignments.push({
               assignmentObjectType: 1, // 1: 正常审批人
@@ -440,22 +1002,40 @@ export class WorkflowService {
         });
       });
 
-      // 布局坐标
-      let layoutX = 180;
-      let layoutY = 250;
+      // 计算二维拓扑横向自动布局坐标 (左->右主干，网关多分支上下均匀分布)
+      const depthMap = new Map<string, number>();
+      const startNodeObj = fullOrderedNodes.find((n) => n.nodeType === "StartNoneEvent") || fullOrderedNodes[0];
+      if (startNodeObj) {
+        depthMap.set(startNodeObj.id, 0);
+        const queue: string[] = [startNodeObj.id];
+        const visited = new Set<string>([startNodeObj.id]);
+        while (queue.length > 0) {
+          const curr = queue.shift()!;
+          const currDepth = depthMap.get(curr) || 0;
+          for (const e of edges.filter((edge) => edge.source === curr)) {
+            const nextDepth = Math.max(depthMap.get(e.target) || 0, currDepth + 1);
+            depthMap.set(e.target, nextDepth);
+            if (!visited.has(e.target)) {
+              visited.add(e.target);
+              queue.push(e.target);
+            }
+          }
+        }
+      }
+      fullOrderedNodes.forEach((n, idx) => {
+        if (!depthMap.has(n.id)) depthMap.set(n.id, idx);
+      });
+
+      const depthBuckets = new Map<number, string[]>();
+      fullOrderedNodes.forEach((n) => {
+        const d = depthMap.get(n.id) || 0;
+        const list = depthBuckets.get(d) || [];
+        list.push(n.id);
+        depthBuckets.set(d, list);
+      });
+
       const childShapes: any[] = [];
       const nodeInfo: Record<string, any> = {};
-
-      // 确保全图包含: 开始、提交申请、各业务节点、结束
-      const fullOrderedNodes = [...plan.nodes];
-      if (!fullOrderedNodes.some((n) => n.id === submitNodeKey)) {
-        const startIdx = fullOrderedNodes.findIndex((n) => n.nodeType === "StartNoneEvent");
-        fullOrderedNodes.splice(startIdx >= 0 ? startIdx + 1 : 1, 0, {
-          id: submitNodeKey,
-          nodeType: "SubmitTask",
-          name: "提交申请",
-        });
-      }
 
       fullOrderedNodes.forEach((n) => {
         let serverType = n.nodeType as string;
@@ -488,10 +1068,16 @@ export class WorkflowService {
           serverType,
           taskDefName: n.name,
           label,
-          nodeType: n.id === submitNodeKey ? "UserTask" : n.nodeType,
-          subType: n.id === submitNodeKey ? "SUBMIT_TASK" : undefined,
+          nodeType: (n.id === submitNodeKey || n.nodeType === "SubmitTask") ? "UserTask" : n.nodeType,
+          subType: (n.id === submitNodeKey || n.nodeType === "SubmitTask") ? "SUBMIT_TASK" : undefined,
           taskType: n.nodeType === "UserTask" ? (n as any).taskType || "1" : undefined,
         };
+
+        const d = depthMap.get(n.id) || 0;
+        const bucket = depthBuckets.get(d) || [n.id];
+        const rank = bucket.indexOf(n.id);
+        const nodeX = 100 + d * 230;
+        const nodeY = Math.round(270 + (rank - (bucket.length - 1) / 2) * 170);
 
         const outgoingEdgeIds = edges
           .map((e, eIdx) => ({ edgeId: `edge__${eIdx + 1}_${e.source}_${e.target}`, ...e }))
@@ -500,25 +1086,23 @@ export class WorkflowService {
         childShapes.push({
           outgoing: outgoingEdgeIds.map((oe) => ({
             resourceId: oe.edgeId,
-            sourceAnchor: 1,
+            sourceAnchor: 1, // 统一自右侧锚点出，横向平滑连线
           })),
           resourceId: n.id,
           bounds: {
-            upperLeft: { x: layoutX, y: layoutY },
+            upperLeft: { x: nodeX, y: Math.max(60, nodeY) },
             lowerRight: { x: 0, y: 0 },
           },
           dockers: [{ x: 0, y: 0 }, { x: 0, y: 0 }],
           stencil: { id: stencilId },
         });
-
-        layoutX += 200;
       });
 
       // 插入连线 (SequenceFlow)
       edges.forEach((e, eIdx) => {
         const edgeId = `edge__${eIdx + 1}_${e.source}_${e.target}`;
         childShapes.push({
-          outgoing: [{ resourceId: e.target, targetAnchor: 0 }],
+          outgoing: [{ resourceId: e.target, targetAnchor: 3 }], // 统一自左侧锚点入
           resourceId: edgeId,
           bounds: { upperLeft: { x: 0, y: 0 }, lowerRight: { x: 0, y: 0 } },
           dockers: [{ x: 0, y: 0 }, { x: 0, y: 0 }],
@@ -528,33 +1112,176 @@ export class WorkflowService {
 
       // 网关分支条件
       const gateWaysList: any[] = [];
-      for (const gw of plan.nodes.filter((n) => n.nodeType === "ExclusiveGateway")) {
+      for (const gw of fullOrderedNodes.filter((n) => n.nodeType === "ExclusiveGateway")) {
         const gwEdges = edges
           .map((e, eIdx) => ({ edgeId: `edge__${eIdx + 1}_${e.source}_${e.target}`, ...e }))
           .filter((e) => e.source === gw.id);
+
+        const hasExplicitDefault = gwEdges.some((ge: any) => ge.isDefault || ge.defaultFlow);
 
         gateWaysList.push({
           gateWayId: gw.id,
           gateWayName: gw.name || "网关",
           gateWayType: 1,
-          conditions: gwEdges.map((ge, gIdx) => {
-            const isDefault = ge.isDefault ?? gIdx === gwEdges.length - 1;
+          conditions: gwEdges.map((ge: any, gIdx) => {
+            const isDefault = hasExplicitDefault
+              ? Boolean(ge.isDefault || ge.defaultFlow)
+              : gIdx === gwEdges.length - 1;
+
             return {
               sourceId: gw.id,
-              seqFlowName: ge.label || (isDefault ? "默认" : `条件${gIdx + 1}`),
+              seqFlowName: isDefault ? "默认" : (ge.label || ge.name || `分支_${gIdx + 1}`),
+              condition: (() => {
+                if (ge.conditionFormula) {
+                  return {
+                    defaultFlow: isDefault,
+                    gateWayType: isDefault ? "1" : "2",
+                    conditionType: "2",
+                    specialExpression: ge.conditionFormula,
+                    conditionName: isDefault ? "默认" : (ge.label || ge.name || `分支_${gIdx + 1}`),
+                    entityApiKey,
+                    conditionJson: "",
+                  };
+                }
+
+                // 智能解析条件字段与操作符（绝不盲目兜底为无意义的 ID isNotNull）
+                let condField: any = null;
+                let condOp = "equals";
+                let condVal = "";
+                let condLabel = "";
+
+                if (ge.condition && (ge.condition.field || ge.condition.fieldApiKey)) {
+                  const fKey = String(ge.condition.field || ge.condition.fieldApiKey).trim();
+                  condField = availableFields.find((f) => f.apiKey.toLowerCase() === fKey.toLowerCase() || f.label === fKey);
+                  if (condField) {
+                    condOp = ge.condition.operator || "equals";
+                    condVal = String(ge.condition.value ?? "");
+                    condLabel = condField.label;
+                  }
+                }
+
+                // 若 AI 未显式提供 condition 对象，基于连线名称语义进行上下文智能推导
+                if (!condField) {
+                  const branchName = String(ge.label || ge.name || "");
+                  if (/金额|amount|万元|大额|小额|十万/i.test(branchName)) {
+                    condField = availableFields.find((f) => f.apiKey === "amount" || f.apiKey === "money" || f.itemType === 6) ||
+                      { apiKey: "amount", label: "总金额", itemType: 6 };
+                    condLabel = condField.label || "总金额";
+                    if (/大额|大于|>|超/i.test(branchName)) {
+                      condOp = "greaterThan";
+                      condVal = "100000";
+                    } else {
+                      condOp = "lessOrEquals";
+                      condVal = "100000";
+                    }
+                  } else if (/紧急|特急|故障|priority|urgency/i.test(branchName)) {
+                    condField = availableFields.find((f) => f.apiKey === "urgencyLevel__c" || f.apiKey === "priority") ||
+                      availableFields.find((f) => [3, 4].includes(f.itemType)) ||
+                      { apiKey: "urgencyLevel__c", label: "紧急程度", itemType: 3 };
+                    condLabel = condField.label || "紧急程度";
+                    condOp = "equals";
+                    condVal = "2";
+                  } else {
+                    // 默认选取实体主业务数值或状态字段
+                    condField = availableFields.find((f) => f.apiKey !== "id" && [6, 3, 1, 5].includes(f.itemType)) ||
+                      availableFields.find((f) => f.apiKey !== "id") ||
+                      { apiKey: "amount", label: "总金额", itemType: 6 };
+                    condLabel = condField.label;
+                    condOp = condField.itemType === 6 ? "greaterThan" : "equals";
+                    condVal = condField.itemType === 6 ? "100000" : "1";
+                  }
+                }
+
+                let valList: string[] = [];
+                if (condVal.includes(",") || condVal.includes("，")) {
+                  valList = condVal.split(/[,，]+/).map((s: string) => s.trim()).filter(Boolean);
+                } else if (condVal) {
+                  valList = [condVal.trim()];
+                }
+                if (valList.length === 0) {
+                  valList = [condVal];
+                }
+
+                // 规范化操作符映射 (支持数值大小比较与单选枚举)
+                let safeOp = "equals";
+                const rawOpLower = String(condOp || "equals").toLowerCase();
+                if ([">", "gt", "greaterthan"].includes(rawOpLower)) {
+                  safeOp = "greaterThan";
+                } else if ([">=", "gte", "ge", "greaterorequals", "greaterthanorequals"].includes(rawOpLower)) {
+                  safeOp = "greaterOrEquals";
+                } else if (["<", "lt", "lessthan"].includes(rawOpLower)) {
+                  safeOp = "lessThan";
+                } else if (["<=", "lte", "le", "lessorequals", "lessthanorequals"].includes(rawOpLower)) {
+                  safeOp = "lessOrEquals";
+                } else if (["!=", "ne", "notequals"].includes(rawOpLower)) {
+                  safeOp = "notEquals";
+                } else if (["isnull", "null"].includes(rawOpLower)) {
+                  safeOp = "isNull";
+                } else if (["isnotnull", "notnull"].includes(rawOpLower)) {
+                  safeOp = "isNotNull";
+                } else if (["contains"].includes(rawOpLower)) {
+                  safeOp = "contains";
+                } else if (["notcontains"].includes(rawOpLower)) {
+                  safeOp = "notContains";
+                } else {
+                  safeOp = "equals";
+                }
+
+                const criteriaRows = valList.map((valItem, vIdx) => {
+                  let rightLabel = valItem;
+                  let rightVal = valItem;
+
+                  if ((condField as any).pickOption && Array.isArray((condField as any).pickOption)) {
+                    const optMatch = (condField as any).pickOption.find(
+                      (po: any) => String(po.optionCode) === valItem || po.optionLabel === valItem
+                    );
+                    if (optMatch) {
+                      rightVal = String(optMatch.optionCode);
+                      rightLabel = optMatch.optionLabel;
+                    }
+                  }
+
+                  return {
+                    filterRowNum: String(vIdx + 1),
+                    leftItemTypeEntry: String(condField.itemType || 1),
+                    leftReferItems: `${entityApiKey}.${condField.apiKey}`,
+                    leftReferLabel: condLabel,
+                    itemApiKey: condField.apiKey,
+                    itemName: condField.apiKey,
+                    operator: safeOp,
+                    rightItemTypeEntry: String(condField.itemType || 1),
+                    rightValue: rightVal,
+                    rightReferItems: rightVal,
+                    rightReferLabel: rightLabel,
+                    criteriaType: "1",
+                  };
+                });
+
+                const isMultiVal = criteriaRows.length > 1;
+                const formulaStr = isMultiVal ? criteriaRows.map((_, i) => String(i + 1)).join(" OR ") : "";
+
+                return {
+                  defaultFlow: isDefault,
+                  gateWayType: isDefault ? "1" : "2",
+                  conditionJson: isDefault
+                    ? ""
+                    : {
+                        referFilter: {
+                          advancedFlag: isMultiVal ? 1 : 0,
+                          filterFormula: formulaStr,
+                        },
+                        referFilterCriteria: criteriaRows,
+                      },
+                  conditionName: isDefault ? "默认" : (ge.label || ge.name || `分支_${gIdx + 1}`),
+                  conditionType: "1",
+                  specialExpression: "",
+                  entityApiKey,
+                };
+              })(),
               serialNumber: gIdx + 1,
               targetId: ge.target,
               tagertId: ge.target,
               seqFlowId: ge.edgeId,
-              condition: {
-                defaultFlow: isDefault,
-                gateWayType: isDefault ? "1" : "2",
-                conditionType: ge.conditionFormula ? "2" : "1",
-                specialExpression: ge.conditionFormula || "",
-                conditionName: ge.label || (isDefault ? "默认" : `条件${gIdx + 1}`),
-                entityApiKey,
-                conditionJson: isDefault ? "" : { referFilter: { advancedFlag: 0, filterFormula: "" }, referFilterCriteria: [] },
-              },
             };
           }),
         });
@@ -643,7 +1370,7 @@ export class WorkflowService {
       let finalStatus = 3;
       if (options?.autoEnable) {
         const startT7 = Date.now();
-        const enableRes = await this.toggleFlowStatus(env, tokenData, procdefId, true);
+        const enableRes = await this.toggleFlowStatus(env, tokenData, procdefId, true, procType);
         if (enableRes.success) {
           finalStatus = 1;
           logStep("步骤 7: 启用流程", "success", "🎉 审批流版本已成功启用 (status=1)！", Date.now() - startT7);
@@ -733,6 +1460,7 @@ export class WorkflowService {
     const stepsLog: WorkflowDeployResult['stepsLog'] = [];
     const baseUrl = this.resolveBaseUrl(env, tokenData);
     const headers = this.buildAdminHeaders(baseUrl, tokenData);
+    const procType = 1;
 
     const logStep = (step: string, status: 'success' | 'warn' | 'error' | 'skipped', message: string, timeMs?: number, details?: any) => {
       stepsLog.push({ step, status, message, timeMs, details });
@@ -913,54 +1641,100 @@ export class WorkflowService {
         Date.now() - startT1
       );
 
-      // ================= 步骤 2: 创建流程基本信息 (add-baseinfo.action) =================
+      // ================= 步骤 2: 流程身份定位与创建 (模式分支: 更新草稿 / 修订新版本 / 新建流程) =================
       const startT2 = Date.now();
-      const baseInfoUrl = `${baseUrl}/admin/creekflow/add-baseinfo.action?decorator=ajaxformat&confirm=true`;
-      const baseInfoBody = new URLSearchParams();
-      baseInfoBody.append('processName', plan.flow.processName.trim());
-      baseInfoBody.append('actKey', plan.flow.actKey.trim());
-      baseInfoBody.append('entityApiKey', entityApiKey.trim());
-      baseInfoBody.append('entityId', resolvedEntityId);
-      baseInfoBody.append('executeType', plan.flow.executeType || '1');
-      baseInfoBody.append('description', plan.flow.description || '');
-      baseInfoBody.append('procType', '1');
-      baseInfoBody.append('enableIntelligentMode', String(plan.flow.enableIntelligentMode ?? 2));
+      let procId = '0';
+      let procdefId = '0';
+      let procdefApiKey = '';
 
-      const baseInfoRes = await axios.post(baseInfoUrl, baseInfoBody.toString(), { headers, timeout: 15000 });
-      const baseInfoData = typeof baseInfoRes.data === 'string' ? JSON.parse(baseInfoRes.data) : baseInfoRes.data;
+      const isUpdateMode = plan.flow.targetMode === 'update' && plan.flow.targetProcdefId;
 
-      // 诊断是否为 Struts 系统错误
-      if (
-        (baseInfoData.status === 0 || baseInfoData.code === 0) &&
-        baseInfoData.data?.view &&
-        String(baseInfoData.data.view).includes('System error')
-      ) {
-        throw new Error(
-          '销售易后台返回 System error: 说明管理员 Web 会话 Cookie 无效或已失效。请点击顶栏【捕获/刷新 Cookie】并在弹出的后台窗口中登录获取管理员会话。'
+      if (isUpdateMode) {
+        const targetId = String(plan.flow.targetProcdefId);
+        const existingDetail = await this.getFlowDetail(env, tokenData, targetId, 1);
+        if (!existingDetail.success || !existingDetail.definition?.baseInfo) {
+          throw new Error(`未找到目标现有自动流程 (${targetId}): ${existingDetail.error || '流程不存在'}`);
+        }
+
+        const base = existingDetail.definition.baseInfo;
+        const currentStatus = Number(base.status ?? plan.flow.targetStatus ?? 3);
+        procId = String(base.procInfoId || base.id);
+
+        if (currentStatus === 3) {
+          // 现有流程当前为【设计态草稿】，直接更新覆盖该版本
+          procdefId = String(base.procdefId || targetId);
+          procdefApiKey = String(base.procdefApiKey || '');
+          logStep(
+            '步骤 2: 定位目标现有流程 (草稿更新模式)',
+            'success',
+            `已对齐现有草稿版本 procdefId=${procdefId}, procdefApiKey=${procdefApiKey}`,
+            Date.now() - startT2,
+            { procId, procdefId, procdefApiKey }
+          );
+        } else {
+          // 现有流程当前为【已启用】或【已禁用】，自动调用官方 revise-designer.action 修订为新版本 V2
+          const reviseRes = await this.reviseFlowVersion(env, tokenData, targetId, 1);
+          if (!reviseRes.success || !reviseRes.newProcdefId) {
+            throw new Error(`现有流程创建新修订版本失败: ${reviseRes.error}`);
+          }
+          procdefId = String(reviseRes.newProcdefId);
+          const newDef = await this.getFlowDetail(env, tokenData, procdefId, 1);
+          procdefApiKey = String(newDef.definition?.baseInfo?.procdefApiKey || '');
+          logStep(
+            '步骤 2: 现有流程自动创建新修订版本 (Revise Version)',
+            'success',
+            `已为 [${plan.flow.processName}] 创建新修订版本！新版本ID=${procdefId}`,
+            Date.now() - startT2,
+            { procId, procdefId, procdefApiKey }
+          );
+        }
+      } else {
+        const baseInfoUrl = `${baseUrl}/admin/creekflow/add-baseinfo.action?decorator=ajaxformat&confirm=true`;
+        const baseInfoBody = new URLSearchParams();
+        baseInfoBody.append('processName', plan.flow.processName.trim());
+        baseInfoBody.append('actKey', plan.flow.actKey.trim());
+        baseInfoBody.append('entityApiKey', entityApiKey.trim());
+        baseInfoBody.append('entityId', resolvedEntityId);
+        baseInfoBody.append('executeType', plan.flow.executeType || '1');
+        baseInfoBody.append('description', plan.flow.description || '');
+        baseInfoBody.append('procType', '1');
+        baseInfoBody.append('enableIntelligentMode', String(plan.flow.enableIntelligentMode ?? 2));
+
+        const baseInfoRes = await axios.post(baseInfoUrl, baseInfoBody.toString(), { headers, timeout: 15000 });
+        const baseInfoData = typeof baseInfoRes.data === 'string' ? JSON.parse(baseInfoRes.data) : baseInfoRes.data;
+
+        if (
+          (baseInfoData.status === 0 || baseInfoData.code === 0) &&
+          baseInfoData.data?.view &&
+          String(baseInfoData.data.view).includes('System error')
+        ) {
+          throw new Error(
+            '销售易后台返回 System error: 说明管理员 Web 会话 Cookie 无效或已失效。请点击顶栏【捕获/刷新 Cookie】并在弹出的后台窗口中登录获取管理员会话。'
+          );
+        }
+
+        if (!baseInfoData || (!baseInfoData.procdefId && !baseInfoData.data?.procdefId)) {
+          throw new Error(`创建流程基本信息失败: ${baseInfoData.msg || JSON.stringify(baseInfoData)}`);
+        }
+
+        procId = baseInfoData.procId || baseInfoData.data?.procId;
+        procdefId = baseInfoData.procdefId || baseInfoData.data?.procdefId;
+        procdefApiKey = baseInfoData.procdefApiKey || baseInfoData.data?.procdefApiKey;
+
+        logStep(
+          '步骤 2: 创建基本信息 (add-baseinfo)',
+          'success',
+          `服务端成功创建流程草稿！procdefId=${procdefId}, procdefApiKey=${procdefApiKey}`,
+          Date.now() - startT2,
+          { procId, procdefId, procdefApiKey }
         );
       }
-
-      if (!baseInfoData || (!baseInfoData.procdefId && !baseInfoData.data?.procdefId)) {
-        throw new Error(`创建流程基本信息失败: ${baseInfoData.msg || JSON.stringify(baseInfoData)}`);
-      }
-
-      const procId = baseInfoData.procId || baseInfoData.data?.procId;
-      const procdefId = baseInfoData.procdefId || baseInfoData.data?.procdefId;
-      const procdefApiKey = baseInfoData.procdefApiKey || baseInfoData.data?.procdefApiKey;
-
-      logStep(
-        '步骤 2: 创建基本信息 (add-baseinfo)',
-        'success',
-        `服务端成功创建流程草稿！procdefId=${procdefId}, procdefApiKey=${procdefApiKey}`,
-        Date.now() - startT2,
-        { procId, procdefId, procdefApiKey }
-      );
 
       // ================= 步骤 3: 回读初始定义与根模型 resourceId (find-procdef & find-property) =================
       const startT3 = Date.now();
       const [initDefRes, initPropRes] = await Promise.all([
-        axios.get(`${baseUrl}/admin/creekflow/find-procdef.action?procdefId=${procdefId}&procType=1`, { headers, timeout: 15000 }),
-        axios.get(`${baseUrl}/admin/creekflow/find-property.action?procdefId=${procdefId}&procType=1`, { headers, timeout: 15000 }),
+        axios.get(`${baseUrl}/admin/creekflow/find-procdef.action?procdefId=${procdefId}&procType=${procType}`, { headers, timeout: 15000 }),
+        axios.get(`${baseUrl}/admin/creekflow/find-property.action?procdefId=${procdefId}&procType=${procType}`, { headers, timeout: 15000 }),
       ]);
 
       const rawDef = typeof initDefRes.data === 'string' ? JSON.parse(initDefRes.data) : initDefRes.data;
@@ -976,78 +1750,222 @@ export class WorkflowService {
 
       logStep('步骤 3: 回读初始定义与模板属性', 'success', `获取到服务端根图模型 resourceId=${rootResourceId}`, Date.now() - startT3);
 
-      // ================= 步骤 4: 注册动作资源 (add-action.action) =================
+      // ================= 步骤 4: 注册动作资源 (add-action.action，自主自适应解析) =================
       const startT4 = Date.now();
-      const actionNodes = plan.nodes.filter((n) => n.nodeType === 'ServiceTask');
-      const actionMap = new Map<string, { actionApiKey: string; actionId: string; actionName: string }>();
+      const actionNodes = plan.nodes.filter((n) => n.nodeType === "ServiceTask");
+      const actionMap = new Map<string, { actionApiKey: string; actionId: string; actionName: string; criteria: any[]; logSummary: string }>();
 
       // 遵循文档铁律：如果画布没有动作节点，根据启用要求自动生成一个
       if (actionNodes.length === 0) {
         actionNodes.push({
-          id: 'ServiceTask_auto_1',
-          nodeType: 'ServiceTask',
-          name: '更新记录',
+          id: "ServiceTask_auto_1",
+          nodeType: "ServiceTask",
+          name: "更新记录",
           actionConfig: {
-            actionName: '更新记录',
+            actionName: "更新记录",
             actionType: 2,
             entityApiKey,
           },
         });
       }
 
+      // 动态解析动作节点的更新字段明细（优先使用 AI 自主分析规划的 fieldUpdates，并进行元数据自适应纠错匹配）
+      const resolveActionFieldCriteria = (
+        actionNode: WorkflowNodeItem,
+        targetEntityKey: string,
+        allFields: Array<{ apiKey: string; label: string; itemType: number }>,
+        targetObjectId: string
+      ): { criteria: any[]; logSummary: string } => {
+        const criteriaList: any[] = [];
+        const rawUpdates = actionNode.actionConfig?.fieldUpdates || (Array.isArray(actionNode.actionConfig?.valueConfig) ? actionNode.actionConfig?.valueConfig : []);
+
+        // 1. 如果 AI 明确规划了具体字段更新
+        if (Array.isArray(rawUpdates) && rawUpdates.length > 0) {
+          rawUpdates.forEach((upd: any, uIdx: number) => {
+            const rawKey = String(upd.fieldApiKey || upd.field || upd.itemApiKey || "").trim();
+            if (!rawKey) return;
+
+            // 动态匹配与智能纠错：
+            // a. 精确匹配（忽略大小写）
+            // b. 剥离或补充 __c 匹配
+            // c. 中文 Label 匹配
+            let matched = allFields.find((f) => f.apiKey.toLowerCase() === rawKey.toLowerCase());
+            if (!matched && !rawKey.endsWith("__c")) {
+              matched = allFields.find((f) => f.apiKey.toLowerCase() === `${rawKey.toLowerCase()}__c`);
+            }
+            if (!matched && rawKey.endsWith("__c")) {
+              matched = allFields.find((f) => f.apiKey.toLowerCase() === rawKey.toLowerCase().replace(/__c$/, ""));
+            }
+            if (!matched && (upd.fieldLabel || upd.label)) {
+              const lbl = upd.fieldLabel || upd.label;
+              matched = allFields.find((f) => f.label === lbl);
+            }
+
+            const targetField = matched || {
+              apiKey: rawKey,
+              label: upd.fieldLabel || upd.label || rawKey,
+              itemType: 1,
+            };
+
+            const rawVal = upd.value !== undefined ? String(upd.value) : `【自动流程】${actionNode.name || "已更新"}`;
+            let criteriaType = 1; // 默认 1: 值 (Literal Value)
+            let rightVal = rawVal;
+            let rightItems = rawVal;
+            let rightLabel = rawVal;
+            let rightItemType = String(targetField.itemType || 1);
+
+            // 智能识别引用与变量 (解决关联关系/人员字段输入框空白缺陷):
+            // 模式 A: 字段引用 (例如 ${createdBy}, ${ownerId}, 或引用对象的其他字段)
+            const fieldRefMatch = rawVal.match(/^\$\{([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)?)\}$/);
+            const refCandidateKey = fieldRefMatch ? fieldRefMatch[1] : (rawVal.startsWith("${") ? rawVal.replace(/^\$\{|\}$/g, "") : null);
+
+            if (refCandidateKey) {
+              // 1. 优先检查是否引用当前对象的字段 (例如 createdBy, ownerId)
+              // 销售易 Creek Flow 底层规范：动作资源中字段引用的 criteriaType 编码为 10，变量引用的编码为 13
+              const refField = allFields.find((f) => f.apiKey.toLowerCase() === refCandidateKey.toLowerCase() || f.label === refCandidateKey);
+              if (refField) {
+                criteriaType = 10; // 10: 字段引用 (Field Reference)
+                rightVal = `${targetEntityKey}.${refField.apiKey}`;
+                rightItems = `${targetEntityKey}.${refField.apiKey}`;
+                rightLabel = refField.label;
+                rightItemType = String(refField.itemType || 10);
+              } else {
+                // 2. 检查是否引用流程变量 (例如 currentOwnerId, seniorEngineerId)
+                const refVar = (plan.variables || []).find((v) => v.apiKey === refCandidateKey);
+                if (refVar) {
+                  criteriaType = 13; // 13: 变量 (Variable Reference)
+                  rightVal = refVar.apiKey;
+                  rightItems = refVar.apiKey;
+                  rightLabel = refVar.describe || refVar.apiKey;
+                  rightItemType = String(refVar.variavleDataType || 1);
+                } else if (["createdby", "ownerid", "lastmodifiedby"].includes(refCandidateKey.toLowerCase())) {
+                  criteriaType = 10;
+                  const stdKey = refCandidateKey.toLowerCase() === "createdby" ? "createdBy" : "ownerId";
+                  rightVal = `${targetEntityKey}.${stdKey}`;
+                  rightItems = `${targetEntityKey}.${stdKey}`;
+                  rightLabel = stdKey === "createdBy" ? "创建人" : "所有人";
+                  rightItemType = "10";
+                }
+              }
+            } else if (targetField.itemType === 3 || targetField.itemType === 4) {
+              // 模式 B: 单选/多选字典字段，匹配 pickOption 补齐选项 Label 与 Code
+              criteriaType = 1; // 1: 值 (Literal)
+              if ((targetField as any).pickOption && Array.isArray((targetField as any).pickOption)) {
+                const optMatch = (targetField as any).pickOption.find(
+                  (po: any) => String(po.optionCode) === rawVal || po.optionLabel === rawVal
+                );
+                if (optMatch) {
+                  rightVal = String(optMatch.optionCode);
+                  rightItems = String(optMatch.optionCode);
+                  rightLabel = optMatch.optionLabel;
+                }
+              }
+            }
+
+            criteriaList.push({
+              filterRowNum: uIdx + 1,
+              leftItemTypeEntry: targetField.itemType || 1,
+              leftObjectId: targetObjectId,
+              leftReferItems: `${targetEntityKey}.${targetField.apiKey}`,
+              leftReferLabel: targetField.label,
+              itemApiKey: targetField.apiKey,
+              itemName: targetField.apiKey, // 必须为字段 API Key，传中文 Label 会导致平台报“字段【xxx】不存在”
+              operator: upd.operator || "equals",
+              rightItemTypeEntry: rightItemType,
+              rightValue: rightVal,
+              rightReferItems: rightItems,
+              rightReferLabel: rightLabel,
+              criteriaType: criteriaType,
+            });
+          });
+        }
+
+        // 2. 如果 AI 未显式提供 fieldUpdates，启动语义意图分析器从真实字段中自主匹配
+        if (criteriaList.length === 0) {
+          const nodeName = actionNode.name || actionNode.actionConfig?.actionName || "";
+          let candidateField: { apiKey: string; label: string; itemType: number } | undefined;
+
+          if (/负责人|派单|指派|分派|坐席|专员|分配/i.test(nodeName)) {
+            candidateField = allFields.find((f) => f.apiKey === "ownerId") ||
+              allFields.find((f) => f.itemType === 10 && (f.apiKey.includes("owner") || f.apiKey.includes("user") || f.apiKey.includes("agent") || f.apiKey.includes("staff")));
+          } else if (/状态|阶段/i.test(nodeName)) {
+            candidateField = allFields.find((f) => f.apiKey === "status" || f.apiKey === "stage");
+          } else if (/优先级|紧急/i.test(nodeName)) {
+            candidateField = allFields.find((f) => f.apiKey === "priority");
+          }
+
+          // 如果语义无法命中，选取主对象最合适的可写主字段
+          if (!candidateField) {
+            candidateField = defaultField;
+          }
+
+          const defaultVal = `【自动流程】${nodeName || "处理中"}`;
+          criteriaList.push({
+            filterRowNum: 1,
+            leftItemTypeEntry: candidateField.itemType || 1,
+            leftObjectId: targetObjectId,
+            leftReferItems: `${targetEntityKey}.${candidateField.apiKey}`,
+            leftReferLabel: candidateField.label,
+            itemApiKey: candidateField.apiKey,
+            itemName: candidateField.apiKey, // 必须为字段 API Key
+            operator: "equals",
+            rightItemTypeEntry: String(candidateField.itemType || 1),
+            rightValue: defaultVal,
+            rightReferItems: defaultVal,
+            rightReferLabel: defaultVal,
+            criteriaType: 1,
+          });
+        }
+
+        const logSummary = criteriaList.map((c) => `${c.leftReferItems} = ${c.rightValue}`).join("; ");
+        return { criteria: criteriaList, logSummary };
+      };
+
       for (const an of actionNodes) {
-        const actionName = an.actionConfig?.actionName || an.name || '更新记录';
+        const actionName = an.actionConfig?.actionName || an.name || "更新记录";
+        const targetEntity = an.actionConfig?.entityApiKey || entityApiKey;
+        const { criteria: actionCriteria, logSummary } = resolveActionFieldCriteria(
+          an,
+          targetEntity,
+          availableFields,
+          resolvedEntityId
+        );
+
         const actionStrPayload = {
           actionName,
           actionType: "2", // 统一注册为经过验证的更新记录动作，确保启用校验 100% 通过
-          actionTypeLabel: '更新记录',
+          actionTypeLabel: "更新记录",
           type: 1, // 1: 自动流程上下文
           isGeneral: 0,
-          entityApiKey: an.actionConfig?.entityApiKey || entityApiKey,
-          apiObjectApiKey: an.actionConfig?.entityApiKey || entityApiKey,
+          entityApiKey: targetEntity,
+          apiObjectApiKey: targetEntity,
           referApiKey: procdefApiKey,
-          description: an.description || '',
-          operators: [{ label: '当前执行人', value: 'runtime___operator' }],
-          entityRelationType: '3', // 3: 当前对象
-          entityRelation: an.actionConfig?.entityApiKey || entityApiKey,
-          actionRecordApikey: an.actionConfig?.entityApiKey || entityApiKey,
-          actionRecordApikeyLabel: plan.flow.entityLabel || entityApiKey,
+          description: an.description || "",
+          operators: [{ label: "当前执行人", value: "runtime___operator" }],
+          entityRelationType: "3", // 3: 当前对象
+          entityRelation: targetEntity,
+          actionRecordApikey: targetEntity,
+          actionRecordApikeyLabel: plan.flow.entityLabel || targetEntity,
           isCheckPermissions: 2,
-          apiActionApiKey: 'com.rkhd.data.xobject.baseobject.update',
+          apiActionApiKey: "com.rkhd.data.xobject.baseobject.update",
           valueConfig: an.actionConfig?.valueConfig || [],
           conditionForm: {
             referFilter: { advancedFlag: 0, filterFormula: "" },
-            referFilterCriteria: [
-              {
-                filterRowNum: 1,
-                leftItemTypeEntry: defaultField.itemType || 1,
-                leftObjectId: resolvedEntityId,
-                leftReferItems: `${entityApiKey}.${defaultField.apiKey}`,
-                leftReferLabel: defaultField.label,
-                itemApiKey: defaultField.apiKey,
-                itemName: defaultField.label,
-                operator: "equals",
-                rightItemTypeEntry: 1,
-                rightValue: "【自动流程】处理中",
-                rightReferItems: "【自动流程】处理中",
-                rightReferLabel: "【自动流程】处理中",
-                criteriaType: 1,
-              },
-            ],
+            referFilterCriteria: actionCriteria,
           },
         };
 
         const addActionBody = new URLSearchParams();
-        addActionBody.append('actionId', '0');
-        addActionBody.append('actionApiKey', '0');
-        addActionBody.append('actionStr', JSON.stringify(actionStrPayload));
+        addActionBody.append("actionId", "0");
+        addActionBody.append("actionApiKey", "0");
+        addActionBody.append("actionStr", JSON.stringify(actionStrPayload));
 
         const addActionRes = await axios.post(`${baseUrl}/admin/creekflow/add-action.action`, addActionBody.toString(), {
           headers,
           timeout: 15000,
         });
 
-        const actionResData = typeof addActionRes.data === 'string' ? JSON.parse(addActionRes.data) : addActionRes.data;
+        const actionResData = typeof addActionRes.data === "string" ? JSON.parse(addActionRes.data) : addActionRes.data;
         const actionApiKey = actionResData.data?.actionApiKey || actionResData.actionApiKey;
         const actionId = actionResData.data?.actionId || actionResData.actionId;
 
@@ -1055,13 +1973,14 @@ export class WorkflowService {
           throw new Error(`注册动作资源失败: ${actionResData.msg || JSON.stringify(actionResData)}`);
         }
 
-        actionMap.set(an.id, { actionApiKey, actionId, actionName });
+        actionMap.set(an.id, { actionApiKey, actionId, actionName, criteria: actionCriteria, logSummary });
       }
 
+      const logDetailsList = Array.from(actionMap.values()).map((info) => `${info.actionName} [${info.logSummary}]`);
       logStep(
-        '步骤 4: 注册动作资源 (add-action)',
-        'success',
-        `成功注册 ${actionMap.size} 个动作资源到平台动作库`,
+        "步骤 4: 注册动作资源 (add-action)",
+        "success",
+        `成功注册 ${actionMap.size} 个动作资源，动态绑定业务字段: ${logDetailsList.join(" | ")}`,
         Date.now() - startT4,
         Object.fromEntries(actionMap)
       );
@@ -1156,7 +2075,7 @@ export class WorkflowService {
 
       // 为所有 QueryLog 查询记录节点补充 resourceType="3" 配置及匹配的 1004 记录类型变量
       for (const qNode of plan.nodes.filter((n) => n.nodeType === "QueryLog")) {
-        const limitNum = qNode.queryConfig?.limitType === 2 ? 2 : 1;
+        const limitNum = ((qNode.queryConfig as any)?.limitType === 2 || qNode.queryConfig?.searchDataLimit === "2") ? 2 : 1;
         const limitStr = String(limitNum);
 
         // 查找或自动创建一个绑定当前主对象的 1004 记录类型变量
@@ -1169,7 +2088,7 @@ export class WorkflowService {
         );
         if (!recordVar) {
           const recVarKey = toSafeApiKey(
-            qNode.queryConfig?.resultVariable || `queried_${qNode.id}_rec`,
+            (qNode.queryConfig as any)?.resultVariable || qNode.queryConfig?.searchResultVariavle || `queried_${qNode.id}_rec`,
             "recVar"
           );
           const uniqueRecVarKey = usedVarKeys.has(recVarKey) ? `${recVarKey}_${limitNum}` : recVarKey;
@@ -1306,7 +2225,7 @@ export class WorkflowService {
           (r) => r.resourceType === "1" && r.variable?.variavleType === 2
         );
         if (!colVar) {
-          const colKey = toSafeApiKey(lNode.loopConfig?.collectionVariable || `loopCol_${lNode.id}`, "colVar");
+          const colKey = toSafeApiKey((lNode.loopConfig as any)?.collectionVariable || lNode.loopConfig?.loopVariavle || `loopCol_${lNode.id}`, "colVar");
           colVar = {
             resourceType: "1",
             apiKey: colKey,
@@ -1336,7 +2255,7 @@ export class WorkflowService {
             (r.variable?.variavleProperty?.objectApiKey || "") === targetObjKey
         );
         if (!curVar) {
-          const curKey = toSafeApiKey(lNode.loopConfig?.cursorVariable || `loopCur_${lNode.id}`, "curVar");
+          const curKey = toSafeApiKey((lNode.loopConfig as any)?.cursorVariable || lNode.loopConfig?.loopCursor || `loopCur_${lNode.id}`, "curVar");
           curVar = {
             resourceType: "1",
             apiKey: curKey,
@@ -1365,7 +2284,7 @@ export class WorkflowService {
           resourceProperty: {
             loopVariavle: colVar.apiKey,
             itemType: targetDataType,
-            loopDirect: String(lNode.loopConfig?.direction ?? 1),
+            loopDirect: String(lNode.loopConfig?.loopDirect ?? (lNode.loopConfig as any)?.direction ?? 1),
             loopCursor: curVar.apiKey,
             loopEndCondition: "",
           },
@@ -1513,43 +2432,27 @@ export class WorkflowService {
           baseInfoCur: [
             {
               actionName: actInfo.actionName,
-              actionType: '2',
-              actionTypeLabel: '更新记录',
+              actionType: "2",
+              actionTypeLabel: "更新记录",
               actionApiKey: actInfo.actionApiKey,
               actionId: actInfo.actionId,
               id: nodeId,
               entityApiKey,
               apiObjectApiKey: entityApiKey,
               referApiKey: procdefApiKey,
-              description: '',
-              entityRelationType: '3',
+              description: "",
+              entityRelationType: "3",
               entityRelation: entityApiKey,
               actionRecordApikey: entityApiKey,
               actionRecordApikeyLabel: plan.flow.entityLabel || entityApiKey,
-              isGeneral: '0',
+              isGeneral: "0",
               type: 1,
               isCheckPermissions: 2,
-              apiActionApiKey: 'com.rkhd.data.xobject.baseobject.update',
-              operators: [{ label: '当前执行人', value: 'runtime___operator' }],
+              apiActionApiKey: "com.rkhd.data.xobject.baseobject.update",
+              operators: [{ label: "当前执行人", value: "runtime___operator" }],
               conditionForm: {
                 referFilter: { advancedFlag: 0, filterFormula: "" },
-                referFilterCriteria: [
-                  {
-                    filterRowNum: 1,
-                    leftItemTypeEntry: defaultField.itemType || 1,
-                    leftObjectId: resolvedEntityId,
-                    leftReferItems: `${entityApiKey}.${defaultField.apiKey}`,
-                    leftReferLabel: defaultField.label,
-                    itemApiKey: defaultField.apiKey,
-                    itemName: defaultField.label,
-                    operator: "equals",
-                    rightItemTypeEntry: 1,
-                    rightValue: "【自动流程】处理中",
-                    rightReferItems: "【自动流程】处理中",
-                    rightReferLabel: "【自动流程】处理中",
-                    criteriaType: 1,
-                  },
-                ],
+                referFilterCriteria: actInfo.criteria,
               },
             },
           ],
@@ -1583,35 +2486,109 @@ export class WorkflowService {
             return {
               sourceId: gw.id,
               seqFlowName: isDefault ? "默认" : (ge.name || `分支_${gIdx + 1}`),
-              condition: {
-                defaultFlow: isDefault,
-                gateWayType: isDefault ? "1" : "2",
-                conditionJson: isDefault
-                  ? ""
-                  : {
-                      referFilter: { advancedFlag: 0, filterFormula: "" },
-                      referFilterCriteria: [
-                        {
-                          filterRowNum: "1",
-                          leftItemTypeEntry: String(defaultField.itemType || 1),
-                          leftReferItems: `${entityApiKey}.${defaultField.apiKey}`,
-                          leftReferLabel: defaultField.label,
-                          itemApiKey: defaultField.apiKey,
-                          itemName: defaultField.label,
-                          operator: "isNotNull",
-                          rightItemTypeEntry: "",
-                          rightValue: "",
-                          rightReferItems: "",
-                          rightReferLabel: "",
-                          criteriaType: "1",
+              condition: (() => {
+                let condField = defaultField;
+                let condOp = "isNotNull";
+                let condVal = "";
+                let condLabel = defaultField.label;
+
+                if (ge.condition && (ge.condition.field || ge.condition.fieldApiKey)) {
+                  const fKey = String(ge.condition.field || ge.condition.fieldApiKey).trim();
+                  const matchedCond = availableFields.find((f) => f.apiKey.toLowerCase() === fKey.toLowerCase() || f.label === fKey);
+                  if (matchedCond) {
+                    condField = matchedCond;
+                    condOp = ge.condition.operator || "equals";
+                    condVal = String(ge.condition.value ?? "");
+                    condLabel = matchedCond.label;
+                  }
+                }
+
+                // 销售易单选/多值核心规则：每个条件行只能选一个值！如果涉及多个值 (例如 2,3)，必须分别拆分为独立条件行，并使用高级公式连接 (例如 1 OR 2)
+                let valList: string[] = [];
+                if (condVal.includes(",") || condVal.includes("，")) {
+                  valList = condVal.split(/[,，]+/).map((s: string) => s.trim()).filter(Boolean);
+                } else if (condVal) {
+                  valList = [condVal.trim()];
+                }
+
+                if (valList.length === 0) {
+                  valList = [condVal];
+                }
+
+                // 操作符规范化映射 (解决图四未选择条件问题: 销售易合法操作符为 equals, notEquals, contains, notContains, isNull, isNotNull, changed)
+                let safeOp = condOp;
+                const rawOpLower = String(condOp || "equals").toLowerCase();
+                if (["in", "==", "=", "eq", "equals"].includes(rawOpLower)) {
+                  safeOp = "equals";
+                } else if (["!=", "ne", "notequals"].includes(rawOpLower)) {
+                  safeOp = "notEquals";
+                } else if (["isnull", "null"].includes(rawOpLower)) {
+                  safeOp = "isNull";
+                } else if (["isnotnull", "notnull"].includes(rawOpLower)) {
+                  safeOp = "isNotNull";
+                } else if (["contains"].includes(rawOpLower)) {
+                  safeOp = "contains";
+                } else if (["notcontains"].includes(rawOpLower)) {
+                  safeOp = "notContains";
+                } else if (["changed", "ischanged"].includes(rawOpLower)) {
+                  safeOp = "changed";
+                } else {
+                  safeOp = "equals";
+                }
+
+                // 为每个单独的值构建一条 referFilterCriteria 规则行
+                const criteriaRows = valList.map((valItem, vIdx) => {
+                  let rightLabel = valItem;
+                  let rightVal = valItem;
+
+                  // 如果该字段是单选列表 (itemType: 3)，尝试从 pickOption 中对齐 code 和 label
+                  if ((condField as any).pickOption && Array.isArray((condField as any).pickOption)) {
+                    const optMatch = (condField as any).pickOption.find(
+                      (po: any) => String(po.optionCode) === valItem || po.optionLabel === valItem
+                    );
+                    if (optMatch) {
+                      rightVal = String(optMatch.optionCode);
+                      rightLabel = optMatch.optionLabel;
+                    }
+                  }
+
+                  return {
+                    filterRowNum: String(vIdx + 1),
+                    leftItemTypeEntry: String(condField.itemType || 1),
+                    leftReferItems: `${entityApiKey}.${condField.apiKey}`,
+                    leftReferLabel: condLabel,
+                    itemApiKey: condField.apiKey,
+                    itemName: condField.apiKey, // 必须为字段 API Key
+                    operator: safeOp,
+                    rightItemTypeEntry: String(condField.itemType || 1),
+                    rightValue: rightVal,
+                    rightReferItems: rightVal,
+                    rightReferLabel: rightLabel,
+                    criteriaType: "1",
+                  };
+                });
+
+                const isMultiVal = criteriaRows.length > 1;
+                const formulaStr = isMultiVal ? criteriaRows.map((_, i) => String(i + 1)).join(" OR ") : "";
+
+                return {
+                  defaultFlow: isDefault,
+                  gateWayType: isDefault ? "1" : "2",
+                  conditionJson: isDefault
+                    ? ""
+                    : {
+                        referFilter: {
+                          advancedFlag: isMultiVal ? 1 : 0,
+                          filterFormula: formulaStr,
                         },
-                      ],
-                    },
-                conditionName: isDefault ? "默认" : (ge.name || `分支_${gIdx + 1}`),
-                conditionType: "1",
-                specialExpression: "",
-                entityApiKey,
-              },
+                        referFilterCriteria: criteriaRows,
+                      },
+                  conditionName: isDefault ? "默认" : (ge.name || `分支_${gIdx + 1}`),
+                  conditionType: isMultiVal ? "1" : "1",
+                  specialExpression: "",
+                  entityApiKey,
+                };
+              })(),
               serialNumber: gIdx + 1,
               targetId: ge.target,
               tagertId: ge.target, // 严格遵循源码拼写
@@ -1671,7 +2648,7 @@ export class WorkflowService {
 
       // ================= 步骤 7: 服务端回读核验 (find-procdef) =================
       const startT7 = Date.now();
-      const verifyRes = await axios.get(`${baseUrl}/admin/creekflow/find-procdef.action?procdefId=${procdefId}&procType=1`, {
+      const verifyRes = await axios.get(`${baseUrl}/admin/creekflow/find-procdef.action?procdefId=${procdefId}&procType=${procType}`, {
         headers,
         timeout: 15000,
       });
@@ -1685,7 +2662,7 @@ export class WorkflowService {
       let finalStatus = 3; // 默认设计态草稿
       if (options?.autoEnable) {
         const startT8 = Date.now();
-        const enableRes = await this.toggleFlowStatus(env, tokenData, procdefId, true);
+        const enableRes = await this.toggleFlowStatus(env, tokenData, procdefId, true, procType);
         if (enableRes.success) {
           finalStatus = 1;
           logStep('步骤 8: 启用流程 (enable-procdef)', 'success', '🎉 流程版本已成功启用 (status=1)！', Date.now() - startT8);

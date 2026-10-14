@@ -101,10 +101,14 @@ export const neoApi = {
   workflowActivateLicense: (password: string) => ipcRenderer.invoke("license:activate", password),
   workflowDeployPlan: (plan: any, options?: { autoEnable?: boolean }) => ipcRenderer.invoke("workflow:deployPlan", plan, options),
   workflowDeployApprovalPlan: (plan: any, options?: { autoEnable?: boolean }) => ipcRenderer.invoke("workflow:deployApprovalPlan", plan, options),
+  workflowGetApprovalResources: (entityApiKey?: string) => ipcRenderer.invoke("workflow:getApprovalResources", entityApiKey),
+  workflowListTenantFlows: (params?: any) => ipcRenderer.invoke("workflow:listTenantFlows", params),
+  workflowCopyFlow: (params: any) => ipcRenderer.invoke("workflow:copyFlow", params),
+  workflowDeleteFlow: (procdefId: string | number, procType?: number) => ipcRenderer.invoke("workflow:deleteFlow", procdefId, procType),
   workflowListFlows: (params?: any) => ipcRenderer.invoke("workflow:listFlows", params),
-  workflowGetFlowDetail: (procdefId: string | number) => ipcRenderer.invoke("workflow:getFlowDetail", procdefId),
-  workflowToggleStatus: (procdefId: string | number, enable: boolean) => ipcRenderer.invoke("workflow:toggleStatus", procdefId, enable),
-  workflowReviseVersion: (procdefId: string | number) => ipcRenderer.invoke("workflow:reviseVersion", procdefId),
+  workflowGetFlowDetail: (procdefId: string | number, procType?: number) => ipcRenderer.invoke("workflow:getFlowDetail", procdefId, procType),
+  workflowToggleStatus: (procdefId: string | number, enable: boolean, procType?: number) => ipcRenderer.invoke("workflow:toggleStatus", procdefId, enable, procType),
+  workflowReviseVersion: (procdefId: string | number, procType?: number) => ipcRenderer.invoke("workflow:reviseVersion", procdefId, procType),
   workflowTriggerInstance: (payload: any) => ipcRenderer.invoke("workflow:triggerInstance", payload),
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);

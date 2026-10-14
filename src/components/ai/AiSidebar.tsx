@@ -16,7 +16,8 @@ import {
   Lock,
   Unlock,
   Workflow,
-  FileCheck
+  FileCheck,
+  Layers
 } from 'lucide-react';
 
 interface AiSidebarProps {
@@ -30,6 +31,7 @@ interface AiSidebarProps {
   onUpdateSessionTitle: (sessionId: string, title: string) => void;
   onClearSessions: () => void;
   onSelectPreset: (presetId: string) => void;
+  onOpenFlowManager?: () => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
 }
 
@@ -44,6 +46,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   onUpdateSessionTitle,
   onClearSessions,
   onSelectPreset,
+  onOpenFlowManager,
   workflowLicenseStatus,
 }) => {
   const [keyword, setKeyword] = useState('');
@@ -98,13 +101,25 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     <div className="w-72 bg-white border-r border-slate-200 flex flex-col h-full select-none shrink-0">
       {/* 顶部操作区 */}
       <div className="p-3 border-b border-slate-100 space-y-2">
-        <button
-          onClick={onNewChatDraft}
-          className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold flex items-center justify-center space-x-2 shadow-xs transition-all cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>新建 AI 对话</span>
-        </button>
+        <div className="flex items-center space-x-1.5">
+          <button
+            onClick={onNewChatDraft}
+            className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold flex items-center justify-center space-x-1.5 shadow-xs transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>新建 AI 对话</span>
+          </button>
+          {onOpenFlowManager && (
+            <button
+              onClick={onOpenFlowManager}
+              title="查看与管理租户现有工作流和审批流"
+              className="py-2 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-2xs shrink-0"
+            >
+              <Layers className="w-3.5 h-3.5 text-teal-600" />
+              <span>流程库</span>
+            </button>
+          )}
+        </div>
 
         {/* 会话过滤搜索 */}
         <div className="relative">

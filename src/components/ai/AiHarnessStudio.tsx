@@ -21,6 +21,7 @@ import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
 import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
 import { ConfirmDeployApprovalModal } from "./ConfirmDeployApprovalModal";
+import { FlowManagerModal } from "./FlowManagerModal";
 import { ApprovalDeployPlan } from "../../../shared/types";
 import { WorkflowLicenseModal } from './WorkflowLicenseModal';
 import { 
@@ -40,7 +41,8 @@ import {
   Loader2,
   Lightbulb,
   Lock,
-  Unlock
+  Unlock,
+  Layers,
 } from 'lucide-react';
 
 interface AiHarnessStudioProps {
@@ -87,6 +89,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [pendingSchemaPlan, setPendingSchemaPlan] = useState<SchemaPlanPayload | null>(null);
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<WorkflowDeployPlan | null>(null);
   const [pendingApprovalPlan, setPendingApprovalPlan] = useState<ApprovalDeployPlan | null>(null);
+  const [isFlowManagerOpen, setIsFlowManagerOpen] = useState<boolean>(false);
 
   // 流程引擎 (自动流程 & 审批流) 本地离线设备锁状态
   const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
@@ -548,6 +551,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         activeSessionId={activeSessionId}
         presets={AI_AGENT_PRESETS}
         selectedPresetId={selectedPresetId}
+        onOpenFlowManager={() => setIsFlowManagerOpen(true)}
         workflowLicenseStatus={workflowLicenseStatus}
         onSelectSession={async (id) => {
           const target = sessions.find((s) => s.id === id);
@@ -621,6 +625,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-medium shrink-0">
                   {currentPreset.badge || "AI Harness"}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setIsFlowManagerOpen(true)}
+                  className="text-[10px] px-2.5 py-0.5 rounded-full font-semibold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1 transition-all cursor-pointer shrink-0 shadow-2xs"
+                  title="查看与管理租户现有工作流和审批流资产"
+                >
+                  <Layers className="w-3 h-3 text-teal-600" />
+                  <span>流程资产库</span>
+                </button>
                 {isFlowEnginePreset(currentPreset.id) && (
                   <button
                     type="button"
@@ -882,6 +895,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     }
                     setPendingApprovalPlan(plan);
                   }}
+                  onSendMessage={(txt) => handleSendMessage(txt)}
                 />
               ))}
               <div ref={messagesEndRef} />
@@ -949,6 +963,16 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           showToast={showToast}
         />
       )}
+
+      {/* 租户流程资产管理中心 (自动流程 & 新版审批流) */}
+      <FlowManagerModal
+        isOpen={isFlowManagerOpen}
+        crmSession={crmSession}
+        licenseStatus={workflowLicenseStatus}
+        onClose={() => setIsFlowManagerOpen(false)}
+        onSendToAiPrompt={(promptText) => handleSendMessage(promptText)}
+        showToast={showToast}
+      />
 
       {/* 自动流程配置方案核对与代码部署弹窗 */}
       {pendingWorkflowPlan && (

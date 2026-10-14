@@ -148,11 +148,33 @@ declare global {
       workflowGetLicenseStatus: () => Promise<WorkflowLicenseStatus>;
       workflowActivateLicense: (password: string) => Promise<WorkflowLicenseActivateResult>;
       workflowDeployPlan: (plan: WorkflowDeployPlan, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
-      workflowDeployApprovalPlan: (plan: ApprovalDeployPlan, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
+      workflowDeployApprovalPlan: (plan: ApprovalDeployPlan, TenantFlowItem, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
+      workflowGetApprovalResources: (entityApiKey?: string) => Promise<{
+        roles: Array<{ apiKey: string; name: string; id: number }>;
+        users: Array<{ id: string; name: string; personalEmail?: string; departName?: string }>;
+        departments: Array<{ id: string; departName: string }>;
+        busiTypes: Array<{ id: number | string; apiKey: string; label: string }>;
+        picklistFields: Array<{ apiKey: string; label: string; options: Array<{ code: number | string; label: string }> }>;
+      }>;
+      workflowListTenantFlows: (params?: { procType?: 1 | 2; keyword?: string; pageNo?: number; pageSize?: number; status?: number }) => Promise<{ success: boolean; data?: TenantFlowItem[]; total?: number; totalInTenant?: number; matchedKeyword?: string; allFlowsSummary?: any[]; error?: string }>;
+      workflowCopyFlow: (params: {
+        procdefId: string | number;
+        processName: string;
+        description?: string;
+        actKey?: string;
+        entityApiKey: string;
+        entityId: string | number;
+        bizTypeId?: string | number;
+        startupOrder?: number;
+        executeType?: string;
+        procType: 1 | 2;
+        enableIntelligentMode?: number;
+      }) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
+      workflowDeleteFlow: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; error?: string }>;
       workflowListFlows: (params?: { keyword?: string; pageNo?: number; pageSize?: number; status?: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
-      workflowGetFlowDetail: (procdefId: string | number) => Promise<{ success: boolean; definition?: any; property?: any; error?: string }>;
-      workflowToggleStatus: (procdefId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;
-      workflowReviseVersion: (procdefId: string | number) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
+      workflowGetFlowDetail: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; definition?: any; property?: any; error?: string }>;
+      workflowToggleStatus: (procdefId: string | number, enable: boolean, procType?: number) => Promise<{ success: boolean; status?: number; error?: string }>;
+      workflowReviseVersion: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
       workflowTriggerInstance: (payload: { processDefinitionApiKey: string; entityApiKey: string; dataId: string | number; beforeData?: Record<string, any> }) => Promise<{ success: boolean; message: string; error?: string }>;
     };
   }

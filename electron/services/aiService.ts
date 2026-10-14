@@ -917,6 +917,15 @@ ${dialogHistoryText}`;
 
       // 1. 组装 System Prompt
       const systemParts: string[] = [];
+
+      // 若处于自动流程或审批流专家预设角色，全局优先注入《销售易流程实施视角规范》核心工程认知
+      if (isAutoflowPreset || isApprovalPreset) {
+        const perspectiveSkill = getProtectedSkillInstruction("skill-process-implementation-perspective");
+        if (perspectiveSkill) {
+          systemParts.push(`【全局首要植入规范：销售易流程实施工程认知与实操视角 (严格以「我」描述工程研判，先给结论与证据层级，四层模型解构，业务边界冻结)】\n${perspectiveSkill}`);
+        }
+      }
+
       if (presetPrompt) {
         if (presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]")) {
           const decodedPreset = getProtectedSkillInstruction("preset-autoflow-architect");
@@ -1967,6 +1976,87 @@ ${toolDataContext}
           fields,
         },
         summary: `SQL 执行成功，返回 ${records.length} 条数据`,
+      };
+    }
+
+    if (name === "get_approval_resources") {
+      const res = await this.workflowService.getApprovalResources(env, tokenData, args.entityApiKey);
+      return {
+        data: res,
+        summary: `成功查询租户审批资源: 包含 ${res.roles.length} 个角色, ${res.departments.length} 个部门, ${res.users.length} 个用户${res.busiTypes.length > 0 ? `, ${res.busiTypes.length} 个业务类型` : ""}`,
+      };
+    }
+
+    if (name === "list_flows") {
+      licenseService.assertAuthorized();
+      const res = await this.workflowService.listTenantFlows(env, tokenData, {
+        procType: args.procType,
+        keyword: args.keyword,
+      });
+      const flows = res.data || [];
+      const ptLabel = args.procType === 1 ? "自动流程" : args.procType === 2 ? "审批流" : "流程";
+      const totalInTenant = res.totalInTenant !== undefined ? res.totalInTenant : flows.length;
+
+      let summary = "";
+      if (args.keyword) {
+        if (flows.length > 0) {
+          summary = `按关键词【${args.keyword}】检索到 ${flows.length} 条${ptLabel} (租户总计 ${totalInTenant} 条)`;
+        } else {
+          summary = `关键词【${args.keyword}】下暂无现有${ptLabel} (租户共存在 ${totalInTenant} 条其他对象的流程资产)`;
+        }
+      } else {
+        summary = `检索到当前租户共 ${flows.length} 条${ptLabel}资产`;
+      }
+
+      return {
+        data: {
+          totalCount: flows.length,
+          matchedKeyword: args.keyword || null,
+          tenantTotalCount: totalInTenant,
+          flows: flows.map((f) => ({
+            id: f.id,
+            procdefId: f.procdefId,
+            name: f.name,
+            objectName: f.objectName,
+            entityApiKey: f.entityApiKey,
+            status: f.statusName,
+            procType: f.procType === 1 ? "自动流程 (Automatic Flow)" : "审批流 (Approval Flow)",
+            updatedAt: f.updatedAt,
+            description: f.description,
+          })),
+          tenantOtherFlowsSample: flows.length === 0 && res.allFlowsSummary ? res.allFlowsSummary.slice(0, 10) : undefined,
+          guidance: flows.length === 0 && args.keyword
+            ? `当前租户在【${args.keyword}】对象下未配置历史${ptLabel}（当前租户在其他对象下共存在 ${totalInTenant} 条流程资产）。这意味着该对象无旧流程冲突，可作为该对象的第 1 个新流直接部署。` : undefined,
+        },
+        summary,
+      };
+    }
+
+    if (name === "get_flow_detail") {
+      licenseService.assertAuthorized();
+      const pt = args.procType === 2 ? 2 : 1;
+      const res = await this.workflowService.getFlowDetail(env, tokenData, args.procdefId, pt);
+      if (!res.success) throw new Error(res.error || "获取流程定义详情失败");
+      return {
+        data: {
+          procdefId: args.procdefId,
+          procType: pt === 1 ? "自动流程" : "审批流",
+          baseInfo: res.definition?.baseInfo,
+          nodesCount: Object.keys(res.definition?.nodeInfo || {}).length,
+          nodes: Object.entries(res.definition?.nodeInfo || {}).map(([key, n]: any) => ({
+            id: key,
+            name: n.taskDefName || n.label,
+            type: n.nodeType,
+          })),
+          businessConfig: {
+            gateWays: res.definition?.businessConfig?.gateWays,
+            actions: res.definition?.businessConfig?.actions,
+            usertasks: res.definition?.businessConfig?.usertasks,
+            submittask: res.definition?.businessConfig?.submittask,
+            resourceConfig: res.definition?.businessConfig?.resourceConfig,
+          },
+        },
+        summary: `成功读取 ${pt === 1 ? "自动流程" : "审批流"} (${args.procdefId}) 完整拓扑`,
       };
     }
 

@@ -12,7 +12,8 @@ import {
   Plug,
   ChevronDown,
   ChevronRight,
-  Workflow
+  Workflow,
+  UserCheck
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -43,6 +44,30 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           title: `读取对象字段结构 (${toolCall.arguments?.entityApiKey || '目标实体'})`,
           icon: FileCode,
           badge: '字段字典',
+          color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+        };
+            case 'get_approval_resources':
+        return {
+          title: `检索租户组织与流程资源 (${toolCall.arguments?.entityApiKey || '全量资源'})`,
+          icon: UserCheck,
+          badge: '组织/流程资源',
+          color: 'text-purple-600 bg-purple-50 border-purple-200',
+        };
+      case "list_flows": {
+        const kw = toolCall.arguments?.keyword;
+        const pt = toolCall.arguments?.procType === 2 ? "审批流" : toolCall.arguments?.procType === 1 ? "自动流程" : "流程资产";
+        return {
+          title: kw ? `检索租户${pt} (关键词: "${kw}")` : `检索租户流程资产 (${pt})`,
+          icon: Workflow,
+          badge: "流程中心",
+          color: "text-teal-600 bg-teal-50 border-teal-200",
+        };
+      }
+      case 'get_flow_detail':
+        return {
+          title: `调阅流程详情 (${toolCall.arguments?.procdefId || '图模型'})`,
+          icon: Workflow,
+          badge: '流程拓扑',
           color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
         };
       case "list_autoflows":
@@ -79,7 +104,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_autoflows', 'inspect_autoflow'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">

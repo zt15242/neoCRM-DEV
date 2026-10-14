@@ -613,12 +613,13 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     enabled: true,
   },
   {
-    id: "skill-autoflow-spec",
-    name: "销售易自动流程代码配置与验证规范",
-    description: "严格遵循自动流程 (procType=1) 三组 API 架构、原生 7 节点图模型、变量拼写与至少一个 ServiceTask 启停铁律。",
+    id: "skill-process-implementation-perspective",
+    name: "销售易流程实施与代码配置规范",
+    description: "植入销售易审批流与自动流程实施工程认知：事实边界优先、服务端默认模型基线、标识符语义隔离、回读对账与四层证据链验收。",
     category: "builtin",
-    iconName: "Workflow",
-    triggerKeywords: ["自动流程", "流程", "creekflow", "autoflow", "工作流", "节点", "网关", "循环", "流部署"],
+    iconName: "ShieldCheck",
+    triggerKeywords: ["实施规范", "代码配置", "审批流规范", "自动流程规范", "四层模型", "回读对账"],
     enabled: true,
   },
+
 ];

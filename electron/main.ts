@@ -456,6 +456,14 @@ ipcMain.handle("workflow:deployPlan", async (_, plan: WorkflowDeployPlan, option
   return workflowService.deployWorkflowPlan(current.environment, current.tokenData, plan, options);
 });
 
+ipcMain.handle("workflow:getApprovalResources", async (_, entityApiKey?: string) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    return { roles: [], users: [], departments: [], busiTypes: [], picklistFields: [] };
+  }
+  return workflowService.getApprovalResources(current.environment, current.tokenData, entityApiKey);
+});
+
 ipcMain.handle("workflow:deployApprovalPlan", async (_, plan: any, options?: { autoEnable?: boolean }) => {
   licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
@@ -465,7 +473,34 @@ ipcMain.handle("workflow:deployApprovalPlan", async (_, plan: any, options?: { a
   return workflowService.deployApprovalPlan(current.environment, current.tokenData, plan, options);
 });
 
-ipcMain.handle("workflow:listFlows", async (_, params) => {
+ipcMain.handle("workflow:listTenantFlows", async (_, params) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.listTenantFlows(current.environment, current.tokenData, params);
+});
+
+ipcMain.handle("workflow:copyFlow", async (_, params) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.copyFlow(current.environment, current.tokenData, params);
+});
+
+ipcMain.handle("workflow:deleteFlow", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
+  licenseService.assertAuthorized();
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return workflowService.deleteFlowVersion(current.environment, current.tokenData, procdefId, procType);
+});
+
+ipcMain.handle("workflow:listFlows" , async (_, params) => {
   licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
@@ -474,31 +509,31 @@ ipcMain.handle("workflow:listFlows", async (_, params) => {
   return workflowService.listAutoFlows(current.environment, current.tokenData, params);
 });
 
-ipcMain.handle("workflow:getFlowDetail", async (_, procdefId: string | number) => {
+ipcMain.handle("workflow:getFlowDetail", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
   licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
   }
-  return workflowService.getFlowDetail(current.environment, current.tokenData, procdefId);
+  return workflowService.getFlowDetail(current.environment, current.tokenData, procdefId, procType);
 });
 
-ipcMain.handle("workflow:toggleStatus", async (_, procdefId: string | number, enable: boolean) => {
+ipcMain.handle("workflow:toggleStatus", async (_, procdefId: string | number, enable: boolean, procType: 1 | 2 = 1) => {
   licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
   }
-  return workflowService.toggleFlowStatus(current.environment, current.tokenData, procdefId, enable);
+  return workflowService.toggleFlowStatus(current.environment, current.tokenData, procdefId, enable, procType);
 });
 
-ipcMain.handle("workflow:reviseVersion", async (_, procdefId: string | number) => {
+ipcMain.handle("workflow:reviseVersion", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
   licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
   }
-  return workflowService.reviseFlowVersion(current.environment, current.tokenData, procdefId);
+  return workflowService.reviseFlowVersion(current.environment, current.tokenData, procdefId, procType);
 });
 
 ipcMain.handle("workflow:triggerInstance", async (_, payload: any) => {

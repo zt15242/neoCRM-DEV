@@ -12,9 +12,10 @@ interface MarkdownRendererProps {
   onExecuteSql?: (sql: string) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
+  suppressDeploymentCards?: boolean;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = (text: string, id: string) => {
@@ -64,7 +65,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
       if (i > 0 && parts[i - 1].type === "text") {
         parts[i - 1].content = parts[i - 1].content
           .replace(/(?:\r?\n---\s*)?\r?\n#{1,6}\s*[^\n]*(?:结构化代码配置|代码配置交付|Workflow\s*Plan|Approval\s*Plan|部署契约)[\s\S]*$/i, "")
-          .replace(/\r?\n[^\n]*(?:捕获以下\s*JSON|JSON\s*契约|json:workflow-plan|json:approval-plan|以下\s*JSON)[^\n]*\s*$/i, "")
+          .replace(/\r?\n[^\n]*(?:捕获以下\s*JSON|JSON\s*契约|json:workflow-plan|json:approval-plan|json:decision-request|以下\s*JSON)[^\n]*\s*$/i, "")
           .trimEnd();
       }
     }
@@ -76,6 +77,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
         if (part.type === 'code') {
           const codeId = `code_${index}`;
           const isCopied = copiedId === codeId;
+          if (
+            part.lang?.toLowerCase() === "json:decision-request" ||
+            part.lang?.toLowerCase() === "decision-request"
+          ) {
+            return null;
+          }
+
           if (
             part.lang?.toLowerCase() === 'json:schema-plan' ||
             part.lang?.toLowerCase() === 'schema-plan' ||
@@ -92,14 +100,17 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
           const isApprovalPlan =
             part.lang?.toLowerCase() === "json:approval-plan" ||
             part.lang?.toLowerCase() === "approval-plan" ||
-            (part.content.includes('"flow"') &&
-              part.content.includes('"nodes"') &&
-              (part.content.includes('"UserTask"') ||
+            ((part.content.includes('"flow"') || part.content.includes('"baseInfo"') || part.content.includes('"title"')) &&
+              (part.content.includes('"nodes"') || part.content.includes('"tasks"')) &&
+              (part.content.includes('approval') ||
+                part.content.includes('approver') ||
+                part.content.includes('"UserTask"') ||
                 part.content.includes('"approverRules"') ||
                 part.content.includes('"withdrawFlag"') ||
                 part.content.includes('"startupOrder"')));
 
           if (isApprovalPlan) {
+            if (suppressDeploymentCards) return null;
             const parsedApprovalPlan = extractApprovalPlanFromText('```json\n' + part.content + '\n```');
             if (parsedApprovalPlan && onOpenDeployApproval) {
               return (
@@ -127,9 +138,11 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
           const isWorkflowPlan =
             part.lang?.toLowerCase() === "json:workflow-plan" ||
             part.lang?.toLowerCase() === "workflow-plan" ||
-            (part.content.includes('"flow"') && part.content.includes('"nodes"'));
+            ((part.content.includes('"flow"') || part.content.includes('"baseInfo"') || part.content.includes('"title"')) &&
+              (part.content.includes('"nodes"') || part.content.includes('"tasks"')));
 
           if (isWorkflowPlan) {
+            if (suppressDeploymentCards) return null;
             const parsedWorkflowPlan = extractWorkflowPlanFromText('```json\n' + part.content + '\n```');
             if (parsedWorkflowPlan && onOpenDeployWorkflow) {
               return (
@@ -311,10 +324,18 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
     }
 
     // 4. 标题解析 (支持 1 ~ 6 级标题)
-    const headingMatch = rawLine.match(/^(#{1,6})\s+(.+)$/);
+    // 规整: 避免模型生成 • ##、· ##、- ##、* ##，或连续多段 ### ## 标题混排
+    let cleanHeadingLine = rawLine.trim().replace(/^[•·\-\*⁃]\s*(#{1,6}\s+)/, "$1");
+    cleanHeadingLine = cleanHeadingLine.replace(/^(#{1,6})\s+#{1,6}\s+/, "$1 ");
+    const headingMatch = cleanHeadingLine.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
-      const level = headingMatch[1].length;
-      const titleText = headingMatch[2];
+      let level = headingMatch[1].length;
+      let titleText = headingMatch[2].trim().replace(/^#{1,6}\s*/, "");
+
+      // 如果标题包含中文序号 (如 "五、"、"一、")，优先将其渲染为醒目的 H2 大标题
+      if (/^[一二三四五六七八九十]+[、.]/.test(titleText) && level > 2) {
+        level = 2;
+      }
 
       if (level === 1) {
         elements.push(
@@ -367,9 +388,9 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
       continue;
     }
 
-    // 6. 无序列表 (- text, * text)
-    if (rawLine.match(/^(\s*)([*-])\s+/)) {
-      const match = rawLine.match(/^(\s*)([*-])\s+(.+)$/);
+    // 6. 无序列表 (- text, * text, • text, · text, ⁃ text)
+    if (rawLine.match(/^(\s*)([*\-•·⁃])\s+/)) {
+      const match = rawLine.match(/^(\s*)([*\-•·⁃])\s+(.+)$/);
       if (match) {
         const indent = match[1].length;
         const itemText = match[3];
@@ -434,28 +455,38 @@ function parseInline(text: string): React.ReactNode[] {
   let keyIndex = 0;
 
   while (remaining.length > 0) {
-    // 粗体 **...**
+    // 1. 换行标签 <br>, <br/>, <br />, &lt;br&gt;, &lt;br/&gt;
+    const brMatch = remaining.match(/^([\s\S]*?)(?:<br\s*\/?>|&lt;br\s*\/?&gt;)([\s\S]*)$/i);
+    // 2. 粗体 **...**
     const boldMatch = remaining.match(/^([\s\S]*?)\*\*(.+?)\*\*([\s\S]*)$/);
-    // 行内代码 `...`
+    // 3. 行内代码 `...`
     const codeMatch = remaining.match(/^([\s\S]*?)`([^`]+)`([\s\S]*)$/);
+    // 4. 超链接 [text](url)
+    const linkMatch = remaining.match(/^([\s\S]*?)\[([^\]]+)\]\(([^)]+)\)([\s\S]*)$/);
 
-    let matchType: 'bold' | 'code' | null = null;
+    let matchType: 'br' | 'bold' | 'code' | 'link' | null = null;
+    let minPos = Infinity;
     let chosenMatch: RegExpMatchArray | null = null;
 
-    if (boldMatch && codeMatch) {
-      if (boldMatch[1].length <= codeMatch[1].length) {
-        matchType = 'bold';
-        chosenMatch = boldMatch;
-      } else {
-        matchType = 'code';
-        chosenMatch = codeMatch;
-      }
-    } else if (boldMatch) {
+    if (brMatch && brMatch[1].length < minPos) {
+      minPos = brMatch[1].length;
+      matchType = 'br';
+      chosenMatch = brMatch;
+    }
+    if (boldMatch && boldMatch[1].length < minPos) {
+      minPos = boldMatch[1].length;
       matchType = 'bold';
       chosenMatch = boldMatch;
-    } else if (codeMatch) {
+    }
+    if (codeMatch && codeMatch[1].length < minPos) {
+      minPos = codeMatch[1].length;
       matchType = 'code';
       chosenMatch = codeMatch;
+    }
+    if (linkMatch && linkMatch[1].length < minPos) {
+      minPos = linkMatch[1].length;
+      matchType = 'link';
+      chosenMatch = linkMatch;
     }
 
     if (!chosenMatch || !matchType) {
@@ -468,13 +499,17 @@ function parseInline(text: string): React.ReactNode[] {
       parts.push(chosenMatch[1]);
     }
 
-    if (matchType === 'bold') {
+    if (matchType === 'br') {
+      parts.push(<br key={`br_${keyIndex++}`} />);
+      remaining = chosenMatch[2] || '';
+    } else if (matchType === 'bold') {
       // 递归解析粗体内部的内容 (完美支持 **`accountName`** 嵌套代码胶囊)
       parts.push(
         <strong key={`b_${keyIndex++}`} className="font-semibold text-slate-900 mx-0.5">
           {parseInline(chosenMatch[2])}
         </strong>
       );
+      remaining = chosenMatch[3] || '';
     } else if (matchType === 'code') {
       parts.push(
         <code
@@ -484,9 +519,21 @@ function parseInline(text: string): React.ReactNode[] {
           {chosenMatch[2]}
         </code>
       );
+      remaining = chosenMatch[3] || '';
+    } else if (matchType === 'link') {
+      parts.push(
+        <a
+          key={`a_${keyIndex++}`}
+          href={chosenMatch[3]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sky-600 hover:text-sky-700 underline mx-0.5 font-medium inline-flex items-center space-x-0.5"
+        >
+          <span>{chosenMatch[2]}</span>
+        </a>
+      );
+      remaining = chosenMatch[4] || '';
     }
-
-    remaining = chosenMatch[3] || '';
   }
 
   return parts;
