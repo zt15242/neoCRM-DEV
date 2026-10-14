@@ -19,6 +19,7 @@ import { McpClientService } from "./mcpClientService";
 import { SkillPackageService } from "./skillPackageService";
 import { WorkflowService } from "./workflowService";
 import { PrintTemplateService } from "./printTemplateService";
+import { DshToolService } from "./dshToolService";
 import { licenseService } from "../security/licenseService";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,6 +62,7 @@ export class AiService {
   private mcpClientService = new McpClientService();
   private workflowService = new WorkflowService(this.metadataService);
   private printTemplateService = new PrintTemplateService(this.metadataService);
+  private dshToolService = new DshToolService();
 
   constructor(
     private sessionStore: SessionStore,
@@ -1886,6 +1888,128 @@ ${toolDataContext}
     env?: NeoEnvironment,
     tokenData?: TokenData
   ): Promise<{ data: any; summary: string }> {
+    // ================= DeepSeek Harness 原生工具分发 (无需 CRM 登录) =================
+    if (name === "bash") {
+      const res = await this.dshToolService.executeBash(args);
+      return {
+        data: res,
+        summary: `执行 Bash: ${args.command.slice(0, 45)}${args.command.length > 45 ? "..." : ""} (Exit: ${res.exitCode})`,
+      };
+    }
+
+    if (name === "read") {
+      const res = this.dshToolService.readFile(args);
+      return {
+        data: res,
+        summary: `读取文件 [${path.basename(res.path)}]: 返回 ${res.content.split('\n').length} 行`,
+      };
+    }
+
+    if (name === "write") {
+      const res = this.dshToolService.writeFile(args);
+      return {
+        data: res,
+        summary: `写入文件 [${path.basename(res.path)}]: ${res.bytesWritten} 字节, ${res.linesCount} 行`,
+      };
+    }
+
+    if (name === "edit") {
+      const res = this.dshToolService.editFile(args);
+      return {
+        data: res,
+        summary: `编辑文件 [${path.basename(res.path)}]: 替换 ${res.replacedOccurrences} 处文本`,
+      };
+    }
+
+    if (name === "str_replace_editor") {
+      const res = this.dshToolService.strReplaceEditor(args);
+      return {
+        data: res,
+        summary: `行级编辑器 [${args.command}]: ${path.basename(args.path)}`,
+      };
+    }
+
+    if (name === "read_image") {
+      const res = this.dshToolService.readImage(args);
+      return {
+        data: res,
+        summary: `检查图片 [${path.basename(res.path)}]: ${res.sizeBytes} 字节 (${res.mimeType})`,
+      };
+    }
+
+    if (name === "glob") {
+      const res = this.dshToolService.globSearch(args);
+      return {
+        data: res,
+        summary: `Glob 检索【${args.pattern}】: 命中 ${res.count} 个文件`,
+      };
+    }
+
+    if (name === "grep") {
+      const res = this.dshToolService.grepSearch(args);
+      return {
+        data: res,
+        summary: `Grep 检索【${args.pattern}】: 命中 ${res.totalMatches} 处`,
+      };
+    }
+
+    if (name === "web_search") {
+      const res = await this.dshToolService.webSearch(args);
+      return {
+        data: res,
+        summary: `Web 搜索完成: 发现 ${res.totalResults} 条来源与摘要`,
+      };
+    }
+
+    if (name === "web_fetch") {
+      const res = await this.dshToolService.webFetch(args);
+      return {
+        data: res,
+        summary: `Web 抓取成功: ${res.title || res.url} (${res.markdownContent.length} 字符)`,
+      };
+    }
+
+    if (name === "todo_write") {
+      const res = this.dshToolService.writeTodos(args);
+      return {
+        data: res,
+        summary: `更新任务清单: 共 ${res.todos.length} 项 (进行中: ${res.counts.inProgress}, 完成: ${res.counts.completed})`,
+      };
+    }
+
+    if (name === "get_goal") {
+      const res = this.dshToolService.getGoal();
+      return {
+        data: res,
+        summary: res.hasGoal ? `当前目标: ${res.goal?.objective} (${res.goal?.status})` : `当前会话未设定目标`,
+      };
+    }
+
+    if (name === "create_goal") {
+      const res = this.dshToolService.createGoal(args);
+      return {
+        data: res,
+        summary: `确立任务目标: ${res.objective}${res.token_budget ? ` (预算: ${res.token_budget})` : ''}`,
+      };
+    }
+
+    if (name === "update_goal") {
+      const res = this.dshToolService.updateGoal(args);
+      return {
+        data: res,
+        summary: `更新目标状态为: ${res.status}`,
+      };
+    }
+
+    if (name === "ask_user_question") {
+      const res = this.dshToolService.askUserQuestion(args);
+      return {
+        data: res,
+        summary: `向用户发起确认: ${res.question} (${res.options.length} 个选项)`,
+      };
+    }
+
+    // ================= 销售易租户专属工具 (需要 CRM 登录) =================
     if (!env || !tokenData) {
       throw new Error('当前未登录销售易租户，无法访问租户元数据或数据接口');
     }

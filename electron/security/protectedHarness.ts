@@ -350,5 +350,357 @@ export const CRM_HARNESS_TOOLS_SPEC = [
       },
     },
   },
+  // ================= DeepSeek Harness 原生通用全套工具集 =================
+  {
+    type: 'function',
+    function: {
+      name: 'bash',
+      description: '在当前工作区环境中执行 bash 命令行指令并返回 stdout/stderr。支持指定运行目录与超时时间。',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: '待执行的 Bash Shell 命令行指令',
+          },
+          description: {
+            type: 'string',
+            description: '简要说明命令的作用（5-10个字），如 "查看工作区状态"、"运行编译"',
+          },
+          workdir: {
+            type: 'string',
+            description: '可选的执行目录，默认为当前项目根目录',
+          },
+          timeoutMs: {
+            type: 'number',
+            description: '超时时间（毫秒），默认为 30000ms',
+          },
+        },
+        required: ['command'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read',
+      description: '读取本地 UTF-8 文本或代码文件内容，带标准 1-based 行号，支持从指定行偏移并限制最大返回行数。',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description: '待读取文件的绝对路径或相对工作区的相对路径',
+          },
+          offset: {
+            type: 'number',
+            description: '起始行号（从 1 开始），默认 1',
+          },
+          limit: {
+            type: 'number',
+            description: '最大返回行数，默认 200 行',
+          },
+        },
+        required: ['file_path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write',
+      description: '创建新文件或完全覆盖现有 UTF-8 文件内容。如目录不存在将自动递归创建。',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description: '待写入的目标文件路径',
+          },
+          content: {
+            type: 'string',
+            description: '待写入的完整文本内容',
+          },
+        },
+        required: ['file_path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit',
+      description: '通过精确的字面量文本替换编辑现有文件（要求 old_string 在文件中存在）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description: '待编辑文件的路径',
+          },
+          old_string: {
+            type: 'string',
+            description: '文件中必须完全精确匹配的现有文本',
+          },
+          new_string: {
+            type: 'string',
+            description: '替换后的新文本（如传入空字符串则删除该段）',
+          },
+          replace_all: {
+            type: 'boolean',
+            description: '是否替换全部出现位置，默认为 false 仅替换首个匹配',
+          },
+        },
+        required: ['file_path', 'old_string', 'new_string'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'str_replace_editor',
+      description: '高精度的行级代码与文本编辑器。支持 4 种模式：view 查看内容、create 创建文件、str_replace 精确字符串替换、insert 在指定行后插入新内容。',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            enum: ['view', 'create', 'str_replace', 'insert'],
+            description: '运行的编辑器命令',
+          },
+          path: {
+            type: 'string',
+            description: '文件或目录路径',
+          },
+          file_text: {
+            type: 'string',
+            description: 'create 命令所需的完整文件内容',
+          },
+          old_str: {
+            type: 'string',
+            description: 'str_replace 命令中必须匹配的目标字符串',
+          },
+          new_str: {
+            type: 'string',
+            description: 'str_replace 替换后的新字符串，或 insert 插入的内容',
+          },
+          insert_line: {
+            type: 'integer',
+            description: 'insert 命令中指定在哪一行之后插入',
+          },
+          view_range: {
+            type: 'array',
+            items: { type: 'number' },
+            description: 'view 命令可选的行范围 [start, end]',
+          },
+        },
+        required: ['command', 'path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_image',
+      description: '查看或检查本地图片资源文件（PNG/JPEG/WebP/GIF），返回存在性与元数据。',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: {
+            type: 'string',
+            description: '本地图片文件路径',
+          },
+        },
+        required: ['file_path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob',
+      description: '通过 Glob 通配符模式匹配工作区中的文件路径（如 "**/*.ts"、"src/**/test*"）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Glob 通配符匹配规则',
+          },
+          path: {
+            type: 'string',
+            description: '可选的起始检索目录，默认为工作区根目录',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description: '基于正则表达式或关键词对工作区文本文件内容进行全文检索，返回匹配行及行号。',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: '要搜索的正则表达式或关键词',
+          },
+          path: {
+            type: 'string',
+            description: '可选检索目录或文件路径',
+          },
+          glob: {
+            type: 'string',
+            description: '可选的文件过滤通配符，如 "*.json"',
+          },
+          case_sensitive: {
+            type: 'boolean',
+            description: '是否区分大小写，默认 false',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: '在互联网上搜索最新实时信息。接受 queries 数组进行多词条协同检索，返回权威来源 URL 与摘要。',
+      parameters: {
+        type: 'object',
+        properties: {
+          queries: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '搜索词条列表（1-3 项）',
+          },
+        },
+        required: ['queries'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: '抓取指定 HTTP(S) 网页 URL 的完整页面内容并解码转换为干净的文本/Markdown。',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: '待抓取的网页完整 URL',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'todo_write',
+      description: '更新与维护当前会话的完整任务清单（TODO List）。在多步骤复杂开发、重构或数据迁移时，必须用它跟踪任务进展！',
+      parameters: {
+        type: 'object',
+        properties: {
+          todos: {
+            type: 'array',
+            description: '完整的任务列表数组，每项包含 content 描述与 status ("pending" | "in_progress" | "completed")',
+            items: {
+              type: 'object',
+              properties: {
+                content: { type: 'string', description: '任务简要描述' },
+                status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: '任务状态' },
+              },
+              required: ['content', 'status'],
+            },
+          },
+        },
+        required: ['todos'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_goal',
+      description: '获取当前会话的任务目标定义、执行状态与预算耗用指标。',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_goal',
+      description: '为当前复杂工程任务确立具体、可验收的完成目标与 Token 预算。',
+      parameters: {
+        type: 'object',
+        properties: {
+          objective: {
+            type: 'string',
+            description: '具体的核心目标与验收标准',
+          },
+          token_budget: {
+            type: 'number',
+            description: '可选的 Token 预算上限',
+          },
+        },
+        required: ['objective'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_goal',
+      description: '更新当前任务目标的执行状态（complete 已达成、blocked 受阻待干预、paused 暂停）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['complete', 'blocked', 'paused'],
+            description: '目标最新状态',
+          },
+        },
+        required: ['status'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ask_user_question',
+      description: '向用户发起带结构化选项的选择确认（与内联交互决策卡片无缝联动），支持点选或自定义输入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: '提示用户的明确问题',
+          },
+          options: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '供用户点选的候选选项数组',
+          },
+          allow_custom: {
+            type: 'boolean',
+            description: '是否允许用户在输入框中自由填写其他答案，默认 true',
+          },
+        },
+        required: ['question', 'options'],
+      },
+    },
+  },
 ];
+
 

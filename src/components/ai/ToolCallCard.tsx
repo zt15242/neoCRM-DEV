@@ -17,7 +17,16 @@ import {
   Printer,
   Download,
   Power,
-  FileText
+  FileText,
+  Terminal,
+  FileEdit,
+  FolderSearch,
+  Search,
+  Globe,
+  ListTodo,
+  Target,
+  HelpCircle,
+  Image
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -95,6 +104,99 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           badge: '数据引擎',
           color: 'text-amber-600 bg-amber-50 border-amber-200',
         };
+      case 'bash':
+        return {
+          title: `执行终端命令 (${toolCall.arguments?.command?.slice(0, 30) || 'Shell'})`,
+          icon: Terminal,
+          badge: '工作区命令',
+          color: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+        };
+      case 'read':
+        return {
+          title: `读取文件 (${toolCall.arguments?.file_path || ''})`,
+          icon: FileText,
+          badge: '文件系统',
+          color: 'text-blue-600 bg-blue-50 border-blue-200',
+        };
+      case 'write':
+        return {
+          title: `写入文件 (${toolCall.arguments?.file_path || ''})`,
+          icon: FileCode,
+          badge: '文件写入',
+          color: 'text-sky-600 bg-sky-50 border-sky-200',
+        };
+      case 'edit':
+        return {
+          title: `编辑文件 (${toolCall.arguments?.file_path || ''})`,
+          icon: FileEdit,
+          badge: '文本替换',
+          color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+        };
+      case 'str_replace_editor':
+        return {
+          title: `行级代码编辑 [${toolCall.arguments?.command || 'edit'}] (${toolCall.arguments?.path || ''})`,
+          icon: FileEdit,
+          badge: '代码编辑器',
+          color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+        };
+      case 'read_image':
+        return {
+          title: `查看图片 (${toolCall.arguments?.file_path || ''})`,
+          icon: Image,
+          badge: '视觉资源',
+          color: 'text-purple-600 bg-purple-50 border-purple-200',
+        };
+      case 'glob':
+        return {
+          title: `Glob 检索【${toolCall.arguments?.pattern || ''}】`,
+          icon: FolderSearch,
+          badge: '文件匹配',
+          color: 'text-cyan-600 bg-cyan-50 border-cyan-200',
+        };
+      case 'grep':
+        return {
+          title: `Grep 检索【${toolCall.arguments?.pattern || ''}】`,
+          icon: Search,
+          badge: '全文检索',
+          color: 'text-teal-600 bg-teal-50 border-teal-200',
+        };
+      case 'web_search':
+        return {
+          title: `Web 联网搜索 (${Array.isArray(toolCall.arguments?.queries) ? toolCall.arguments.queries.join(', ') : toolCall.arguments?.queries || ''})`,
+          icon: Globe,
+          badge: '联网搜索',
+          color: 'text-sky-600 bg-sky-50 border-sky-200',
+        };
+      case 'web_fetch':
+        return {
+          title: `抓取网页内容 (${toolCall.arguments?.url || ''})`,
+          icon: Globe,
+          badge: '页面抓取',
+          color: 'text-sky-600 bg-sky-50 border-sky-200',
+        };
+      case 'todo_write':
+        return {
+          title: `更新任务清单 (${toolCall.arguments?.todos?.length || 0} 项任务)`,
+          icon: ListTodo,
+          badge: '任务管理',
+          color: 'text-amber-600 bg-amber-50 border-amber-200',
+        };
+      case 'get_goal':
+      case 'create_goal':
+      case 'update_goal':
+        return {
+          title: `工程目标管理 [${toolCall.name}]`,
+          icon: Target,
+          badge: '目标追踪',
+          color: 'text-purple-600 bg-purple-50 border-purple-200',
+        };
+      case 'ask_user_question':
+        return {
+          title: `向用户发起确认: ${toolCall.arguments?.question || ''}`,
+          icon: HelpCircle,
+          badge: '决策交互',
+          color: 'text-orange-600 bg-orange-50 border-orange-200',
+        };
       case 'list_print_objects':
         return {
           title: '检索支持打印模板的业务对象列表',
@@ -162,7 +264,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
