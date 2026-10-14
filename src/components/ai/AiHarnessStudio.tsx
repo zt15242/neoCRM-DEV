@@ -179,7 +179,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [streamingRequestId, setStreamingRequestId] = useState<string | null>(null);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const reasoningStartTimeRef = useRef<number | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // 判断供应商是否已配置完成
   const isProviderConfigured = (p?: AiProviderConfig | null) =>
@@ -270,15 +270,21 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     loadData();
   }, []);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
 
+  // 关键修复：当切换会话时，将滚动位置重置到顶部 (scrollTop = 0)，保证用户从头完整阅读提问与回答！
   useEffect(() => {
-    scrollToBottom();
-  }, [activeSession?.messages?.length, streamingMessageId]);
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = 0;
+    }
+  }, [activeSessionId]);
+
+  // 仅在发送新消息或流式输出新增量时，平滑跟随到底部
+  useEffect(() => {
+    if (streamingMessageId && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  }, [streamingMessageId]);
 
   // 订阅流式事件
   useEffect(() => {
@@ -608,11 +614,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const activeToolCalls = activeSession?.messages?.flatMap((m) => m.toolCalls || []) || [];
 
   return (
-    <div className="bg-white border-t border-slate-200 overflow-hidden flex flex-1 h-full w-full">
+    <div className="bg-white overflow-hidden flex flex-1 h-full w-full min-h-0 min-w-0">
 
 
       {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
-      <div className="flex-1 flex flex-col bg-white min-w-0">
+      <div className="flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden">
         {/* 顶部 Codex 风格标题与分栏控制栏 */}
         <div className="h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2 min-w-0">
@@ -713,8 +719,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           </div>
         </div>
 
-        {/* 中部消息流展示区 */}
-        <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4">
+        {/* 中部消息流展示区 (严格受限于视口，具备独立滚轮滚动与自适应高度) */}
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-4 min-h-0">
           {/* 未配置 API Key 时的极速激活横幅 */}
           {!isCurrentProviderConfigured && (
             <div className="mb-6 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-sky-50 p-4 shadow-xs">
@@ -865,13 +871,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   onSendMessage={(txt) => handleSendMessage(txt)}
                 />
               ))}
-              <div ref={messagesEndRef} />
+              {/* end marker */}
             </div>
           )}
         </div>
 
         {/* 底部多功能输入框 */}
-        <div className="p-3.5 bg-transparent">
+        <div className="p-3.5 bg-transparent shrink-0">
           <div className="max-w-3xl mx-auto">
             <AiInputComposer
               isStreaming={!!streamingRequestId}

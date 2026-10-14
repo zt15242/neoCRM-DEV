@@ -424,7 +424,7 @@ export const App: React.FC = () => {
       />
 
       {/* 右侧无缝主工作区 */}
-      <main className="flex-1 h-full overflow-hidden flex flex-col min-w-0 bg-white relative">
+      <main className="flex-1 h-full min-h-0 overflow-hidden flex flex-col min-w-0 bg-white relative">
         {/* Windows / Linux 最小化、最大化、关闭窗口控制 */}
         {platform !== 'darwin' && (
           <div className="h-7 bg-slate-50/80 border-b border-slate-200 flex items-center justify-end px-2 space-x-1 window-drag shrink-0 select-none">
