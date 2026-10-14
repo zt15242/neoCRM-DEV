@@ -126,7 +126,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex h-[calc(100vh-88px)] min-h-[600px]">
+    <div className="bg-white overflow-hidden flex flex-1 h-full w-full">
       {/* 左侧设置导航菜单 */}
       <div className="w-64 bg-slate-50/50 border-r border-slate-200 p-4 flex flex-col justify-between shrink-0 select-none">
         <div className="space-y-4">

@@ -382,7 +382,7 @@ export const App: React.FC = () => {
         )}
         {/* Tab 1: 控制台与登录环境 */}
         {activeTab === 'dashboard' && (
-          <div className="space-y-6">
+          <div className="flex-1 h-full overflow-y-auto p-4 md:p-6 max-w-[1400px] w-full mx-auto space-y-6">
             <section>
               <EnvironmentSelector
                 environments={environments}

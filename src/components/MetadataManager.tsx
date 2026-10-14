@@ -111,7 +111,7 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
   });
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7.5rem)] bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+    <div className="flex flex-col flex-1 h-full w-full bg-white overflow-hidden">
       {/* 顶部操作工具栏 */}
       <div className="h-13 px-5 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center space-x-3">

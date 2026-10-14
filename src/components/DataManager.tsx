@@ -57,7 +57,7 @@ export const DataManager: React.FC<DataManagerProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8.5rem)] bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+    <div className="flex flex-col flex-1 h-full w-full bg-white overflow-hidden">
       {/* 顶部子导航栏 (白色风格) */}
       <div className="h-14 px-5 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center space-x-3">
