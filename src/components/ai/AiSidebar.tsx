@@ -17,7 +17,8 @@ import {
   Unlock,
   Workflow,
   FileCheck,
-  Layers
+  Layers,
+  Printer
 } from 'lucide-react';
 
 interface AiSidebarProps {
@@ -32,6 +33,7 @@ interface AiSidebarProps {
   onClearSessions: () => void;
   onSelectPreset: (presetId: string) => void;
   onOpenFlowManager?: () => void;
+  onOpenPrintManager?: () => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
 }
 
@@ -47,6 +49,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   onClearSessions,
   onSelectPreset,
   onOpenFlowManager,
+  onOpenPrintManager,
   workflowLicenseStatus,
 }) => {
   const [keyword, setKeyword] = useState('');
@@ -55,6 +58,8 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
 
   const getPresetIcon = (iconName: string) => {
     switch (iconName) {
+      case 'Printer':
+        return Printer;
       case 'Workflow':
         return Workflow;
       case 'FileCheck':
@@ -113,10 +118,20 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
             <button
               onClick={onOpenFlowManager}
               title="查看与管理租户现有工作流和审批流"
-              className="py-2 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-2xs shrink-0"
+              className="py-2 px-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-2xs shrink-0"
             >
               <Layers className="w-3.5 h-3.5 text-teal-600" />
               <span>流程库</span>
+            </button>
+          )}
+          {onOpenPrintManager && (
+            <button
+              onClick={onOpenPrintManager}
+              title="查看与管理租户已配置的 Word/Excel 打印模板资产"
+              className="py-2 px-2 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold flex items-center justify-center space-x-1 transition-all cursor-pointer shadow-2xs shrink-0"
+            >
+              <Printer className="w-3.5 h-3.5 text-amber-600" />
+              <span>模板库</span>
             </button>
           )}
         </div>

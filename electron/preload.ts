@@ -110,6 +110,14 @@ export const neoApi = {
   workflowToggleStatus: (procdefId: string | number, enable: boolean, procType?: number) => ipcRenderer.invoke("workflow:toggleStatus", procdefId, enable, procType),
   workflowReviseVersion: (procdefId: string | number, procType?: number) => ipcRenderer.invoke("workflow:reviseVersion", procdefId, procType),
   workflowTriggerInstance: (payload: any) => ipcRenderer.invoke("workflow:triggerInstance", payload),
+  // 打印模板 (Print Template)
+  printListObjects: () => ipcRenderer.invoke("print:listObjects"),
+  printListTemplates: (params?: any) => ipcRenderer.invoke("print:listTemplates", params),
+  printGetFields: (params: any) => ipcRenderer.invoke("print:getFields", params),
+  printDownloadSample: (params: any) => ipcRenderer.invoke("print:downloadSample", params),
+  printToggleStatus: (templatePrintId: string | number, enable: boolean) => ipcRenderer.invoke("print:toggleStatus", { templatePrintId, enable }),
+  printDeleteTemplate: (templatePrintId: string | number) => ipcRenderer.invoke("print:deleteTemplate", { templatePrintId }),
+  printRenderDocument: (params: any) => ipcRenderer.invoke("print:renderDocument", params),
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);

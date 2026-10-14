@@ -395,6 +395,22 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     ],
   },
   {
+    id: "print-template-architect",
+    name: "打印模板架构与设计专家 (Print Template)",
+    description: "销售易打印模板全生命周期专家：精通 Word/Excel 模板标记语法、主子明细嵌套循环、打印条件、图片水印与代码级配置全流程",
+    iconName: "Printer",
+    badge: "打印专精",
+    enableCrmTools: true,
+    recommendedModel: "deepseek-chat",
+    systemPrompt: `[PROTECTED_PRESET::print-template-architect]`,
+    quickPrompts: [
+      "请为【合同】(contract) 设计一套包含主信息、产品明细列表与签章的 Word 打印模板规范",
+      "如何编写包含二级明细循环与图片水印的销售易 Word 打印模板标记？",
+      "查询当前租户支持打印模板的业务对象，以及现有模板资产现状",
+      "为【报价单】(quote) 规划带格式化时间与条件显示的 Excel 打印模板方案",
+    ],
+  },
+  {
     id: "autoflow-architect",
     name: "自动流程架构与部署专家 (Automatic Flow)",
     description: "销售易自动流程 (procType=1) 全生命周期专家：精通方案分析、拓扑与变量设计、代码级配置部署与运行验证",
@@ -622,4 +638,13 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     enabled: true,
   },
 
+  {
+    id: "skill-print-template-engineer-perspective",
+    name: "销售易打印模板实测型工程师视角规范",
+    description: "植入销售易打印模板实测型工程师认知：证据边界优先（代码存在、请求返回、回读落库、最终PDF内容四层证据）、Word/Excel语法隔离、主子明细物理表格循环、图片水印及不可逆风险防控。",
+    category: "builtin",
+    iconName: "Printer",
+    triggerKeywords: ["打印模板", "打印", "Word模板", "Excel模板", "明细循环", "套打", "PDF导出"],
+    enabled: true,
+  },
 ];

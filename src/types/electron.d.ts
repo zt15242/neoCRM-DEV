@@ -176,6 +176,14 @@ declare global {
       workflowToggleStatus: (procdefId: string | number, enable: boolean, procType?: number) => Promise<{ success: boolean; status?: number; error?: string }>;
       workflowReviseVersion: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
       workflowTriggerInstance: (payload: { processDefinitionApiKey: string; entityApiKey: string; dataId: string | number; beforeData?: Record<string, any> }) => Promise<{ success: boolean; message: string; error?: string }>;
+      // 打印模板 (Print Template)
+      printListObjects: () => Promise<{ success: boolean; data?: PrintObjectItem[]; error?: string }>;
+      printListTemplates: (params?: { objectId?: number | string; entityApiKey?: string; pageNo?: number; pageSize?: number }) => Promise<{ success: boolean; data?: PrintTemplateItem[]; total?: number; entityApiKey?: string; objectLabel?: string; objectId?: number; error?: string }>;
+      printGetFields: (params: { objectId?: number | string; entityApiKey?: string }) => Promise<{ success: boolean; data?: any; error?: string }>;
+      printDownloadSample: (params: { objectId?: number | string; entityApiKey?: string }) => Promise<{ success: boolean; data?: { word?: string; excel?: string; objectId: number; entityApiKey: string; objectLabel: string }; error?: string }>;
+      printToggleStatus: (templatePrintId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;
+      printDeleteTemplate: (templatePrintId: string | number) => Promise<{ success: boolean; error?: string }>;
+      printRenderDocument: (params: { entityApiKey: string; recordId: string | number; templateId: string | number; exportType?: 1 | 2 | 3 }) => Promise<{ success: boolean; data?: any; error?: string }>;
     };
   }
 }

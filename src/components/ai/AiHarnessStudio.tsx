@@ -22,6 +22,7 @@ import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
 import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
 import { ConfirmDeployApprovalModal } from "./ConfirmDeployApprovalModal";
 import { FlowManagerModal } from "./FlowManagerModal";
+import { PrintTemplateManagerModal } from "./PrintTemplateManagerModal";
 import { ApprovalDeployPlan } from "../../../shared/types";
 import { WorkflowLicenseModal } from './WorkflowLicenseModal';
 import { 
@@ -43,6 +44,7 @@ import {
   Lock,
   Unlock,
   Layers,
+  Printer,
 } from 'lucide-react';
 
 interface AiHarnessStudioProps {
@@ -90,6 +92,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<WorkflowDeployPlan | null>(null);
   const [pendingApprovalPlan, setPendingApprovalPlan] = useState<ApprovalDeployPlan | null>(null);
   const [isFlowManagerOpen, setIsFlowManagerOpen] = useState<boolean>(false);
+  const [isPrintManagerOpen, setIsPrintManagerOpen] = useState<boolean>(false);
 
   // 流程引擎 (自动流程 & 审批流) 本地离线设备锁状态
   const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
@@ -552,6 +555,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         presets={AI_AGENT_PRESETS}
         selectedPresetId={selectedPresetId}
         onOpenFlowManager={() => setIsFlowManagerOpen(true)}
+        onOpenPrintManager={() => setIsPrintManagerOpen(true)}
         workflowLicenseStatus={workflowLicenseStatus}
         onSelectSession={async (id) => {
           const target = sessions.find((s) => s.id === id);
@@ -633,6 +637,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                 >
                   <Layers className="w-3 h-3 text-teal-600" />
                   <span>流程资产库</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrintManagerOpen(true)}
+                  className="text-[10px] px-2.5 py-0.5 rounded-full font-semibold border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 flex items-center space-x-1 transition-all cursor-pointer shrink-0 shadow-2xs"
+                  title="查看与管理租户已配置的 Word/Excel 打印模板资产"
+                >
+                  <Printer className="w-3 h-3 text-amber-600" />
+                  <span>打印模板库</span>
                 </button>
                 {isFlowEnginePreset(currentPreset.id) && (
                   <button
@@ -970,6 +983,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         crmSession={crmSession}
         licenseStatus={workflowLicenseStatus}
         onClose={() => setIsFlowManagerOpen(false)}
+        onSendToAiPrompt={(promptText) => handleSendMessage(promptText)}
+        showToast={showToast}
+      />
+
+      {/* 租户打印模板资产管理中心 (免锁开放) */}
+      <PrintTemplateManagerModal
+        isOpen={isPrintManagerOpen}
+        crmSession={crmSession}
+        onClose={() => setIsPrintManagerOpen(false)}
         onSendToAiPrompt={(promptText) => handleSendMessage(promptText)}
         showToast={showToast}
       />

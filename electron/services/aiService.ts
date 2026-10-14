@@ -18,6 +18,7 @@ function cleanGeminiSchema(schema: any): any {
 import { McpClientService } from "./mcpClientService";
 import { SkillPackageService } from "./skillPackageService";
 import { WorkflowService } from "./workflowService";
+import { PrintTemplateService } from "./printTemplateService";
 import { licenseService } from "../security/licenseService";
 import fs from 'node:fs';
 import path from 'node:path';
@@ -59,6 +60,7 @@ export class AiService {
   private skillPackageService = new SkillPackageService();
   private mcpClientService = new McpClientService();
   private workflowService = new WorkflowService(this.metadataService);
+  private printTemplateService = new PrintTemplateService(this.metadataService);
 
   constructor(
     private sessionStore: SessionStore,
@@ -934,6 +936,11 @@ ${dialogHistoryText}`;
           }
         } else if (presetPrompt.includes("[PROTECTED_PRESET::approval-architect]")) {
           const decodedPreset = getProtectedSkillInstruction("preset-approval-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
+        } else if (presetPrompt.includes("[PROTECTED_PRESET::print-template-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-print-template-architect");
           if (decodedPreset) {
             systemParts.push(decodedPreset);
           }
@@ -2099,6 +2106,127 @@ ${toolDataContext}
           resourceConfig: res.definition?.businessConfig?.resourceConfig,
         },
         summary: `成功读取自动流程 (${args.procdefId}) 图模型详情`,
+      };
+    }
+
+    if (name === "list_print_objects") {
+      const res = await this.printTemplateService.listPrintObjects(env, tokenData);
+      if (!res.success) throw new Error(res.error || "获取打印对象列表失败");
+      const list = res.data || [];
+      const configured = list.filter((o) => o.allNum > 0);
+      return {
+        data: {
+          totalObjects: list.length,
+          configuredObjectsCount: configured.length,
+          configuredObjects: configured.map((o) => ({
+            objectId: o.objectId,
+            apiKey: o.apiKey,
+            label: o.label,
+            totalTemplates: o.allNum,
+            enabledTemplates: o.enableNum,
+            wordModelUrl: o.wordModelUrl,
+            excelModelUrl: o.excelModelUrl,
+          })),
+          allObjectsSample: list.slice(0, 30).map((o) => ({
+            objectId: o.objectId,
+            apiKey: o.apiKey,
+            label: o.label,
+            totalTemplates: o.allNum,
+            enabledTemplates: o.enableNum,
+          })),
+        },
+        summary: `检索到支持打印模板的业务对象 ${list.length} 个 (其中 ${configured.length} 个对象已配置模板)`,
+      };
+    }
+
+    if (name === "list_print_templates") {
+      const res = await this.printTemplateService.listTemplatesByObject(env, tokenData, {
+        entityApiKey: args.entityApiKey,
+        objectId: args.objectId,
+      });
+      if (!res.success) throw new Error(res.error || "获取打印模板列表失败");
+      const list = res.data || [];
+      return {
+        data: {
+          objectId: res.objectId,
+          entityApiKey: res.entityApiKey,
+          objectLabel: res.objectLabel,
+          totalCount: res.total,
+          templates: list.map((t: any) => ({
+            id: t.id,
+            name: t.name,
+            status: t.statusName,
+            outputType: t.outputTypeName,
+            fileName: t.fileName,
+            fileUrl: t.fileUrl,
+            hasCondition: t.hasCondition,
+            updatedAt: t.updatedAt,
+          })),
+        },
+        summary: `检索到【${res.objectLabel || res.entityApiKey || "目标对象"}】已配置 ${list.length} 个打印模板`,
+      };
+    }
+
+    if (name === "get_print_template_fields") {
+      const res = await this.printTemplateService.getPrintTemplateFields(env, tokenData, {
+        entityApiKey: args.entityApiKey,
+        objectId: args.objectId,
+      });
+      if (!res.success) throw new Error(res.error || "获取打印可用字段失败");
+      const d = res.data!;
+      return {
+        data: {
+          objectId: d.objectId,
+          entityApiKey: d.entityApiKey,
+          objectLabel: d.objectLabel,
+          mainFieldsCount: d.mainFields.length,
+          mainFieldsSample: d.mainFields.slice(0, 40),
+          allMainFields: d.mainFields,
+          childLinksCount: d.childLinks.length,
+          childLinks: d.childLinks,
+          functionFields: d.functionFields,
+        },
+        summary: `查询【${d.objectLabel} (${d.entityApiKey})】打印字段: 主字段 ${d.mainFields.length} 个, 关联明细对象 ${d.childLinks.length} 个`,
+      };
+    }
+
+    if (name === "download_template_sample") {
+      const res = await this.printTemplateService.downloadTemplateSample(env, tokenData, {
+        entityApiKey: args.entityApiKey,
+        objectId: args.objectId,
+      });
+      if (!res.success) throw new Error(res.error || "获取模板范例链接失败");
+      return {
+        data: res.data,
+        summary: `成功获取【${res.data?.objectLabel} (${res.data?.entityApiKey})】官方标准 Word/Excel 模板范例下载链接`,
+      };
+    }
+
+    if (name === "toggle_print_template_status") {
+      const res = await this.printTemplateService.toggleTemplateStatus(env, tokenData, args.templatePrintId, args.enable);
+      if (!res.success) throw new Error(res.error || "切换模板状态失败");
+      return {
+        data: res,
+        summary: `成功${args.enable ? "启用" : "禁用"}打印模板 (${args.templatePrintId})`,
+      };
+    }
+
+    if (name === "render_print_preview") {
+      const res = await this.printTemplateService.renderPrintDocument(env, tokenData, {
+        entityApiKey: args.entityApiKey,
+        recordId: args.recordId,
+        templateId: args.templateId,
+        exportType: args.exportType,
+      });
+      if (!res.success) throw new Error(res.error || "生成打印预览失败");
+      return {
+        data: {
+          exportType: res.data?.exportType,
+          hasBase64: Boolean(res.data?.base64),
+          fileUrl: res.data?.fileUrl,
+          fileName: res.data?.fileName,
+        },
+        summary: `成功调用打印运行接口生成预览 (格式: ${res.data?.exportType === 2 ? "Word" : res.data?.exportType === 3 ? "Excel" : "PDF"})`,
       };
     }
 

@@ -12,6 +12,7 @@ import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
 import { WorkflowService } from './services/workflowService';
+import { PrintTemplateService } from './services/printTemplateService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 
@@ -34,6 +35,7 @@ const imageService = new ImageService();
 const aiService = new AiService(sessionStore, metadataService, dataService);
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
+const printTemplateService = new PrintTemplateService(metadataService);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -543,4 +545,62 @@ ipcMain.handle("workflow:triggerInstance", async (_, payload: any) => {
     throw new Error("请先登录租户");
   }
   return workflowService.triggerFlowInstance(current.environment, current.tokenData, payload);
+});
+
+// ================= 打印模板 (Print Template) 免锁开放通道 =================
+
+ipcMain.handle("print:listObjects", async () => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.listPrintObjects(current.environment, current.tokenData);
+});
+
+ipcMain.handle("print:listTemplates", async (_, params) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.listTemplatesByObject(current.environment, current.tokenData, params || {});
+});
+
+ipcMain.handle("print:getFields", async (_, params) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.getPrintTemplateFields(current.environment, current.tokenData, params || {});
+});
+
+ipcMain.handle("print:downloadSample", async (_, params) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.downloadTemplateSample(current.environment, current.tokenData, params || {});
+});
+
+ipcMain.handle("print:toggleStatus", async (_, { templatePrintId, enable }) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.toggleTemplateStatus(current.environment, current.tokenData, templatePrintId, enable);
+});
+
+ipcMain.handle("print:deleteTemplate", async (_, { templatePrintId }) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.deleteTemplate(current.environment, current.tokenData, templatePrintId);
+});
+
+ipcMain.handle("print:renderDocument", async (_, params) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户");
+  }
+  return printTemplateService.renderPrintDocument(current.environment, current.tokenData, params);
 });

@@ -664,3 +664,36 @@ export interface ApprovalDeployPlan {
     conditionFormula?: string;
   }>;
 }
+
+export interface PrintObjectItem {
+  objectId: number;
+  apiKey: string;
+  label: string;
+  allNum: number;
+  enableNum: number;
+  wordModelUrl?: string;
+  excelModelUrl?: string;
+}
+
+export interface PrintTemplateItem {
+  id: string;
+  name: string;
+  systemId: number;
+  entityApiKey?: string;
+  objectLabel?: string;
+  status: number; // 1: 启用, 0: 禁用
+  statusName: string;
+  outputType: number; // 0: PDF, 1: 原格式
+  outputTypeName: string;
+  fileName: string;
+  fileUrl: string;
+  printFileName?: string;
+  langCode?: string;
+  languageCode?: string;
+  printCondition?: string;
+  hasCondition?: boolean;
+  createdAt?: number;
+  createdBy?: number;
+  updatedAt?: number;
+  updatedBy?: number;
+}

@@ -13,7 +13,11 @@ import {
   ChevronDown,
   ChevronRight,
   Workflow,
-  UserCheck
+  UserCheck,
+  Printer,
+  Download,
+  Power,
+  FileText
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -91,6 +95,60 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           badge: '数据引擎',
           color: 'text-amber-600 bg-amber-50 border-amber-200',
         };
+      case 'list_print_objects':
+        return {
+          title: '检索支持打印模板的业务对象列表',
+          icon: Printer,
+          badge: '打印中心',
+          color: 'text-amber-600 bg-amber-50 border-amber-200',
+        };
+      case 'list_print_templates': {
+        const ent = toolCall.arguments?.entityApiKey || (toolCall.arguments?.objectId ? `ID:${toolCall.arguments.objectId}` : '租户全量');
+        return {
+          title: `检索打印模板资产 (${ent})`,
+          icon: Printer,
+          badge: '模板资产',
+          color: 'text-orange-600 bg-orange-50 border-orange-200',
+        };
+      }
+      case 'get_print_template_fields': {
+        const ent = toolCall.arguments?.entityApiKey || (toolCall.arguments?.objectId ? `ID:${toolCall.arguments.objectId}` : '');
+        return {
+          title: `查询打印可用字段与占位符 (${ent})`,
+          icon: FileText,
+          badge: '打印字段',
+          color: 'text-amber-600 bg-amber-50 border-amber-200',
+        };
+      }
+      case 'download_template_sample': {
+        const ent = toolCall.arguments?.entityApiKey || (toolCall.arguments?.objectId ? `ID:${toolCall.arguments.objectId}` : '');
+        return {
+          title: `获取官方 Word/Excel 模板范例 (${ent})`,
+          icon: Download,
+          badge: '模板底稿',
+          color: 'text-sky-600 bg-sky-50 border-sky-200',
+        };
+      }
+      case 'toggle_print_template_status': {
+        const isEnable = toolCall.arguments?.enable;
+        const tid = toolCall.arguments?.templatePrintId || '';
+        return {
+          title: `${isEnable ? '启用' : '禁用'}打印模板 (${tid})`,
+          icon: Power,
+          badge: '模板启停',
+          color: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+        };
+      }
+      case 'render_print_preview': {
+        const ent = toolCall.arguments?.entityApiKey || '';
+        const fmt = toolCall.arguments?.exportType === 2 ? 'Word' : toolCall.arguments?.exportType === 3 ? 'Excel' : 'PDF';
+        return {
+          title: `运行态打印导出预览 (${ent} · ${fmt})`,
+          icon: Printer,
+          badge: '运行打印',
+          color: 'text-rose-600 bg-rose-50 border-rose-200',
+        };
+      }
       default:
         return {
           title: `调用 MCP 扩展工具: ${name}`,
@@ -104,7 +162,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
