@@ -97,32 +97,50 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [activeSkillIds, setActiveSkillIds] = useState<string[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [activeMcpServerIds, setActiveMcpServerIds] = useState<string[]>([]);
-  const [internalSessions, setInternalSessions] = useState<AiChatSession[]>([]);
-  const sessions = propSessions !== undefined ? propSessions : internalSessions;
-  const setSessions = (val: AiChatSession[] | ((prev: AiChatSession[]) => AiChatSession[])) => {
-    if (typeof val === 'function') {
-      setInternalSessions((prev) => {
-        const next = val(propSessions !== undefined ? propSessions : prev);
-        propOnSessionsChange?.(next);
-        return next;
-      });
-    } else {
-      setInternalSessions(val);
-      propOnSessionsChange?.(val);
+  const [sessions, setSessionsState] = useState<AiChatSession[]>([]);
+  const sessionsRef = useRef<AiChatSession[]>([]);
+  sessionsRef.current = sessions;
+
+  // 严格在挂载或外部非流式更新时同步 sessions
+  useEffect(() => {
+    if (propSessions && propSessions.length > 0 && !streamingRequestId) {
+      setSessionsState(propSessions);
+      sessionsRef.current = propSessions;
     }
+  }, [propSessions]);
+
+  const setSessions = (updater: AiChatSession[] | ((prev: AiChatSession[]) => AiChatSession[])) => {
+    setSessionsState((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      sessionsRef.current = next;
+      propOnSessionsChange?.(next);
+      return next;
+    });
   };
 
-  const [internalActiveSessionId, setInternalActiveSessionId] = useState<string | null>(null);
-  const activeSessionId = propActiveSessionId !== undefined ? propActiveSessionId : internalActiveSessionId;
+  const [activeSessionId, setActiveSessionIdState] = useState<string | null>(propActiveSessionId || null);
+
+  useEffect(() => {
+    if (propActiveSessionId !== undefined && propActiveSessionId !== activeSessionId) {
+      setActiveSessionIdState(propActiveSessionId);
+    }
+  }, [propActiveSessionId]);
+
   const setActiveSessionId = (id: string | null) => {
-    setInternalActiveSessionId(id);
+    setActiveSessionIdState(id);
     propOnSelectSession?.(id);
   };
 
-  const [internalSelectedPresetId, setInternalSelectedPresetId] = useState<string>('harness-agent');
-  const selectedPresetId = propSelectedPresetId !== undefined ? propSelectedPresetId : internalSelectedPresetId;
+  const [selectedPresetId, setSelectedPresetIdState] = useState<string>(propSelectedPresetId || 'harness-agent');
+
+  useEffect(() => {
+    if (propSelectedPresetId !== undefined && propSelectedPresetId !== selectedPresetId) {
+      setSelectedPresetIdState(propSelectedPresetId);
+    }
+  }, [propSelectedPresetId]);
+
   const setSelectedPresetId = (pid: string) => {
-    setInternalSelectedPresetId(pid);
+    setSelectedPresetIdState(pid);
     propOnSelectPreset?.(pid);
   };
 

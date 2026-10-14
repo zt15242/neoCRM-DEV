@@ -37,10 +37,10 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { Plus, ExternalLink, FolderPlus } from 'lucide-react';
+import { Plus, ExternalLink, FolderPlus, Plug } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
-export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings';
+export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings' | 'plugins';
 
 interface AppSidebarProps {
   platform: string;
@@ -308,6 +308,24 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           </div>
           <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200">
             Print
+          </span>
+        </button>
+
+        {/* DeepSeek Harness 插件中心 */}
+        <button
+          onClick={() => onSelectTab('plugins')}
+          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
+            activeTab === 'plugins'
+              ? 'bg-slate-200 text-slate-900 font-bold'
+              : 'text-slate-700 hover:bg-slate-200/60 hover:text-slate-900'
+          }`}
+        >
+          <div className="flex items-center space-x-2.5">
+            <Plug className="w-4 h-4 text-purple-600" />
+            <span>插件与扩展中心</span>
+          </div>
+          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 border border-purple-200">
+            DSH
           </span>
         </button>
 

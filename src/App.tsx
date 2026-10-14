@@ -14,7 +14,9 @@ import { UpdateModal } from './components/UpdateModal';
 import { FlowManagerModal } from './components/ai/FlowManagerModal';
 import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
 import { CreateProjectModal } from './components/ai/CreateProjectModal';
-import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject } from '../shared/types';
+import { PluginManagerPage } from './components/plugins/PluginManagerPage';
+import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
+import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
 import { ShieldAlert, LogIn, Minus, Square, X } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -63,6 +65,10 @@ export const App: React.FC = () => {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<WorkspaceProject | null>(null);
+
+  // 插件与扩展服务状态 (DeepSeek Harness Plugin Ecosystem)
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(BUILTIN_MCP_SERVERS);
+  const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
 
   // 模态框
   const [isCustomEnvOpen, setIsCustomEnvOpen] = useState(false);
@@ -128,6 +134,12 @@ export const App: React.FC = () => {
               setActiveProjectId(pList[0].id);
             }
           }
+        }
+
+        if (window.neoApi?.aiGetConfig) {
+          const cfg = await window.neoApi.aiGetConfig();
+          if (cfg.mcpServers) setMcpServers(cfg.mcpServers);
+          if (cfg.skills) setSkills(cfg.skills);
         }
       }
     } catch (e: any) {
@@ -346,6 +358,45 @@ export const App: React.FC = () => {
       }
     } catch (e: any) {
       showToast('error', `移除项目失败: ${e.message}`);
+    }
+  };
+
+  // 插件与扩展服务操作
+  const handleToggleMcpServer = async (id: string) => {
+    const target = mcpServers.find((m) => m.id === id);
+    if (!target) return;
+    const updated = { ...target, enabled: !target.enabled };
+    try {
+      if (window.neoApi?.aiSaveMcpServer) {
+        const list = await window.neoApi.aiSaveMcpServer(updated);
+        setMcpServers(list);
+        showToast('success', `插件 [${target.name}] 已${updated.enabled ? '启用' : '停用'}`);
+      }
+    } catch (e: any) {
+      showToast('error', `更新插件失败: ${e.message}`);
+    }
+  };
+
+  const handleSaveMcpServer = async (server: McpServerConfig) => {
+    try {
+      if (window.neoApi?.aiSaveMcpServer) {
+        const list = await window.neoApi.aiSaveMcpServer(server);
+        setMcpServers(list);
+      }
+    } catch (e: any) {
+      showToast('error', `保存插件失败: ${e.message}`);
+    }
+  };
+
+  const handleDeleteMcpServer = async (id: string) => {
+    try {
+      if (window.neoApi?.aiDeleteMcpServer) {
+        const list = await window.neoApi.aiDeleteMcpServer(id);
+        setMcpServers(list);
+        showToast('info', '已移除插件服务');
+      }
+    } catch (e: any) {
+      showToast('error', `移除插件失败: ${e.message}`);
     }
   };
 
@@ -571,6 +622,19 @@ export const App: React.FC = () => {
           <SettingsManager
             onBackToAi={() => setActiveTab('ai')}
             onCheckUpdate={() => handleCheckUpdate(true)}
+            showToast={showToast}
+          />
+        )}
+
+        {/* Tab 6: DeepSeek Harness 插件与扩展中心 */}
+        {activeTab === 'plugins' && (
+          <PluginManagerPage
+            mcpServers={mcpServers}
+            skills={skills}
+            onToggleMcpServer={handleToggleMcpServer}
+            onSaveMcpServer={handleSaveMcpServer}
+            onDeleteMcpServer={handleDeleteMcpServer}
+            onBackToAi={() => setActiveTab('ai')}
             showToast={showToast}
           />
         )}
