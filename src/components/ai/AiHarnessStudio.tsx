@@ -23,6 +23,7 @@ import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
 import { ConfirmDeployApprovalModal } from "./ConfirmDeployApprovalModal";
 import { FlowManagerModal } from "./FlowManagerModal";
 import { PrintTemplateManagerModal } from "./PrintTemplateManagerModal";
+import { CodexTerminalPanel } from "./CodexTerminalPanel";
 import { ApprovalDeployPlan } from "../../../shared/types";
 import { WorkflowLicenseModal } from './WorkflowLicenseModal';
 import { 
@@ -45,12 +46,18 @@ import {
   Unlock,
   Layers,
   Printer,
+  Workflow,
+  PanelRight,
+  MoreHorizontal,
+  Folder,
+  RotateCcw
 } from 'lucide-react';
 
 interface AiHarnessStudioProps {
   crmSession: SessionState;
   onNavigateToSettings: () => void;
   onNavigateToMetadata?: () => void;
+  onNavigateToData?: () => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
@@ -58,8 +65,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   crmSession,
   onNavigateToSettings,
   onNavigateToMetadata,
+  onNavigateToData,
   showToast,
 }) => {
+  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
   const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
@@ -546,16 +556,22 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const currentPreset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
   const isCurrentProviderConfigured = isProviderConfigured(currentProvider);
 
+  const activeToolCalls = activeSession?.messages?.flatMap((m) => m.toolCalls || []) || [];
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex h-[calc(100vh-88px)] min-h-[600px]">
-      {/* 左侧边栏：会话与预设角色 */}
+    <div className="bg-white border-t border-slate-200 overflow-hidden flex flex-1 h-full w-full">
+      {/* 左侧边栏：Codex 风格项目树与快速导航 */}
       <AiSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
         presets={AI_AGENT_PRESETS}
         selectedPresetId={selectedPresetId}
+        crmSession={crmSession}
         onOpenFlowManager={() => setIsFlowManagerOpen(true)}
         onOpenPrintManager={() => setIsPrintManagerOpen(true)}
+        onOpenMetadata={onNavigateToMetadata}
+        onOpenData={onNavigateToData}
+        onOpenSettings={onNavigateToSettings}
         workflowLicenseStatus={workflowLicenseStatus}
         onSelectSession={async (id) => {
           const target = sessions.find((s) => s.id === id);
@@ -613,149 +629,105 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         }}
       />
 
-      {/* 右侧主对话画布 */}
-      <div className="flex-1 flex flex-col bg-slate-50/50 min-w-0">
-        {/* 顶部对话控制栏 */}
-        <div className="h-14 px-4 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-3 min-w-0">
-            <div className="p-2 rounded-xl bg-sky-50 text-sky-600 border border-sky-100">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center space-x-2">
-                <h2 className="text-sm font-bold text-slate-800 truncate">
-                  {activeSession ? activeSession.title : currentPreset.name}
-                </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-medium shrink-0">
-                  {currentPreset.badge || "AI Harness"}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsFlowManagerOpen(true)}
-                  className="text-[10px] px-2.5 py-0.5 rounded-full font-semibold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1 transition-all cursor-pointer shrink-0 shadow-2xs"
-                  title="查看与管理租户现有工作流和审批流资产"
-                >
-                  <Layers className="w-3 h-3 text-teal-600" />
-                  <span>流程资产库</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsPrintManagerOpen(true)}
-                  className="text-[10px] px-2.5 py-0.5 rounded-full font-semibold border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 flex items-center space-x-1 transition-all cursor-pointer shrink-0 shadow-2xs"
-                  title="查看与管理租户已配置的 Word/Excel 打印模板资产"
-                >
-                  <Printer className="w-3 h-3 text-amber-600" />
-                  <span>打印模板库</span>
-                </button>
-                {isFlowEnginePreset(currentPreset.id) && (
-                  <button
-                    type="button"
-                    onClick={() => setIsLicenseModalOpen(true)}
-                    className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold border flex items-center space-x-1 transition-all cursor-pointer shrink-0 ${
-                      workflowLicenseStatus?.isAuthorized
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                        : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
-                    }`}
-                    title="点击查看设备机器码、有效天数或更换授权密码"
-                  >
-                    {workflowLicenseStatus?.isAuthorized ? (
-                      <>
-                        <Unlock className="w-3 h-3 text-emerald-600" />
-                        <span>设备已绑定 · 剩余 {workflowLicenseStatus.remainingDays} 天</span>
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="w-3 h-3 text-amber-600" />
-                        <span>已上锁 · 点击输入密码</span>
-                      </>
-                    )}
-                  </button>
-                )}
-                {activeSession && activeSession.messages.length > 0 && (
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    {activeSession.messages.length} 轮消息
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400 truncate">
-                {currentPreset.description}
-              </p>
-            </div>
+      {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
+      <div className="flex-1 flex flex-col bg-white min-w-0">
+        {/* 顶部 Codex 风格标题与分栏控制栏 */}
+        <div className="h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0">
+          <div className="flex items-center space-x-2 min-w-0">
+            <Folder className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <h2 className="text-xs font-semibold text-slate-800 truncate">
+              {activeSession ? activeSession.title : currentPreset.name}
+            </h2>
+            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
+              {currentPreset.name.split(" (")[0]}
+            </span>
           </div>
 
-          {/* 模型切换器 & 压缩 & 工具状态 */}
-          <div className="flex items-center space-x-2 shrink-0">
-            {/* 上下文压缩按钮 */}
-            {activeSession && activeSession.messages.length >= 4 && (
-              <button
-                onClick={handleCompactSession}
-                disabled={isCompacting}
-                title="压缩提炼前序历史对话为结构化记忆，节省 Token 并提升模型专注度"
-                className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/70 text-indigo-700 text-xs font-medium transition-colors cursor-pointer"
-              >
-                {isCompacting ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                ) : (
-                  <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
-                )}
-                <span>{isCompacting ? '压缩中...' : '压缩上下文'}</span>
-              </button>
-            )}
+          {/* 右侧动作控制区 (流程库、模板库、更多选项、分栏展开切换) */}
+          <div className="flex items-center space-x-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsFlowManagerOpen(true)}
+              className="text-[11px] px-2 py-0.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1 transition-all cursor-pointer font-medium"
+              title="查看与管理租户现有工作流和审批流资产"
+            >
+              <Workflow className="w-3 h-3 text-teal-600" />
+              <span>流程库</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsPrintManagerOpen(true)}
+              className="text-[11px] px-2 py-0.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 flex items-center space-x-1 transition-all cursor-pointer font-medium"
+              title="查看与管理租户已配置的 Word/Excel 打印模板资产"
+            >
+              <Printer className="w-3 h-3 text-amber-600" />
+              <span>模板库</span>
+            </button>
 
-            {/* 供应商与模型选择器 (仅展示已配置好的供应商与模型) */}
-            <div className="flex items-center space-x-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200">
-              <select
-                value={
-                  configuredProviders.length > 0
-                    ? `${currentProvider?.id || currentProviderId}::${
-                        currentProvider?.models?.some((m) => m.id === currentModelId)
-                          ? currentModelId
-                          : currentProvider?.models?.[0]?.id || currentModelId
-                      }`
-                    : ""
-                }
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  const [pId, mId] = e.target.value.split("::");
-                  setCurrentProviderId(pId);
-                  setCurrentModelId(mId);
-                }}
-                className="text-xs font-medium text-slate-700 bg-white px-2.5 py-1 rounded-lg border border-slate-200/80 shadow-2xs focus:outline-none cursor-pointer"
-              >
-                {configuredProviders.length === 0 ? (
-                  <option value="">暂未配置模型，请点击右侧设置配置</option>
-                ) : (
-                  configuredProviders.map((p) => (
-                    <optgroup key={p.id} label={`${p.name} ✓`}>
-                      {p.models.map((m) => (
-                        <option key={`${p.id}::${m.id}`} value={`${p.id}::${m.id}`}>
-                          {p.name.split(" ")[0]} · {m.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))
-                )}
-              </select>
-
+            {/* 更多操作菜单 */}
+            <div className="relative">
               <button
-                onClick={onNavigateToSettings}
-                title="配置模型 API Key 与供应商"
-                className="p-1.5 text-slate-500 hover:text-sky-600 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                type="button"
+                onClick={() => setMoreMenuOpen(!moreMenuOpen)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                title="更多操作"
               >
-                <Settings className="w-3.5 h-3.5" />
+                <MoreHorizontal className="w-3.5 h-3.5" />
               </button>
+
+              {moreMenuOpen && (
+                <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
+                  {activeSession && activeSession.messages.length >= 4 && (
+                    <button
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        handleCompactSession();
+                      }}
+                      className="w-full px-3 py-2 text-left hover:bg-slate-50 text-indigo-700 flex items-center space-x-2 cursor-pointer"
+                    >
+                      <Minimize2 className="w-3.5 h-3.5" />
+                      <span>压缩历史记忆</span>
+                    </button>
+                  )}
+                  {activeSession && activeSession.messages.length > 0 && (
+                    <button
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        handleExportMarkdown();
+                      }}
+                      className="w-full px-3 py-2 text-left hover:bg-slate-50 text-slate-700 flex items-center space-x-2 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>导出为 Markdown</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      onNavigateToSettings();
+                    }}
+                    className="w-full px-3 py-2 text-left hover:bg-slate-50 text-slate-700 flex items-center space-x-2 cursor-pointer"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>AI 模型服务设置</span>
+                  </button>
+                </div>
+              )}
             </div>
 
-            {/* 导出按钮 */}
-            {activeSession && activeSession.messages.length > 0 && (
-              <button
-                onClick={handleExportMarkdown}
-                title="导出对话为 Markdown"
-                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-              </button>
-            )}
+            {/* Codex 风格右侧分栏终端切换按钮 */}
+            <button
+              type="button"
+              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
+              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                isTerminalOpen
+                  ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                  : "border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+              }`}
+              title={isTerminalOpen ? "收起右侧执行终端与调用日志" : "展开右侧执行终端与调用日志 (Codex Split View)"}
+            >
+              <PanelRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 
@@ -917,8 +889,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         </div>
 
         {/* 底部多功能输入框 */}
-        <div className="p-3.5 bg-slate-50/90 border-t border-slate-200/80">
-          <div className="max-w-4xl mx-auto">
+        <div className="p-3.5 bg-transparent">
+          <div className="max-w-3xl mx-auto">
             <AiInputComposer
               isStreaming={!!streamingRequestId}
               onSend={handleSendMessage}
@@ -951,10 +923,27 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onOpenMcpSettings={onNavigateToSettings}
               quickPrompts={currentPreset.quickPrompts}
               showToast={showToast}
+              configuredProviders={configuredProviders}
+              currentProviderId={currentProviderId}
+              currentModelId={currentModelId}
+              onSelectModel={(pId, mId) => {
+                setCurrentProviderId(pId);
+                setCurrentModelId(mId);
+              }}
+              currentPresetName={currentPreset.name}
+              tenantName={crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "沙盒环境"}
             />
           </div>
         </div>
       </div>
+
+      {/* 右侧 Codex 风格实时执行终端与调用日志分栏 */}
+      <CodexTerminalPanel
+        isOpen={isTerminalOpen}
+        onClose={() => setIsTerminalOpen(false)}
+        toolCalls={activeToolCalls}
+        projectName={crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "neoCRM-DEV"}
+      />
 
       {/* 引用业务对象弹窗 */}
       <ContextEntityModal

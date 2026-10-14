@@ -282,7 +282,7 @@ export const App: React.FC = () => {
       />
 
       {/* 主界面内容区 */}
-      <main className="flex-1 overflow-y-auto p-3.5 md:p-4 max-w-[1680px] w-full mx-auto">
+      <main className={activeTab === "ai" ? "flex-1 overflow-hidden h-[calc(100vh-56px)] w-full flex flex-col" : "flex-1 overflow-y-auto p-3.5 md:p-4 max-w-[1680px] w-full mx-auto"}>
         {/* Tab 1: 控制台与登录环境 */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
@@ -377,12 +377,13 @@ export const App: React.FC = () => {
           )
         )}
 
-        {/* Tab 4: AI 对话平台 (DeepSeek Harness 风格) */}
+        {/* Tab 4: AI 对话平台 (Codex 极简三栏全能工作台) */}
         {activeTab === 'ai' && (
           <AiHarnessStudio
             crmSession={session}
             onNavigateToSettings={() => setActiveTab('settings')}
             onNavigateToMetadata={() => setActiveTab('metadata')}
+            onNavigateToData={() => setActiveTab('data')}
             showToast={showToast}
           />
         )}
