@@ -8,7 +8,7 @@ import {
   X
 } from 'lucide-react';
 import { NeoEnvironment } from '../../shared/types';
-import { Cloud, Layers, Flame, Plug } from 'lucide-react';
+import { Cloud, Layers, Flame, Plug, AlertCircle, Edit3 } from 'lucide-react';
 
 interface LoginCardProps {
   environment: NeoEnvironment;
@@ -18,6 +18,7 @@ interface LoginCardProps {
   onLoginEmbedded: () => void;
   onLoginPassword: (username: string, pass: string) => void;
   onCancelLogin: () => void;
+  onOpenConfigure?: () => void;
 }
 
 export const LoginCard: React.FC<LoginCardProps> = ({
@@ -28,6 +29,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
   onLoginEmbedded,
   onLoginPassword,
   onCancelLogin,
+  onOpenConfigure,
 }) => {
   const [activeTab, setActiveTab] = useState<'embedded' | 'browser' | 'password'>('embedded');
   const [username, setUsername] = useState('');
@@ -78,7 +80,8 @@ export const LoginCard: React.FC<LoginCardProps> = ({
           <p className="text-xs text-slate-500 mt-1 font-mono">{environment.neoBaseURL}</p>
         </div>
 
-        {/* 模式切换 Tab */}
+        {/* 模式切换 Tab (销售易/Salesforce 显示模式切换) */}
+        {environment.productType !== 'fxiaoke' && (
         <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200">
           <button
             onClick={() => setActiveTab('embedded')}
@@ -117,6 +120,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
             <span>密码直登</span>
           </button>
         </div>
+        )}
       </div>
 
       {/* 登录主体 */}
@@ -142,6 +146,74 @@ export const LoginCard: React.FC<LoginCardProps> = ({
               <X className="w-3.5 h-3.5" />
               <span>取消授权</span>
             </button>
+          </div>
+        ) : environment.productType === 'fxiaoke' && environment.authMode !== 'authorization_code' ? (
+          <div className="space-y-4">
+            <div className="p-4 bg-orange-50/70 border border-orange-200/80 rounded-2xl space-y-2">
+              <div className="flex items-center space-x-2 text-orange-950 font-bold text-xs">
+                <Flame className="w-4 h-4 text-orange-600" />
+                <span>纷享销客 OpenAPI v2 客户端凭据模式直连 (Client Credentials)</span>
+              </div>
+              <p className="text-xs text-orange-900 leading-relaxed">
+                根据官方规范，客户端凭证模式适用于自建应用与企业服务端授权。无需人工参与，直接提交 <strong>appId + appSecret + permanentCode</strong> 换取 7200 秒有效期的访问令牌。
+              </p>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5 text-xs font-mono">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">所在云网关域名:</span>
+                <span className="text-slate-800 font-bold">{environment.cloudDomain || 'open.fxiaoke.com'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">自建应用 appId:</span>
+                <span className="text-slate-800">{environment.clientId ? <span className="text-slate-900 font-bold">{environment.clientId}</span> : <span className="text-amber-600 font-sans">未配置</span>}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">自建应用 appSecret:</span>
+                <span className="text-slate-800">{environment.clientSecret ? '●●●●●●●●' : <span className="text-amber-600 font-sans">未配置</span>}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">企业永久授权码 (permanentCode):</span>
+                <span className="text-slate-800">{environment.permanentCode ? <span className="text-emerald-600 font-bold font-sans">✓ 已配置</span> : <span className="text-amber-600 font-sans font-bold">未配置</span>}</span>
+              </div>
+            </div>
+
+            {(!environment.clientId || !environment.permanentCode) ? (
+              <div className="space-y-2.5">
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>当前连接器尚未配置纷享销客应用凭证，请点击下方按钮快速配置。</span>
+                </div>
+                {onOpenConfigure && (
+                  <button
+                    onClick={onOpenConfigure}
+                    className="w-full py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-semibold text-xs rounded-xl shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    <span>立即配置 appId、appSecret 与永久授权码</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2.5 pt-1">
+                <button
+                  onClick={onLoginEmbedded}
+                  className="w-full py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-semibold text-xs rounded-xl shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                >
+                  <Flame className="w-4 h-4" />
+                  <span>发起凭据认证获取 Access Token (有效期2小时)</span>
+                  <ArrowRight className="w-4 h-4 ml-1" />
+                </button>
+                {onOpenConfigure && (
+                  <button
+                    onClick={onOpenConfigure}
+                    className="w-full py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs rounded-xl transition-all cursor-pointer"
+                  >
+                    修改连接器凭据配置
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div>

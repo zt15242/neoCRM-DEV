@@ -171,7 +171,28 @@ export class EnvService {
 
   public getAllEnvironments(): NeoEnvironment[] {
     const custom = this.getCustomEnvironments();
-    return [...PRESET_ENVIRONMENTS, ...custom];
+    const envMap = new Map<string, NeoEnvironment>();
+
+    // 1. 先载入官方预置连接器基线
+    for (const preset of PRESET_ENVIRONMENTS) {
+      envMap.set(preset.id, { ...preset });
+    }
+
+    // 2. 载入用户自定义连接器及对内置预置连接器的凭据配置覆盖 (appId, appSecret, permanentCode 等)
+    for (const c of custom) {
+      const existing = envMap.get(c.id);
+      if (existing) {
+        envMap.set(c.id, {
+          ...existing,
+          ...c,
+          isPreset: existing.isPreset,
+        });
+      } else {
+        envMap.set(c.id, c);
+      }
+    }
+
+    return Array.from(envMap.values());
   }
 
   public getEnvironmentById(id: string): NeoEnvironment | undefined {
@@ -181,6 +202,8 @@ export class EnvService {
   public saveCustomEnvironment(env: Partial<NeoEnvironment> & { name: string; neoBaseURL: string }): NeoEnvironment {
     const customEnvs = this.getCustomEnvironments();
     const id = env.id || `custom_${Date.now()}`;
+    const preset = PRESET_ENVIRONMENTS.find((p) => p.id === id);
+    const isPreset = Boolean(preset);
 
     // 智能推导登录与 Token 地址
     let loginURL = env.loginURL;
@@ -209,7 +232,7 @@ export class EnvService {
       productType: env.productType || 'neocrm',
       envType: env.envType || 'custom',
       description: env.description || `${env.productType || 'CRM'} 连接器: ${env.neoBaseURL}`,
-      isPreset: false,
+      isPreset,
       neoBaseURL: env.neoBaseURL.trim(),
       loginURL: loginURL.trim(),
       tokenURL: tokenURL.trim(),

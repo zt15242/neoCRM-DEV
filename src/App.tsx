@@ -572,6 +572,10 @@ export const App: React.FC = () => {
                   onLoginEmbedded={handleLoginEmbedded}
                   onLoginPassword={handleLoginPassword}
                   onCancelLogin={handleCancelLogin}
+                  onOpenConfigure={() => {
+                    setEditingCustomEnv(currentSelectedEnv);
+                    setIsCustomEnvOpen(true);
+                  }}
                 />
               )}
             </section>

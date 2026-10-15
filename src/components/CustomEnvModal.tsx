@@ -229,10 +229,14 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-bold text-slate-800">
-                {initialEnv ? '编辑 CRM 环境连接器' : '新建 CRM 环境连接器 (New Connector)'}
+                {initialEnv?.isPreset 
+                  ? `配置预置连接器凭据: ${initialEnv.name}` 
+                  : (initialEnv ? '编辑 CRM 环境连接器' : '新建 CRM 环境连接器 (New Connector)')}
               </h3>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                支持连接销售易、Salesforce、纷享销客等多品牌 CRM 实例与演练沙盒
+                {productType === 'fxiaoke'
+                  ? '配置纷享销客自建应用 appId、appSecret 与企业永久授权码 (permanentCode)'
+                  : '支持连接销售易、Salesforce、纷享销客等多品牌 CRM 实例与演练沙盒'}
               </p>
             </div>
           </div>
@@ -473,7 +477,9 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </div>
           )}
 
-          {/* 3. 实例服务地址 (Base URL) */}
+          {/* 3. 实例服务地址 (仅非纷享销客显示) */}
+          {productType !== 'fxiaoke' && (
+          <>
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-slate-700">
@@ -556,6 +562,8 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               />
             </div>
           </div>
+          </>
+          )}
 
           {/* 5. 备注 */}
           <div className="space-y-1">
@@ -647,7 +655,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               type="submit"
               className="px-4 py-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl shadow-xs cursor-pointer"
             >
-              {initialEnv ? '保存修改' : '确认创建连接器'}
+              {initialEnv?.isPreset ? '保存凭据配置' : (initialEnv ? '保存修改' : '确认创建连接器')}
             </button>
           </div>
         </form>

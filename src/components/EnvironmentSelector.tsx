@@ -271,51 +271,106 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                     </div>
                   </div>
 
-                  {/* 状态徽标：已激活 vs 未激活 */}
-                  <div className="shrink-0 flex items-center space-x-1">
-                    {isSelected ? (
+                  {/* 状态徽标与配置操作 (所有连接器均支持配置 appId/appSecret/permanentCode) */}
+                  <div className="shrink-0 flex items-center space-x-1.5">
+                    {isSelected && (
                       <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold flex items-center space-x-1 shadow-2xs">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                         <span>生效中</span>
                       </span>
-                    ) : env.isPreset ? (
+                    )}
+
+                    {env.isPreset && (
                       <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono">
                         官方预置
                       </span>
-                    ) : (
-                      <div className="flex items-center space-x-0.5" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => onEditCustom(env)}
-                          className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded transition-colors"
-                          title="编辑连接器配置"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                        </button>
+                    )}
+
+                    {/* 针对纷享销客连接器：显式指示凭证配置状态 */}
+                    {env.productType === 'fxiaoke' && (
+                      env.clientId && (env.permanentCode || env.authMode === 'authorization_code') ? (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono font-medium">
+                          凭证已配
+                        </span>
+                      ) : (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono font-medium">
+                          待配凭据
+                        </span>
+                      )
+                    )}
+
+                    {/* 所有连接器（包括官方预置）均提供编辑/配置凭据入口 */}
+                    <div className="flex items-center space-x-0.5" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => onEditCustom(env)}
+                        className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-800 rounded transition-colors"
+                        title={env.isPreset ? "配置此连接器的应用凭据 (appId, appSecret, permanentCode 等)" : "编辑连接器配置"}
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      {!env.isPreset && (
                         <button
                           onClick={() => onDeleteCustom(env.id)}
                           className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition-colors"
-                          title="移除连接器"
+                          title="移除自定义连接器"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                {/* 实例服务地址 (Base URL) */}
-                <div className="pt-1">
-                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 bg-slate-50/80 p-2 rounded-xl border border-slate-100">
-                    <span className="truncate pr-2">{env.neoBaseURL}</span>
-                    <button
-                      onClick={(e) => handleCopyUrl(e, env.neoBaseURL, env.id)}
-                      title="复制服务地址"
-                      className="p-1 hover:bg-white rounded text-slate-400 hover:text-slate-700 shrink-0 transition-colors cursor-pointer"
-                    >
-                      {copiedId === env.id ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                    </button>
+                {/* 实例服务地址 (针对纷享销客展示云域名与凭证概要) */}
+                {env.productType === 'fxiaoke' ? (
+                  <div className="pt-1 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-orange-50/50 p-2 rounded-xl border border-orange-100">
+                      <div className="truncate pr-2">
+                        <span className="text-orange-700 font-semibold">{env.cloudDomain || 'open.fxiaoke.com'}</span>
+                        {env.clientId ? (
+                          <span className="ml-1.5 text-slate-600">· appId: {env.clientId}</span>
+                        ) : (
+                          <span className="ml-1.5 text-amber-600 italic">· 待配置 appId</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => handleCopyUrl(e, env.neoBaseURL, env.id)}
+                        title="复制服务地址"
+                        className="p-1 hover:bg-white rounded text-slate-400 hover:text-slate-700 shrink-0 transition-colors cursor-pointer"
+                      >
+                        {copiedId === env.id ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      </button>
+                    </div>
+
+                    {/* 如果未配置 appId 或永久授权码，卡片内直接展示显眼的快捷配置按钮 */}
+                    {(!env.clientId || (!env.permanentCode && env.authMode !== 'authorization_code')) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditCustom(env);
+                        }}
+                        className="w-full py-1.5 px-2.5 rounded-xl bg-orange-100/70 hover:bg-orange-100 text-orange-800 text-[11px] font-semibold border border-orange-200 flex items-center justify-center space-x-1 transition-colors cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3 text-orange-700" />
+                        <span>点击配置 appId、appSecret 与永久授权码</span>
+                      </button>
+                    )}
                   </div>
-                </div>
+                ) : (
+                  <div className="pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 bg-slate-50/80 p-2 rounded-xl border border-slate-100">
+                      <span className="truncate pr-2">{env.neoBaseURL}</span>
+                      <button
+                        onClick={(e) => handleCopyUrl(e, env.neoBaseURL, env.id)}
+                        title="复制服务地址"
+                        className="p-1 hover:bg-white rounded text-slate-400 hover:text-slate-700 shrink-0 transition-colors cursor-pointer"
+                      >
+                        {copiedId === env.id ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* 描述说明 */}
                 {env.description && (
