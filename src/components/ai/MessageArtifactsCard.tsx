@@ -85,7 +85,10 @@ export function extractArtifactsFromMessage(
 
   // 1. 扫描工具调用
   for (const tc of toolCalls) {
-    if (tc.name === 'write' || tc.name === 'edit') {
+    if (tc.name === 'generate_print_template') {
+      const p = tc.resultData?.fullPath || tc.resultData?.fileName || tc.arguments?.fileName;
+      if (p) addArtifact(p);
+    } else if (tc.name === 'write' || tc.name === 'edit') {
       const p = tc.arguments?.file_path;
       if (p) addArtifact(p);
     } else if (tc.name === 'str_replace_editor' && tc.arguments?.command === 'create') {
@@ -125,29 +128,50 @@ export const MessageArtifactsCard: React.FC<MessageArtifactsCardProps> = ({
 
   React.useEffect(() => {
     const list = extractArtifactsFromMessage(content, toolCalls, projectPath);
-    // 异步尝试补全文件真实大小
-    if (list.length > 0 && window.neoApi?.projectGetRecentArtifacts) {
-      window.neoApi.projectGetRecentArtifacts(projectPath, 50).then((recent) => {
+    if (list.length === 0) {
+      setArtifacts([]);
+      return;
+    }
+
+    const explicitToolFileNames = new Set(
+      toolCalls
+        .filter((tc) => ['generate_print_template', 'write', 'edit', 'str_replace_editor'].includes(tc.name))
+        .map((tc) => {
+          const raw = tc.resultData?.fileName || tc.resultData?.fullPath || tc.resultData?.path || tc.arguments?.fileName || tc.arguments?.file_path || tc.arguments?.path;
+          return raw ? String(raw).split(/[\/\\]/).filter(Boolean).pop() : '';
+        })
+        .filter(Boolean)
+    );
+
+    if (window.neoApi?.projectGetRecentArtifacts) {
+      window.neoApi.projectGetRecentArtifacts(projectPath, 60).then((recent) => {
         if (Array.isArray(recent)) {
-          const updated = list.map((art) => {
+          const validList: ArtifactFile[] = [];
+          for (const art of list) {
             const matched = recent.find((r) => r.name === art.name);
             if (matched) {
-              return {
+              validList.push({
                 ...art,
                 size: matched.size,
                 fullPath: matched.fullPath,
                 exists: true,
-              };
+              });
+            } else if (explicitToolFileNames.has(art.name)) {
+              // 由工具明确生成的产物
+              validList.push({
+                ...art,
+                exists: true,
+              });
             }
-            return art;
-          });
-          setArtifacts(updated);
+            // 关键：若只是 AI 回答中顺带提及官方示例名称 (如 fl_template_print_account.docx) 且磁盘上根本不存在，则绝不生成虚假卡片！
+          }
+          setArtifacts(validList);
         } else {
-          setArtifacts(list);
+          setArtifacts(list.filter((a) => explicitToolFileNames.has(a.name)));
         }
-      }).catch(() => setArtifacts(list));
+      }).catch(() => setArtifacts(list.filter((a) => explicitToolFileNames.has(a.name))));
     } else {
-      setArtifacts(list);
+      setArtifacts(list.filter((a) => explicitToolFileNames.has(a.name)));
     }
   }, [content, toolCalls.length, projectPath]);
 
@@ -204,11 +228,17 @@ export const MessageArtifactsCard: React.FC<MessageArtifactsCardProps> = ({
   const handleOpen = async (art: ArtifactFile) => {
     try {
       if (window.neoApi?.shellOpenPath && art.fullPath) {
-        await window.neoApi.shellOpenPath(art.fullPath);
-        showToast?.('success', `已在系统应用中打开: ${art.name}`);
+        const err = await window.neoApi.shellOpenPath(art.fullPath);
+        if (err && typeof err === 'string' && err.trim().length > 0) {
+          showToast?.('error', `打开文件失败: ${err} (请确认本地文件是否存在)`);
+        } else {
+          showToast?.('success', `已在系统应用中打开: ${art.name}`);
+        }
+      } else {
+        showToast?.('error', `本地文件路径不存在: ${art.name}`);
       }
     } catch (e: any) {
-      showToast?.('error', `打开文件失败: ${e.message}`);
+      showToast?.('error', `打开异常: ${e.message}`);
     }
   };
 

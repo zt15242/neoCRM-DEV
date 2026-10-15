@@ -125,24 +125,25 @@ export const PrintTemplateManagerModal: React.FC<PrintTemplateManagerModalProps>
     }
   };
 
-  // 下载官方范例
-  const handleDownloadSample = async (obj: PrintObjectItem) => {
-    if (!window.neoApi?.printDownloadSample) return;
+  // 按照规范直接在当前项目工作区生成本地标准 Word 打印模板 (.docx)
+  const handleGenerateLocalTemplate = async (obj: PrintObjectItem) => {
+    if (!window.neoApi?.printGenerateTemplate) return;
     try {
-      const res = await window.neoApi.printDownloadSample({ objectId: obj.objectId, entityApiKey: obj.apiKey });
-      if (res.success && res.data) {
-        if (res.data.word) {
-          window.open(res.data.word, "_blank");
-          showToast("success", "已打开官方 Word 模板范例下载链接");
-        } else if (res.data.excel) {
-          window.open(res.data.excel, "_blank");
-          showToast("success", "已打开官方 Excel 模板范例下载链接");
-        } else {
-          showToast("info", "当前对象官方暂未提供默认范例文件");
+      const res = await window.neoApi.printGenerateTemplate({
+        entityApiKey: obj.apiKey,
+        objectLabel: obj.label,
+        fileName: `${obj.label}_业务打印模板.docx`,
+      });
+      if (res.success) {
+        showToast("success", `已成功在工作区生成标准模板: ${res.fileName}！`);
+        if (window.neoApi?.shellShowItemInFolder && res.fullPath) {
+          window.neoApi.shellShowItemInFolder(res.fullPath);
         }
+      } else {
+        showToast("error", `生成失败: ${res.error || res.message}`);
       }
     } catch (e: any) {
-      showToast("error", `下载失败: ${e.message}`);
+      showToast("error", `生成异常: ${e.message}`);
     }
   };
 
@@ -327,12 +328,12 @@ export const PrintTemplateManagerModal: React.FC<PrintTemplateManagerModalProps>
                     </button>
 
                     <button
-                      onClick={() => handleDownloadSample(selectedObject)}
-                      className="px-3 py-1.5 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer"
-                      title="下载系统官方提供的默认 Word / Excel 范例文件"
+                      onClick={() => handleGenerateLocalTemplate(selectedObject)}
+                      className="px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold flex items-center space-x-1 transition-colors cursor-pointer shadow-2xs"
+                      title="按照销售易打印规范直接在当前项目工作区生成标准 Word 模板文件 (.docx)"
                     >
-                      <Download className="w-3.5 h-3.5 text-sky-600" />
-                      <span>官方范例下载</span>
+                      <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                      <span>生成本地标准模板 (.docx)</span>
                     </button>
 
                     <button
@@ -360,7 +361,7 @@ export const PrintTemplateManagerModal: React.FC<PrintTemplateManagerModalProps>
                       <div className="max-w-xs">
                         <p className="text-sm font-semibold text-slate-700">当前对象尚未配置打印模板</p>
                         <p className="text-xs text-slate-400 mt-1">
-                          您可以点击上方【官方范例下载】获取官方底稿，或点击【为该对象设计新模板】由 AI 生成完整占位符规范。
+                          您可以点击上方【生成本地标准模板 (.docx)】直接在当前工作区生成包含主表与明细循环的真实底稿，或由 AI 协助设计。
                         </p>
                       </div>
                       <button

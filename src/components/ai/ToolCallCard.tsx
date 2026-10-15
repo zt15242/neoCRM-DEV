@@ -197,6 +197,15 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           badge: '决策交互',
           color: 'text-orange-600 bg-orange-50 border-orange-200',
         };
+      case 'generate_print_template': {
+        const fname = toolCall.arguments?.fileName || `${toolCall.arguments?.entityApiKey || ''}_打印模板.docx`;
+        return {
+          title: `生成本地 Word 打印模板 (${fname})`,
+          icon: Printer,
+          badge: '模板生成',
+          color: 'text-amber-600 bg-amber-50 border-amber-200',
+        };
+      }
       case 'list_print_objects':
         return {
           title: '检索支持打印模板的业务对象列表',
@@ -264,7 +273,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">

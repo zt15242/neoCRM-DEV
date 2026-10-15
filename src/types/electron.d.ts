@@ -128,6 +128,7 @@ declare global {
         activeSkillIds?: string[];
         activeMcpServerIds?: string[];
         compactionSummary?: any;
+        projectPath?: string;
       }) => Promise<boolean>;
       aiAbortChatStream: (requestId: string) => Promise<boolean>;
       aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;
@@ -199,6 +200,16 @@ declare global {
       printListObjects: () => Promise<{ success: boolean; data?: PrintObjectItem[]; error?: string }>;
       printListTemplates: (params?: { objectId?: number | string; entityApiKey?: string; pageNo?: number; pageSize?: number }) => Promise<{ success: boolean; data?: PrintTemplateItem[]; total?: number; entityApiKey?: string; objectLabel?: string; objectId?: number; error?: string }>;
       printGetFields: (params: { objectId?: number | string; entityApiKey?: string }) => Promise<{ success: boolean; data?: any; error?: string }>;
+      printGenerateTemplate: (params: {
+        entityApiKey: string;
+        fileName?: string;
+        title?: string;
+        objectLabel?: string;
+        headerFields?: Array<{ apiKey: string; label: string }>;
+        detailTable?: any;
+        includeSignatures?: boolean;
+        workdir?: string;
+      }) => Promise<{ success: boolean; fileName: string; fullPath: string; relativePath: string; sizeBytes: number; message: string; error?: string }>;
       printDownloadSample: (params: { objectId?: number | string; entityApiKey?: string }) => Promise<{ success: boolean; data?: { word?: string; excel?: string; objectId: number; entityApiKey: string; objectLabel: string }; error?: string }>;
       printToggleStatus: (templatePrintId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;
       printDeleteTemplate: (templatePrintId: string | number) => Promise<{ success: boolean; error?: string }>;

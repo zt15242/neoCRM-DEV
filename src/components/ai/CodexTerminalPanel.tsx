@@ -145,7 +145,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
       loadDirTree();
       loadRecentArtifacts();
     }
-  }, [isOpen, projectPath]);
+  }, [isOpen, projectPath, toolCalls.length, activeSessionAttachments.length]);
 
   // 终端命令历史随更新滚动
   useEffect(() => {

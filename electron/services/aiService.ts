@@ -816,10 +816,11 @@ ${dialogHistoryText}`;
       activeSkillIds?: string[];
       activeMcpServerIds?: string[];
       compactionSummary?: any;
+      projectPath?: string;
     },
     sendEvent: (event: AiStreamEvent) => void
   ): Promise<void> {
-    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary } = params;
+    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath } = params;
 
     const config = this.getAiConfig();
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
@@ -1319,7 +1320,7 @@ ${mcpInfoText}
             let isError = false;
 
             try {
-              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData);
+              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath);
               toolResult = res.data;
               resultSummary = res.summary;
               executedToolsLog.push({
@@ -1848,12 +1849,13 @@ ${toolDataContext}
     args: any,
     activeMcpServers: McpServerConfig[],
     env?: NeoEnvironment,
-    tokenData?: TokenData
+    tokenData?: TokenData,
+    projectPath?: string
   ): Promise<{ data: any; summary: string }> {
     // 1. 判断是否为销售易本地 Harness 工具
     const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
     if (isCrmTool) {
-      return await this.executeCrmTool(name, args, env, tokenData);
+      return await this.executeCrmTool(name, args, env, tokenData, projectPath);
     }
 
     // 2. 匹配外部 MCP 服务
@@ -1886,11 +1888,15 @@ ${toolDataContext}
     name: string,
     args: any,
     env?: NeoEnvironment,
-    tokenData?: TokenData
+    tokenData?: TokenData,
+    projectPath?: string
   ): Promise<{ data: any; summary: string }> {
     // ================= DeepSeek Harness 原生工具分发 (无需 CRM 登录) =================
     if (name === "bash") {
-      const res = await this.dshToolService.executeBash(args);
+      const res = await this.dshToolService.executeBash({
+        ...args,
+        workdir: args.workdir || projectPath,
+      });
       return {
         data: res,
         summary: `执行 Bash: ${args.command.slice(0, 45)}${args.command.length > 45 ? "..." : ""} (Exit: ${res.exitCode})`,
@@ -2230,6 +2236,18 @@ ${toolDataContext}
           resourceConfig: res.definition?.businessConfig?.resourceConfig,
         },
         summary: `成功读取自动流程 (${args.procdefId}) 图模型详情`,
+      };
+    }
+
+    if (name === "generate_print_template") {
+      const res = await this.printTemplateService.generatePrintTemplate({
+        ...args,
+        workdir: args.workdir || projectPath,
+      });
+      if (!res.success) throw new Error(res.error || res.message || "生成打印模板失败");
+      return {
+        data: res,
+        summary: res.message,
       };
     }
 

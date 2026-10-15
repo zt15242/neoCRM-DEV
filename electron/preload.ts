@@ -127,6 +127,7 @@ export const neoApi = {
   printListObjects: () => ipcRenderer.invoke("print:listObjects"),
   printListTemplates: (params?: any) => ipcRenderer.invoke("print:listTemplates", params),
   printGetFields: (params: any) => ipcRenderer.invoke("print:getFields", params),
+  printGenerateTemplate: (params: any) => ipcRenderer.invoke("print:generateTemplate", params),
   printDownloadSample: (params: any) => ipcRenderer.invoke("print:downloadSample", params),
   printToggleStatus: (templatePrintId: string | number, enable: boolean) => ipcRenderer.invoke("print:toggleStatus", { templatePrintId, enable }),
   printDeleteTemplate: (templatePrintId: string | number) => ipcRenderer.invoke("print:deleteTemplate", { templatePrintId }),

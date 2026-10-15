@@ -577,6 +577,10 @@ ipcMain.handle("print:getFields", async (_, params) => {
   return printTemplateService.getPrintTemplateFields(current.environment, current.tokenData, params || {});
 });
 
+ipcMain.handle("print:generateTemplate", async (_, params) => {
+  return printTemplateService.generatePrintTemplate(params);
+});
+
 ipcMain.handle("print:downloadSample", async (_, params) => {
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {

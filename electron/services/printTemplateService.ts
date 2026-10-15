@@ -1,4 +1,18 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import axios from 'axios';
+import { 
+  Document, 
+  Packer, 
+  Paragraph, 
+  TextRun, 
+  Table, 
+  TableRow, 
+  TableCell, 
+  WidthType, 
+  AlignmentType, 
+  ShadingType 
+} from 'docx';
 import { NeoEnvironment, TokenData } from '../../shared/types';
 import { MetadataService } from './metadataService';
 
@@ -508,4 +522,320 @@ export class PrintTemplateService {
       };
     }
   }
+
+  /**
+   * 8. 直接在当前项目工作区生成标准销售易 Word (.docx) 打印模板文件 (原生物理文档落库)
+   */
+  public async generatePrintTemplate(params: {
+    entityApiKey: string;
+    fileName?: string;
+    title?: string;
+    objectLabel?: string;
+    headerFields?: Array<{ apiKey: string; label: string }>;
+    detailTable?: {
+      childObjectApiKey: string;
+      childObjectLabel?: string;
+      columns: Array<{ apiKey: string; label: string }>;
+    } | null;
+    includeSignatures?: boolean;
+    workdir?: string;
+  }): Promise<{
+    success: boolean;
+    fileName: string;
+    fullPath: string;
+    relativePath: string;
+    sizeBytes: number;
+    message: string;
+    error?: string;
+  }> {
+    try {
+      const targetDir = params.workdir && fs.existsSync(params.workdir)
+        ? params.workdir
+        : process.cwd();
+
+      const objectLabel = params.objectLabel || params.entityApiKey;
+      let safeFileName = params.fileName?.trim() || `${objectLabel}_业务打印模板.docx`;
+      if (!safeFileName.endsWith('.docx') && !safeFileName.endsWith('.doc')) {
+        safeFileName += '.docx';
+      }
+
+      const fullPath = path.join(targetDir, safeFileName);
+      const title = params.title || `【${objectLabel}】业务打印档案`;
+
+      const children: any[] = [];
+
+      // 1. 文档大标题
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 100, after: 120 },
+          children: [
+            new TextRun({
+              text: title,
+              bold: true,
+              size: 34, // 17pt
+              color: '0F172A',
+            }),
+          ],
+        })
+      );
+
+      // 2. 副标题与元数据
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 300 },
+          children: [
+            new TextRun({
+              text: `单据编号: ##{id}    打印时间: ##={fun_now:style=YYYY-MM-DD HH:mm:ss}    打印人: ##{ownerId.name}`,
+              size: 19, // 9.5pt
+              color: '64748B',
+            }),
+          ],
+        })
+      );
+
+      // 3. 一、核心主表信息 (4列平铺排版)
+      children.push(
+        new Paragraph({
+          spacing: { before: 200, after: 120 },
+          children: [
+            new TextRun({
+              text: `一、 【${objectLabel}】核心基础信息`,
+              bold: true,
+              size: 22, // 11pt
+              color: '1E293B',
+            }),
+          ],
+        })
+      );
+
+      const fields = (params.headerFields && params.headerFields.length > 0)
+        ? params.headerFields
+        : [
+            { label: `${objectLabel}名称`, apiKey: `${params.entityApiKey}Name` },
+            { label: '负责人', apiKey: 'ownerId.name' },
+            { label: '创建时间', apiKey: 'createdAt' },
+            { label: '业务类型', apiKey: 'entityType' },
+          ];
+
+      const rows: TableRow[] = [];
+      for (let i = 0; i < fields.length; i += 2) {
+        const f1 = fields[i];
+        const f2 = fields[i + 1];
+
+        const cells: TableCell[] = [
+          new TableCell({
+            width: { size: 18, type: WidthType.PERCENTAGE },
+            shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+            children: [new Paragraph({ children: [new TextRun({ text: f1.label, bold: true, size: 20, color: '334155' })] })],
+          }),
+          new TableCell({
+            width: { size: 32, type: WidthType.PERCENTAGE },
+            children: [new Paragraph({ children: [new TextRun({ text: `##{${f1.apiKey}}`, size: 20, color: '0F172A' })] })],
+          }),
+        ];
+
+        if (f2) {
+          cells.push(
+            new TableCell({
+              width: { size: 18, type: WidthType.PERCENTAGE },
+              shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+              children: [new Paragraph({ children: [new TextRun({ text: f2.label, bold: true, size: 20, color: '334155' })] })],
+            }),
+            new TableCell({
+              width: { size: 32, type: WidthType.PERCENTAGE },
+              children: [new Paragraph({ children: [new TextRun({ text: `##{${f2.apiKey}}`, size: 20, color: '0F172A' })] })],
+            })
+          );
+        } else {
+          cells.push(
+            new TableCell({
+              width: { size: 50, type: WidthType.PERCENTAGE },
+              columnSpan: 2,
+              children: [new Paragraph({ children: [] })],
+            })
+          );
+        }
+
+        rows.push(new TableRow({ children: cells }));
+      }
+
+      children.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows,
+        })
+      );
+
+      // 4. 二、明细子对象表格 (物理表格循环行)
+      if (params.detailTable && params.detailTable.columns?.length > 0) {
+        const childLabel = params.detailTable.childObjectLabel || '关联明细';
+        children.push(
+          new Paragraph({
+            spacing: { before: 300, after: 120 },
+            children: [
+              new TextRun({
+                text: `二、 【${childLabel}】列表 (物理表格循环)`,
+                bold: true,
+                size: 22,
+                color: '1E293B',
+              }),
+            ],
+          })
+        );
+
+        const cols = params.detailTable.columns;
+        const colWidth = Math.floor(100 / cols.length);
+
+        const thRow = new TableRow({
+          tableHeader: true,
+          children: cols.map((col) =>
+            new TableCell({
+              width: { size: colWidth, type: WidthType.PERCENTAGE },
+              shading: { fill: 'E2E8F0', type: ShadingType.CLEAR },
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [new TextRun({ text: col.label, bold: true, size: 20, color: '1E293B' })],
+                }),
+              ],
+            })
+          ),
+        });
+
+        const loopRow = new TableRow({
+          children: cols.map((col) =>
+            new TableCell({
+              width: { size: colWidth, type: WidthType.PERCENTAGE },
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: `##={prt.${params.detailTable!.childObjectApiKey}.${col.apiKey}}`,
+                      size: 20,
+                      color: '0F172A',
+                    }),
+                  ],
+                }),
+              ],
+            })
+          ),
+        });
+
+        children.push(
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [thRow, loopRow],
+          })
+        );
+      }
+
+      // 5. 三、审核与业务签章区
+      if (params.includeSignatures !== false) {
+        children.push(
+          new Paragraph({
+            spacing: { before: 360, after: 120 },
+            children: [
+              new TextRun({
+                text: '三、 审核与业务签章',
+                bold: true,
+                size: 22,
+                color: '1E293B',
+              }),
+            ],
+          })
+        );
+
+        const signRows = [
+          new TableRow({
+            children: [
+              new TableCell({
+                width: { size: 33, type: WidthType.PERCENTAGE },
+                shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+                children: [new Paragraph({ children: [new TextRun({ text: '经办人签字', bold: true, size: 20 })] })],
+              }),
+              new TableCell({
+                width: { size: 33, type: WidthType.PERCENTAGE },
+                shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+                children: [new Paragraph({ children: [new TextRun({ text: '部门负责人审批', bold: true, size: 20 })] })],
+              }),
+              new TableCell({
+                width: { size: 34, type: WidthType.PERCENTAGE },
+                shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+                children: [new Paragraph({ children: [new TextRun({ text: '业务用章处', bold: true, size: 20 })] })],
+              }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [
+                  new Paragraph({ spacing: { before: 800, after: 100 }, children: [new TextRun({ text: '签字: ____________', size: 18, color: '64748B' })] }),
+                  new Paragraph({ children: [new TextRun({ text: '日期: ____年__月__日', size: 18, color: '64748B' })] }),
+                ],
+              }),
+              new TableCell({
+                children: [
+                  new Paragraph({ spacing: { before: 800, after: 100 }, children: [new TextRun({ text: '签字: ____________', size: 18, color: '64748B' })] }),
+                  new Paragraph({ children: [new TextRun({ text: '日期: ____年__月__日', size: 18, color: '64748B' })] }),
+                ],
+              }),
+              new TableCell({
+                children: [
+                  new Paragraph({ spacing: { before: 800, after: 100 }, children: [new TextRun({ text: '盖章: ____________', size: 18, color: '64748B' })] }),
+                  new Paragraph({ children: [new TextRun({ text: '日期: ____年__月__日', size: 18, color: '64748B' })] }),
+                ],
+              }),
+            ],
+          }),
+        ];
+
+        children.push(
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: signRows,
+          })
+        );
+      }
+
+      const doc = new Document({
+        sections: [
+          {
+            properties: {
+              page: {
+                margin: { top: 1152, bottom: 1152, left: 1152, right: 1152 },
+              },
+            },
+            children,
+          },
+        ],
+      });
+
+      const buffer = await Packer.toBuffer(doc);
+      fs.writeFileSync(fullPath, buffer);
+      const stat = fs.statSync(fullPath);
+
+      return {
+        success: true,
+        fileName: safeFileName,
+        fullPath,
+        relativePath: path.relative(targetDir, fullPath) || safeFileName,
+        sizeBytes: stat.size,
+        message: `成功在工作区生成标准销售易打印模板文件: ${safeFileName} (${(stat.size / 1024).toFixed(1)} KB)`,
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        fileName: params.fileName || 'template.docx',
+        fullPath: '',
+        relativePath: '',
+        sizeBytes: 0,
+        message: `生成打印模板失败: ${e.message}`,
+        error: e.message,
+      };
+    }
+  }
+
 }

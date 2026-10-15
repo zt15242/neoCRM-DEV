@@ -578,6 +578,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       activeSkillIds: skillIds || activeSkillIds,
       activeMcpServerIds: effectiveMcpIds,
       compactionSummary: targetSession.compactionSummary,
+      projectPath: activeProject?.localPath,
     });
   };
 
