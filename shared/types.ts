@@ -8,15 +8,20 @@ export interface CrmConnector {
   envType?: CrmEnvType; // 'production': 生产环境, 'sandbox': 沙盒演练, 'test': 开发测试, 'custom': 定制环境
   description?: string;
   isPreset: boolean;
-  neoBaseURL: string;
+  neoBaseURL: string; // 所在云域名 (如 https://open.fxiaoke.com 或 https://open-hwcloud.fxiaoke.com)
   loginURL: string;
   tokenURL: string;
-  clientId?: string;
-  clientSecret?: string;
-  redirectUri?: string;
+  clientId?: string; // 销售易 Client ID 或 纷享销客 appId (如 FSAID_xxxxx)
+  clientSecret?: string; // 销售易 Client Secret 或 纷享销客 appSecret
+  redirectUri?: string; // 回调地址 redirectUrl
   scope?: string;
   oauthType?: string;
   accessType?: string;
+  // 纷享销客专属 OAuth 2.0 字段 (依照官方 OpenAPI v2 规范)
+  authMode?: 'client_credentials' | 'authorization_code'; // 'client_credentials': 客户端凭证模式 (app_secret+permanentCode, 推荐), 'authorization_code': 授权码模式
+  permanentCode?: string; // 纷享销客自建应用企业永久授权码
+  cloudDomain?: string; // 纷享所在云 (open.fxiaoke.com / open-hwcloud.fxiaoke.com 等)
+  ea?: string; // 纷享销客企业账号代码
   customHeaders?: Record<string, string>;
   createdAt?: number;
   updatedAt?: number;

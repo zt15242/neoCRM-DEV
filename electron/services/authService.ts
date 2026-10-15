@@ -174,7 +174,65 @@ export class AuthService {
   /**
    * 模式1：通过系统默认浏览器进行 OAuth2 授权
    */
+
+  /**
+   * 纷享销客 OpenAPI v2 客户端凭证模式直连 (适用于自建应用无人工参与后台授权)
+   * 参考: https://developer.fxiaoke.com/openapi_v2/start/auth/app-info.html
+   */
+  public async loginWithFxiaoKeClientCredentials(env: NeoEnvironment): Promise<TokenData> {
+    const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
+    const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
+    const thirdTraceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    if (!env.clientId || !env.clientSecret) {
+      throw new Error('纷享销客自建应用需要提供 appId 与 appSecret');
+    }
+    if (!env.permanentCode) {
+      throw new Error('纷享销客客户端凭证模式需要提供企业永久授权码 (permanentCode)');
+    }
+
+    const payload = {
+      appId: env.clientId.trim(),
+      permanentCode: env.permanentCode.trim(),
+      appSecret: env.clientSecret.trim(),
+      grantType: 'app_secret',
+    };
+
+    const res = await axios.post(`${tokenUrl}?thirdTraceId=${thirdTraceId}`, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+
+    const data = res.data;
+    if (data.errorCode !== 0 && data.errorCode !== '0') {
+      throw new Error(`纷享销客授权失败 (${data.errorCode}): ${data.errorMessage || JSON.stringify(data)}`);
+    }
+
+    const expiresIn = Number(data.expiresIn || 7200);
+    const tenantId = String(data.ea || data.openUserId || 'fxiaoke_tenant');
+    const userInfo: UserInfo = {
+      userId: data.openUserId || data.appId,
+      name: `纷享应用 (${data.ea || data.appId})`,
+      tenant_id: tenantId,
+      tenantName: `纷享销客企业 (${data.ea || '自建应用'})`,
+      ea: data.ea,
+    };
+
+    return {
+      access_token: data.accessToken,
+      expires_in: expiresIn,
+      instance_uri: `https://${cloudDomain}`,
+      tenant_id: tenantId,
+      userInfo,
+      savedAt: Date.now(),
+      expiresAt: Date.now() + expiresIn * 1000,
+    };
+  }
+
   public async loginWithBrowser(env: NeoEnvironment): Promise<TokenData> {
+    if (env.productType === 'fxiaoke' && (env.authMode === 'client_credentials' || env.permanentCode)) {
+      return this.loginWithFxiaoKeClientCredentials(env);
+    }
     this.cancelActiveAuth();
 
     let targetPort = 1028;
@@ -278,6 +336,9 @@ export class AuthService {
    * 模式2：通过应用内嵌弹窗进行 OAuth2 授权
    */
   public async loginWithEmbeddedWindow(env: NeoEnvironment, parentWindow?: BrowserWindow): Promise<TokenData> {
+    if (env.productType === 'fxiaoke' && (env.authMode === 'client_credentials' || env.permanentCode)) {
+      return this.loginWithFxiaoKeClientCredentials(env);
+    }
     this.cancelActiveAuth();
 
     const redirectUri = env.redirectUri || "http://localhost:1028";
@@ -435,6 +496,35 @@ export class AuthService {
    * 刷新 Access Token
    */
   public async refreshToken(env: NeoEnvironment, refreshTokenStr: string): Promise<TokenData> {
+    if (env.productType === 'fxiaoke') {
+      const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
+      const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
+      const thirdTraceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const payload = {
+        grantType: 'refresh_token',
+        appId: env.clientId,
+        appSecret: env.clientSecret,
+        refreshToken: refreshTokenStr.trim(),
+      };
+      const res = await axios.post(`${tokenUrl}?thirdTraceId=${thirdTraceId}`, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+      });
+      const data = res.data;
+      if (data.errorCode !== 0 && data.errorCode !== '0') {
+        throw new Error(`纷享销客刷新令牌失败: ${data.errorMessage || JSON.stringify(data)}`);
+      }
+      const expiresIn = Number(data.expiresIn || 7200);
+      return {
+        access_token: data.accessToken,
+        refresh_token: data.refreshToken || refreshTokenStr,
+        expires_in: expiresIn,
+        instance_uri: `https://${cloudDomain}`,
+        tenant_id: data.ea || data.openUserId,
+        savedAt: Date.now(),
+        expiresAt: Date.now() + expiresIn * 1000,
+      };
+    }
     const params = new URLSearchParams();
     params.append('grant_type', 'refresh_token');
     params.append('client_id', env.clientId || '04c8b45c4dbe36426a660bf70d3fe3e7');
@@ -517,6 +607,42 @@ export class AuthService {
    * 通过授权码向 tokenURL 换取 Token 并获取用户信息
    */
   private async fetchTokenByCode(env: NeoEnvironment, code: string, redirectUri: string): Promise<TokenData> {
+    if (env.productType === 'fxiaoke') {
+      const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
+      const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
+      const thirdTraceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const payload = {
+        grantType: 'authorization_code',
+        appId: env.clientId,
+        appSecret: env.clientSecret,
+        code: code.trim(),
+      };
+      const res = await axios.post(`${tokenUrl}?thirdTraceId=${thirdTraceId}`, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+      });
+      const data = res.data;
+      if (data.errorCode !== 0 && data.errorCode !== '0') {
+        throw new Error(`纷享销客换取令牌失败 (${data.errorCode}): ${data.errorMessage || JSON.stringify(data)}`);
+      }
+      const expiresIn = Number(data.expiresIn || 7200);
+      return {
+        access_token: data.accessToken,
+        refresh_token: data.refreshToken,
+        expires_in: expiresIn,
+        instance_uri: `https://${cloudDomain}`,
+        tenant_id: data.ea || data.openUserId,
+        userInfo: {
+          userId: data.openUserId,
+          name: `纷享用户 (${data.openUserId})`,
+          tenant_id: data.ea || data.openUserId,
+          tenantName: `纷享销客企业 (${data.ea || ''})`,
+          ea: data.ea,
+        },
+        savedAt: Date.now(),
+        expiresAt: Date.now() + expiresIn * 1000,
+      };
+    }
     const params = new URLSearchParams();
     params.append('grant_type', 'authorization_code');
     params.append('client_id', env.clientId || '04c8b45c4dbe36426a660bf70d3fe3e7');

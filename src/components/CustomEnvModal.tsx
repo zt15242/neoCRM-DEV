@@ -40,6 +40,11 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   const [clientSecret, setClientSecret] = useState(DEFAULT_AUTH_CONFIG.clientSecret);
   const [redirectUri, setRedirectUri] = useState(DEFAULT_AUTH_CONFIG.redirectUri);
   const [scope, setScope] = useState('all');
+  // 纷享销客专属状态
+  const [authMode, setAuthMode] = useState<'client_credentials' | 'authorization_code'>('client_credentials');
+  const [permanentCode, setPermanentCode] = useState('');
+  const [cloudDomain, setCloudDomain] = useState('open.fxiaoke.com');
+  const [ea, setEa] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -57,6 +62,10 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       setClientSecret(initialEnv.clientSecret || DEFAULT_AUTH_CONFIG.clientSecret);
       setRedirectUri(initialEnv.redirectUri || DEFAULT_AUTH_CONFIG.redirectUri);
       setScope(initialEnv.scope || 'all');
+      setAuthMode(initialEnv.authMode || 'client_credentials');
+      setPermanentCode(initialEnv.permanentCode || '');
+      setCloudDomain(initialEnv.cloudDomain || 'open.fxiaoke.com');
+      setEa(initialEnv.ea || '');
     } else {
       setProductType('neocrm');
       setEnvType('sandbox');
@@ -69,6 +78,10 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       setClientSecret(DEFAULT_AUTH_CONFIG.clientSecret);
       setRedirectUri(DEFAULT_AUTH_CONFIG.redirectUri);
       setScope('all');
+      setAuthMode('client_credentials');
+      setPermanentCode('');
+      setCloudDomain('open.fxiaoke.com');
+      setEa('');
     }
     setTestResult(null);
   }, [initialEnv, isOpen]);
@@ -90,11 +103,13 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       } else if (pType === 'fxiaoke') {
         setName('纷享销客 - 开放平台连接器');
         setEnvType('production');
+        setCloudDomain('open.fxiaoke.com');
         setNeoBaseURL('https://open.fxiaoke.com');
-        setLoginURL('https://open.fxiaoke.com/oauth2/authorize');
-        setTokenURL('https://open.fxiaoke.com/cgi/corpAccessToken/get/V2');
+        setLoginURL('https://open.fxiaoke.com/oauth2.0/authorize');
+        setTokenURL('https://open.fxiaoke.com/oauth2.0/token');
+        setAuthMode('client_credentials');
         setScope('all');
-        setDescription('纷享销客开放平台自建应用连接器');
+        setDescription('纷享销客 OpenAPI v2 自建应用连接器 (客户端凭据模式)');
       } else if (pType === 'neocrm') {
         setName('销售易 - 专属沙盒环境');
         setEnvType('sandbox');
@@ -113,6 +128,15 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
         setDescription('自定义 CRM 系统 REST 接口连接器');
       }
     }
+  };
+
+  // 纷享销客云环境切换
+  const handleCloudDomainChange = (domain: string) => {
+    setCloudDomain(domain);
+    const base = `https://${domain}`;
+    setNeoBaseURL(base);
+    setLoginURL(`${base}/oauth2.0/authorize`);
+    setTokenURL(`${base}/oauth2.0/token`);
   };
 
   // 根据 Base URL 智能推导 Login URL 和 Token URL
@@ -186,6 +210,10 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       clientSecret: clientSecret.trim(),
       redirectUri: redirectUri.trim(),
       scope: scope.trim(),
+      authMode,
+      permanentCode: permanentCode.trim(),
+      cloudDomain: cloudDomain.trim(),
+      ea: ea.trim(),
     });
     onClose();
   };
@@ -322,6 +350,128 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               </select>
             </div>
           </div>
+
+          {/* 纷享销客专属配置面板 */}
+          {productType === 'fxiaoke' && (
+            <div className="p-3.5 bg-orange-50/60 rounded-2xl border border-orange-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-orange-950 flex items-center space-x-1.5">
+                  <Flame className="w-4 h-4 text-orange-600" />
+                  <span>纷享销客 OpenAPI v2 授权规范</span>
+                </span>
+                <a
+                  href="https://developer.fxiaoke.com/openapi_v2/start/auth/app-info.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-orange-700 hover:text-orange-900 underline flex items-center space-x-0.5"
+                >
+                  <span>官方文档</span>
+                </a>
+              </div>
+
+              {/* 所在云域名 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-orange-900">
+                    所在云域名 (Cloud Domain) *
+                  </label>
+                  <select
+                    value={cloudDomain}
+                    onChange={(e) => handleCloudDomainChange(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-orange-500 cursor-pointer"
+                  >
+                    <option value="open.fxiaoke.com">纷享云 (默认) - open.fxiaoke.com</option>
+                    <option value="open-hwcloud.fxiaoke.com">华为云 - open-hwcloud.fxiaoke.com</option>
+                    <option value="open-ale.fxiaoke.com">阿里云 - open-ale.fxiaoke.com</option>
+                    <option value="open-ksc.sharecrm.com">香港华为云 - open-ksc.sharecrm.com</option>
+                    <option value="open-hws.fxiaoke.com">法兰克福云 - open-hws.fxiaoke.com</option>
+                    <option value="open-na.sharecrm.com">北美云 - open-na.sharecrm.com</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-orange-900">
+                    授权认证模式 *
+                  </label>
+                  <select
+                    value={authMode}
+                    onChange={(e) => setAuthMode(e.target.value as any)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-orange-500 cursor-pointer"
+                  >
+                    <option value="client_credentials">客户端凭证模式 (免用户登录 · 后台直通)</option>
+                    <option value="authorization_code">授权码模式 (Web 浏览器登录获取 Code)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* appId & appSecret & permanentCode */}
+              <div className="space-y-2 pt-1 border-t border-orange-200/60">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-orange-900">
+                      自建应用 appId *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                      placeholder="如 FSAID_xxxxx"
+                      className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-orange-900">
+                      自建应用 appSecret *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      placeholder="自建应用密钥"
+                      className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                </div>
+
+                {authMode === 'client_credentials' && (
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-orange-900 flex items-center justify-between">
+                      <span>企业永久授权码 (permanentCode) *</span>
+                      <span className="text-[10px] text-orange-700 font-normal">自建应用发布后管理后台生成</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={permanentCode}
+                      onChange={(e) => setPermanentCode(e.target.value)}
+                      placeholder="3F9xxxxxCA5"
+                      className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-orange-900">
+                    企业账号代码 ea (可选)
+                  </label>
+                  <input
+                    type="text"
+                    value={ea}
+                    onChange={(e) => setEa(e.target.value)}
+                    placeholder="企业账号如 fxxxx1"
+                    className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div className="text-[10px] text-orange-800 leading-relaxed bg-white/70 p-2 rounded-xl border border-orange-200/60">
+                💡 <strong>时效性说明：</strong>Token 有效期为 7200 秒（2小时），支持无用户交互在后台直接获取访问凭证；接口频次每分钟不超过 10 次。
+              </div>
+            </div>
+          )}
 
           {/* 3. 实例服务地址 (Base URL) */}
           <div className="space-y-1">
