@@ -96,6 +96,55 @@ export class ProjectService {
     return true;
   }
 
+  public listFiles(params?: { folderPath?: string; query?: string; maxFiles?: number }): Array<{
+    name: string;
+    relativePath: string;
+    fullPath: string;
+    ext: string;
+    size: number;
+  }> {
+    const baseDir = params?.folderPath && fs.existsSync(params.folderPath)
+      ? params.folderPath
+      : process.cwd();
+
+    const maxFiles = params?.maxFiles || 200;
+    const query = (params?.query || '').trim().toLowerCase();
+    const results: Array<{ name: string; relativePath: string; fullPath: string; ext: string; size: number }> = [];
+    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.vscode', '.idea']);
+
+    const walk = (dir: string, depth = 0) => {
+      if (depth > 6 || results.length >= maxFiles) return;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          const rel = path.relative(baseDir, full);
+
+          if (entry.isFile()) {
+            if (!query || entry.name.toLowerCase().includes(query) || rel.toLowerCase().includes(query)) {
+              let size = 0;
+              try { size = fs.statSync(full).size; } catch {}
+              results.push({
+                name: entry.name,
+                relativePath: rel,
+                fullPath: full,
+                ext: path.extname(entry.name).toLowerCase(),
+                size,
+              });
+              if (results.length >= maxFiles) return;
+            }
+          } else if (entry.isDirectory()) {
+            walk(full, depth + 1);
+          }
+        }
+      } catch {}
+    };
+
+    walk(baseDir);
+    return results;
+  }
+
   public async openFolder(folderPath: string): Promise<string> {
     if (fs.existsSync(folderPath)) {
       return shell.openPath(folderPath);

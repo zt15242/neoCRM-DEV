@@ -56,6 +56,14 @@ declare global {
       projectSaveProject: (payload: Partial<WorkspaceProject> & { name: string; localPath: string }) => Promise<WorkspaceProject>;
       projectDeleteProject: (projectId: string) => Promise<boolean>;
       projectOpenFolder: (folderPath: string) => Promise<string>;
+      projectListFiles: (params?: { folderPath?: string; query?: string; maxFiles?: number }) => Promise<Array<{
+        name: string;
+        relativePath: string;
+        fullPath: string;
+        ext: string;
+        size: number;
+      }>>;
+      fileParseLocalPath: (filePath: string) => Promise<AiFileAttachment>;
       testApiCall: () => Promise<{ success: boolean; data?: any; error?: string }>;
       openExternal: (url: string) => Promise<void>;
       openDesigner: (type: 'web' | 'h5') => Promise<void>;

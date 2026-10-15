@@ -938,6 +938,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               }}
               currentPresetName={currentPreset.name}
               tenantName={crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "沙盒环境"}
+              activeProject={activeProject}
+              onClearSession={activeSession ? () => handleDeleteSession(activeSession.id) : undefined}
+              onCompactSession={handleCompactSession}
+              onSelectPreset={setSelectedPresetId}
+              onOpenFlowManager={onOpenFlowManager}
+              onOpenPrintManager={onOpenPrintManager}
             />
           </div>
         </div>

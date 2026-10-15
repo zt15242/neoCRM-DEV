@@ -613,3 +613,5 @@ ipcMain.handle("project:getProjects", async () => projectService.getProjects());
 ipcMain.handle("project:saveProject", async (_, payload) => projectService.saveProject(payload));
 ipcMain.handle("project:deleteProject", async (_, projectId: string) => projectService.deleteProject(projectId));
 ipcMain.handle("project:openFolder", async (_, folderPath: string) => projectService.openFolder(folderPath));
+ipcMain.handle("project:listFiles", async (_, params) => projectService.listFiles(params));
+ipcMain.handle("file:parseLocalPath", async (_, filePath: string) => fileService.parseLocalFile(filePath));
