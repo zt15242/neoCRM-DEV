@@ -739,11 +739,12 @@ export class AuthService {
         client_id: env.clientId || '',
         redirect_uri: redirectUri,
       });
-      // 关键修复：Salesforce 规定若省略 scope，将自动继承 Connected App 中已配置的权限范围。
-      // 严禁默认携带 'full'，否则企业组织（如 Olympus 等）因安全策略未开放 full 权限会报 "the requested scope is not allowed"！
-      if (env.scope && env.scope.trim() && env.scope !== 'all' && env.scope !== 'full refresh_token api') {
-        searchParams.append('scope', env.scope.trim());
-      }
+      // 关键修复：显式请求 'refresh_token api'，既不会触发 'full' 越权拦截，又能保证返回永久有效的 refresh_token 供后台静默自动续期
+      const sfScope = env.scope && env.scope.trim() && env.scope !== 'all' && env.scope !== 'full refresh_token api'
+        ? env.scope.trim()
+        : 'refresh_token api';
+      searchParams.append('scope', sfScope);
+
       if (codeChallenge) {
         searchParams.append('code_challenge', codeChallenge);
         searchParams.append('code_challenge_method', 'S256');
