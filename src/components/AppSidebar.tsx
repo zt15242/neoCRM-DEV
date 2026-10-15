@@ -612,7 +612,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             title="检查软件更新"
             className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white hover:bg-slate-200/80 text-slate-600 border border-slate-200/80 transition-colors flex items-center space-x-0.5 cursor-pointer"
           >
-            <span>v1.4.0</span>
+            <span>v1.5.0</span>
             {hasUpdate && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />}
           </button>
 

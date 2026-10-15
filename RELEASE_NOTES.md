@@ -1,99 +1,45 @@
-### 🚀 版本更新说明 (v1.4.0)
+### 🚀 版本更新说明 (v1.5.0)
 
-1. **租户流程资产中心 (Flow Manager)**：
-   - 顶部导航栏与侧边栏接入全新「📋 流程资产库」，支持实时调阅租户全量自动流程与审批流资产；
-   - 完整支持一键启停（`enable-procdef` / `disable-procdef`）、版本修订（`revise-designer`）、流程族复制副本（`copy-baseInfo`）、流程删除及流程图拓扑与网关分支条件深度调阅；
-   - 彻底修复销售易 Struts2 后端分页传参缺陷（补齐 `pagination.pageNo` & `pagination.pageSize: 200`），全量加载租户 10 条以上的全量流程，解决以往新流程因分页截断而隐形丢失的严重缺陷；
-   - 建立租户实体元数据中英双向映射字典（如 `opportunity` ↔ `商机`、`contract` ↔ `合同`），消除中英检索壁垒，并自动补全缺失的对象名称。
+1. **多 CRM 连接器中心架构全面升级 (Universal Connectors Hub)**：
+   - 彻底打破单平台限制，升级为面向 **销售易 (NeoCRM)**、**Salesforce (Force.com / 阿里中国 & 全球版)**、**纷享销客 (FXIAOKE)** 及 **自定义 CRM** 的全能多生态连接器中心；
+   - 彻底去除主页 13 个生硬死板的官方预置卡片占位，只纯净展示用户实际创建和配置的真实连接器；空状态下提供一键快速初始化模板；
+   - **新增连接器独立详情页 (`ConnectorDetailView`)**：将原本堆叠在主界面下方的运行时看板与认证卡片完整收敛至详情页，主界面轻量化，详情页支持查看端点参数、网络即时测速、一键登录与完整会话管理。
 
-2. **双部署模式：现有流程版本升级 (Revise Version) vs 全新独立流程族**：
-   - 审批流与自动流程向导新增「🚀 为现有流程升级发布新版本 (推荐)」与「新建独立流程族」双模式；
-   - 升级模式下自动调阅租户版本树并调用 `revise-designer.action` 递增创建新版本覆盖新拓扑，原版本存档停用，彻底消除调整流程时遭遇的“序号已被其他审批流占用”冲突；
-   - 流程定义详情回读支持解析真实 `actKey`、`procdefApiKey`、`startupOrder` 及关联业务类型。
+2. **纷享销客 (FXIAOKE) OpenAPI v2 官方生态深度打通**：
+   - 全面对齐纷享销客官方客户端凭证模式 (`client_credentials`)，支持配置 `appId` + `appSecret` + `permanentCode` 直连获取 7200 秒 Access Token；
+   - 实现了企业首个活跃员工 OpenUserId 自动嗅探与权限容错机制；
+   - 实现了全量业务对象列表拉取（实测拉取租户全量 156 个业务对象）与 Describe 字段探测（如客户 `AccountObj` 提取 405 个真实字段，联系人、合同、订单等详情）；
+   - 支持通过 `execute_sql_query` 按 `LIMIT 50 OFFSET n` 规范进行只读数据查询与分页对账。
 
-3. **原生内联交互决策确认系统 (Inline Decision Card)**：
-   - 告别传统生硬的居中遮罩弹窗，在对话流末尾原生内联渲染方案决策卡片；
-   - 支持动态调阅租户真实用户、部门、角色、职能数据，提供单选卡片、下拉选择与自由文本输入；
-   - 严格遵循确认拦截约束，在用户未确认前严密收敛部署向导卡片，保障引导式交互体验。
+3. **Salesforce 阿里中国版 (*.sfcrmproducts.cn) & 全球版 (*.salesforce.com) 全面支持**：
+   - 全面支持阿里云本土承载的 Salesforce 中国区域名体系（`login.sfcrmproducts.cn` / `test.sfcrmproducts.cn` / 专属 My Domain）与全球版端点；
+   - 全面支持 **OAuth 2.0 PKCE 扩展安全协议**（自动生成 S256 挑战哈希 `code_challenge` 与 `code_verifier` 验签）；
+   - 彻底解决 `redirect_uri_mismatch` 缺陷，规范消除末尾自动追加 `/` 斜杠问题，支持自定义配置并提供常用回调地址标签；
+   - 修复此前请求越权敏感 scope 引发的 `invalid_scope: the requested scope is not allowed` 报错（遵从 Salesforce 官方规范，自动继承 Connected App 配置的授权范围）；
+   - 自动解析 Salesforce 官方 OIDC UserInfo，准确提取真实企业租户（如奥林巴斯等）与用户信息；
+   - 浏览器回调完成页升级为多 CRM 品牌自适应展现，彻底告别单平台模板；
+   - 登录凭据自动双向同步至本地 Salesforce CLI (`sf`)，自动关联本地别名 `aliNewStageFull` 并使 CLI 立即处于 Connected 有效状态。
 
-4. **流程代码级部署引擎核心规范与全生命周期修复**：
-   - **自动流程部署修复**：
-     * 彻底修复自动流程部署向导在步骤 3 / 步骤 7 回读及步骤 8 启用时因缺少局部变量声明引发的 `procType is not defined` 运行时中断异常；
-     * 补齐 `WorkflowService` 构造函数对 `DataService` 的依赖注入及 `WorkflowNodeItem` 类型引用；
-     * 兼容 `queryConfig` 与 `loopConfig` 弹性属性别名访问。
-   - **审批流 Creek Flow 规范对齐**：
-     * 审批流提交任务（SubmitTask）底层强制绑定固定标识 `___submitUserTaskDefKey___` 与 `subType: "SUBMIT_TASK"`，消除悬空孤立节点及找不到节点报错；
-     * 动作资源字段回写全面对齐平台底层编码：字段引用必须传 `criteriaType: 10`，变量引用必须传 `criteriaType: 13`，杜绝平台报操作类型不支持；
-     * 动作资源与网关连线中使用真实的英文 API Key，杜绝字段不存在错误。
+4. **双重自动续期与令牌保活引擎 (Proactive Auto-Renewal)**：
+   - 针对纷享销客客户端凭据模式和 Salesforce/销售易不同特性，实现统一的 `renewToken`；
+   - **主进程后台巡检**：每 30 秒自动轮询检测当前会话，当 Token 剩余时间小于 10 分钟或已过期时自动静默刷新；
+   - **前端倒计时守护**：会话看板增加 `[● 自动续期]` 标识，并在即将到期时自动触发静默续期；修复手动续期按钮无 `refresh_token` 时报错的问题。
 
-5. **部署方案提取器与 Markdown 渲染器排版修复**：
-   - **部署方案提取器 (`workflowPlanHelper` & `approvalPlanHelper`)**：
-     * 弹性兼容大模型输出的 `"baseInfo"`、`"flow"` 及根级流程属性，兼容 `taskDefKey` 与根级 `actions` 动作绑定；
-     * 彻底解决生成完毕后死锁停留在“正在生成自动流程配置方案...”绿圈跳动的缺陷，部署卡片毫秒级就绪呈现。
-   - **Markdown 渲染器排版增强**：
-     * 修复复合井号标题走样（如 `### ## 标题`、`• ## 标题` 规整为标准 H2/H3 标题，剔除多余蓝点与残留井号）；
-     * 增强行内解析器 `parseInline`，支持 `<br>`、`<br/>`、`&lt;br&gt;` 标签转换为真实 React 换行组件，使证据对账表格多行排版整洁美观。
+5. **线上代码与元数据本地工程一键拉取落盘 (`pull_crm_project_code`)**：
+   - 新增多 CRM 通用工程拉取工具 `pull_crm_project_code`，彻底告别以往大模型仅输出 Markdown 虚假文本的问题，真实在本地磁盘创建工程目录与文件；
+   - 纷享销客：自动拉取并落盘 `metadata/object_manifest.json`、核心对象 `metadata/objects/*.json`、查询脚本与 `package.json`，并自动完成 Git 初始化；
+   - 销售易：支持下载并解压服务端代码包 ZIP 至 `src/codePackages/`，生成 `AllxObjects.md` 与字段定义；
+   - Salesforce：自动生成 `manifest/package.xml`（包含全量 72,003 个组件清单）、初始化 `force-app` 结构并拉取真实 Apex 类与元数据。
 
-6. **《销售易流程实施视角规范》核心工程认知植入**：
-   - 植入第一人称「我」的工程研判、结论先行与四层模型解构，严格把控目标租户事实、设计态与运行态证据边界。
+6. **方案确认后自动调用工具执行铁律**：
+   - 在 AI 调度引擎中植入最高优先级执行指令：当用户回复“确认”、“同意”、“不能自动执行吗”等指令时，强制 AI 必须立即调用 `bash` 或 `pull_crm_project_code` 工具在本地执行到底，严禁输出“请在终端按顺序执行”并让用户手动敲命令。
 
-### 🚀 版本更新说明 (v1.3.10)
+7. **右侧 Codex 项目文件树 10 层深度穿透与大文件夹分批加载**：
+   - 将目录树扫描深度从原先的 4 层扩展至 10 层，彻底解决深度嵌套的 `force-app/main/default/classes` 无法展开看到具体代码文件的缺陷；
+   - 增加文件夹子文件计数角标（如 `classes (6,470)`、`lwc (578)`、`triggers (502)`）；
+   - 引入大文件夹分批加载保护（每次展示 100~150 项），配合上方实时文件名过滤，保障数千个类文件时依然丝滑流畅。
 
-1. **彻底修复自动流程部署「注册动作资源失败: 事件（{0}）缺少字段」核心缺陷**：
-   - 彻底修复 `add-action.action` 注册更新记录动作时因 `conditionForm.referFilterCriteria` 传空引发的销售易服务端校验拦截（`事件（{0}）缺少字段`）；
-   - 在向平台动作库注册动作时，自动绑定经过实体元数据核验的合法存在字段（如 `case` 绑定 `subject` 个案主题，`contract` 绑定 `title`），杜绝空字段更新；
-   - 针对销售易标准实体（如 `case` 服务个案）通过元数据 API 查回为空的情况，内置权威标准字段兜底词典（`subject`、`status`、`priority`、`description` 等），确保步骤 1 元数据解析不再返回 0 字段。
-2. **修复元数据创建货币字段显示为实数/浮点类型的缺陷**：
-   - 深入对齐销售易底层机制，当创建 `itemType=6` 字段时自动注入 `"currency": true`，彻底解决被平台降级为普通实数/浮点类型的问题；
-   - 字段新建弹窗 `CreateFieldModal`、批量导入 `BatchFieldImportModal` 及 AI 数据建模建表全面支持精准指定货币与实数。
-
-### 🚀 版本更新说明 (v1.3.9)
-
-1. **新增销售易新版审批流 (Approval Flow, procType=2) 架构与代码级一键部署专家**：
-   - **预设智能体角色上线**：新增「审批流架构与部署专家 (Approval Flow)」，专精销售易新版审批流（`procType=2`）全生命周期工程闭环；
-   - **铁律级强约束体系**：
-     * 严格隔离自动流程与审批流边界，严禁在审批流中混用自动流程的 Loop 循环和 QueryLog 查询节点；
-     * 强制以 `SubmitTask` 提交节点为流程入口，并必须包含至少一个 `UserTask` 人工审批节点；
-     * 严格遵守销售易标准对象字段命名规范（如合同 `contract -> title`、商机 `opportunity -> opportunityName`、工单 `case -> subject` 等），严禁凭空臆造不存在的 `name` 字段；
-     * 完整支持 8 大审批人策略（自选审批人、字段选人、直属上级逐级审批、提交人直属上级、部门主管、角色、用户组等）；
-     * 深度支持单人/任签/多人并行会签（含百分比阈值）、加签控制（`plussignFlag`）、转办控制（`delegationFlag`）、拒绝退回策略（`returnTargetType`）、审批意见必填性及敏感字段编辑权限（`editableFields`）；
-     * 全局撤回控制（`withdrawFlag`）、单步收回策略（`singleStepWithdrawFlag`）与审批通知联动；
-   - **全流程四大工程闭环**：
-     * **方案分析 (Solution Analysis)**：业务准入时机、主动且自信调用工具深入核查租户对象真实字段与业务类型、审批矩阵责任分析；
-     * **方案设计 (Solution Design)**：拓扑流转蓝图、节点策略参数表、分支条件公式、全局撤回与通知、多维度验收矩阵；
-     * **方案调整 (Solution Adjustment)**：针对业务变更敏捷评估影响域，精准输出调整后的拓扑连线与参数变更对比；
-     * **方案部署 (Solution Deployment)**：回答末尾输出标准结构化代码块，前端自动拦截并在卡片中呈现【一键核对并部署审批流】操作入口；
-   - **可视化核对与部署弹窗**：新增 `ConfirmDeployApprovalModal`，支持核对流程属性、各节点审批人策略与编辑字段、一键捕获管理员 Cookie、选择是否立即启用并打印全生命周期服务端调用日志；
-   - **双流共用硬件设备密码锁**：审批流角色与自动流程角色无缝共用同一个本地离线设备安全密码锁，具备强一致性授权校验与防绕过机制。
-
-### 🚀 版本更新说明 (v1.3.8)
-
-1. **修复自动流程代码级部署字段映射缺陷（彻底解决 Creek Flow `字段【name】不存在` 报错）**：
-   - 彻底修复对销售易标准对象（如 `case` 服务个案、`account` 客户、`opportunity` 商机等）进行自动流程部署时因缺少 `name` 字段引发的平台校验失败缺陷；
-   - 新增销售易标准对象核心主字段权威对照表（`case -> subject: 个案主题`、`account -> accountName` 等），优先通过元数据探测租户真实字段，杜绝盲目兜底回退为 `name`；
-   - 规范清空动作资源内的虚假条件过滤（`conditionForm.referFilterCriteria: []`），交由网关流转控制，彻底消除启用时“事件：xxx，字段【名称】不存在”报错；
-   - 规范网关排他分支逻辑，非默认分支绑定合法存在的对象字段（如 `case.subject isNotNull`），并准确识别 AI 方案中的 `defaultFlow` / `isDefault` 标识；
-   - 升级大模型内核提示词规范，强制约束大模型在为标准实体设计方案时严格引用真实字段，严禁凭空臆造不存在的 `name` 字段。
-2. **Skill 技能库权限与对话安全隔离加固**：
-   - **系统内置技能安全隔离**：系统内置专业技能受底层加密沙箱与专属智能体角色驱动，彻底从对话输入框的技能选择浮层中隐藏，禁止在普通/其他对话中随意选择挂载；
-   - **挂载范围专属于个人技能**：对话工具栏的「挂载技能」入口仅对用户自定义与导入的「个人专属技能」开放，暂无个人技能时提供友好引导与快捷跳转；
-   - **设置中心安全锁定**：系统内置技能复选框置为只读锁定状态，防止用户意外变更，明确系统内置与个人专属的边界。
-3. **新增销售易新版审批流 (`procType=2`) 代码级全流程部署支持 (`deployApprovalPlan`)**。
-
-### 🚀 版本更新说明 (v1.3.7)
-
-1. **新增销售易自动流程 (Automatic Flow) 架构设计与代码级一键部署闭环**：
-   - **AI 对话工作台新增「自动流程架构与部署专家」角色与内置规范技能**：支持自动流程（`procType=1`）方案分析、画布 7 类节点与变量系统设计、排他分支与循环编排、一键代码级部署与启用；
-   - **Web 会话 Cookie 智能捕获与管理**：支持通过内嵌登录窗口一键捕获管理员 Web 会话 Cookie 或手动配置，持久化保存以支撑流程设计态 API 调用；
-   - **完整 `resourceConfig` 拓扑与二维自动排版**：自动补齐流程变量（`resourceType=1`）、赋值节点（`resourceType=2`）、查询记录（`resourceType=3`）与循环节点（`resourceType=4`）底层绑定配置，彻底解决启用校验报错问题。
-2. **新增自动流程本地离线硬件设备安全锁**：
-   - 采用 `scrypt` + `AES-256-GCM` + `HMAC-SHA256` 双层加密签名，纯本地离线解密并自动计算剩余有效天数；
-   - 首次输入密码自动强绑定当前设备硬件与系统卷指纹，一码一机，设备刷机或更换设备后原密码自动失效；内置阶梯退避防暴力破解与防时钟回拨机制。
-3. **全面升级 XOQL / SQL 查询引擎与智能语法修复器**：
-   - 底层查询与滚动分页全面切换至官方 `POST /rest/data/v2.0/query/xoql` 接口，原生支持 `COUNT`/`SUM`/`GROUP BY` 聚合统计、`ownerId.name`/`accountId.accountName` 关联点号穿透查询及业务维度字段（`dimArea` 等）；
-   - 智能自动修复标准对象名称字段错写（如 `account` -> `accountName`、`contact` -> `contactName`、`opportunity` -> `opportunityName`、`order` -> `po`）、自动展开 `SELECT *`、自动还原 `ORDER BY`/`HAVING` 中的聚合列别名，并精准透传平台报错。
-4. **数据中心交互体验大幅增强**：
-   - **业务类型字段（`entityType`）**：自动拉取对应对象的全部标准与自定义业务类型列表，并自动将记录中的业务类型 ID 解析为真实名称；
-   - **关联查找字段（Lookup）**：突破原 40 条限制，支持高速加载全量记录，并提供本地实时过滤 + 服务端全库模糊检索双引擎；
-   - **新增字段搜索与默认导出主键 ID**：在数据插入/更新、数据详情查看、数据批量导出页面均新增字段实时搜索框；批量导出默认置顶并必选包含 `数据ID (id)`；
-   - **AI 模型选择器净化**：下拉列表仅展示已配置完成 API Key 的可用模型供应商。
+8. **1M Token 上下文溢出防冲垮守护与终端 ANSI 净化**：
+   - 在 CLI 命令执行中注入 `CI=true` 与 `SF_USE_PROGRESS_BAR=false`，消除 Salesforce CLI 产生数百万字符动画进度条的问题；
+   - 底层过滤 ANSI 控制序列并压缩重绘行；
+   - 在 AI 工具返回注入点增加 `formatSafeToolResultString` 安全熔断，任何超大输出均被安全收敛在 25,000 字符内，彻底消除了 `HTTP 400: The input token count exceeds the maximum number of tokens allowed 1048576` 报错。
