@@ -173,6 +173,24 @@ export const App: React.FC = () => {
     };
 
   // 自定义环境保存
+  const handleSelectConnector = async (envId: string) => {
+    if (isLoggingIn) return;
+    setSelectedEnvId(envId);
+
+    // 智能联动：如果在历史账号中已有该连接器的活跃登录凭据，自动唤醒并切换为该会话！
+    const matchedAccount = accountHistory.find((a) => a.environmentId === envId);
+    if (matchedAccount && window.neoApi?.switchAccount) {
+      try {
+        const switched = await window.neoApi.switchAccount(matchedAccount.id);
+        if (switched && switched.isLoggedIn) {
+          setSession(switched);
+          showToast('success', `已自动切换至连接器 [${switched.environment?.name || envId}] 认证会话`);
+          return;
+        }
+      } catch {}
+    }
+  };
+
   const handleSaveCustomEnv = async (envData: Partial<NeoEnvironment> & { name: string; neoBaseURL: string }) => {
     try {
       const saved = await window.neoApi.saveCustomEnvironment(envData);
@@ -521,9 +539,7 @@ export const App: React.FC = () => {
               <EnvironmentSelector
                 environments={environments}
                 selectedEnvId={selectedEnvId}
-                onSelect={(envId) => {
-                  if (!isLoggingIn) setSelectedEnvId(envId);
-                }}
+                onSelect={handleSelectConnector}
                 onAddCustom={() => {
                   setEditingCustomEnv(null);
                   setIsCustomEnvOpen(true);

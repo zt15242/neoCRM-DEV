@@ -8,6 +8,7 @@ import {
   X
 } from 'lucide-react';
 import { NeoEnvironment } from '../../shared/types';
+import { Cloud, Layers, Flame, Plug } from 'lucide-react';
 
 interface LoginCardProps {
   environment: NeoEnvironment;
@@ -49,6 +50,30 @@ export const LoginCard: React.FC<LoginCardProps> = ({
             <span className="text-xs px-2 py-0.5 rounded bg-sky-50 text-sky-600 border border-sky-200 font-mono">
               {environment.id}
             </span>
+            {environment.productType === 'salesforce' && (
+              <span className="text-xs px-2 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-200 font-mono flex items-center space-x-1">
+                <Cloud className="w-3 h-3 text-cyan-600" />
+                <span>Salesforce</span>
+              </span>
+            )}
+            {environment.productType === 'fxiaoke' && (
+              <span className="text-xs px-2 py-0.5 rounded bg-orange-50 text-orange-700 border border-orange-200 font-mono flex items-center space-x-1">
+                <Flame className="w-3 h-3 text-orange-600" />
+                <span>纷享销客</span>
+              </span>
+            )}
+            {(environment.productType === 'neocrm' || !environment.productType) && (
+              <span className="text-xs px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-mono flex items-center space-x-1">
+                <Layers className="w-3 h-3 text-sky-600" />
+                <span>销售易 NeoCRM</span>
+              </span>
+            )}
+            {environment.productType === 'custom' && (
+              <span className="text-xs px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-mono flex items-center space-x-1">
+                <Plug className="w-3 h-3 text-purple-600" />
+                <span>自定义 CRM</span>
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-500 mt-1 font-mono">{environment.neoBaseURL}</p>
         </div>

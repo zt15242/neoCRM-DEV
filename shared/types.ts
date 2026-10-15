@@ -1,6 +1,11 @@
-export interface NeoEnvironment {
+export type CrmProductType = 'neocrm' | 'salesforce' | 'fxiaoke' | 'custom';
+export type CrmEnvType = 'production' | 'sandbox' | 'test' | 'custom';
+
+export interface CrmConnector {
   id: string;
   name: string;
+  productType?: CrmProductType; // 'neocrm': 销售易, 'salesforce': Salesforce, 'fxiaoke': 纷享销客, 'custom': 自定义 CRM
+  envType?: CrmEnvType; // 'production': 生产环境, 'sandbox': 沙盒演练, 'test': 开发测试, 'custom': 定制环境
   description?: string;
   isPreset: boolean;
   neoBaseURL: string;
@@ -12,9 +17,12 @@ export interface NeoEnvironment {
   scope?: string;
   oauthType?: string;
   accessType?: string;
+  customHeaders?: Record<string, string>;
   createdAt?: number;
   updatedAt?: number;
 }
+
+export type NeoEnvironment = CrmConnector;
 
 export interface UserInfo {
   userId?: string | number;
