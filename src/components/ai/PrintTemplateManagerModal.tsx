@@ -524,23 +524,36 @@ export const PrintTemplateManagerModal: React.FC<PrintTemplateManagerModalProps>
                     </div>
                   </div>
 
-                  {/* 明细子对象 (用于循环) */}
+                  {/* 明细子对象 (列表循环 · 严格包含起始与结束参数) */}
                   {fieldsData.childLinks?.length > 0 && (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                        <span>明细子对象 ({fieldsData.childLinks.length} 个 · 必须在物理表格行中使用)</span>
-                        <span className="text-[10px] text-purple-600 font-mono font-semibold">##={"{prt.子对象}"}</span>
+                        <span>明细子对象 ({fieldsData.childLinks.length} 个 · 必须在 Word 物理表格行中使用)</span>
+                        <span className="text-[10px] text-purple-700 font-mono font-semibold bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                          ##={"{"}begin:子对象_prt{"}"} ... ##={"{"}end{"}"}
+                        </span>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                         {fieldsData.childLinks.map((cl: any, idx: number) => (
-                          <div key={idx} className="p-2 rounded-xl border border-purple-200 bg-purple-50/40 flex items-center justify-between">
-                            <div>
-                              <span className="font-semibold text-purple-900">{cl.label}</span>
-                              <span className="text-[10px] text-slate-400 font-mono ml-1.5">({cl.apiKey})</span>
+                          <div key={idx} className="p-2.5 rounded-xl border border-purple-200/90 bg-purple-50/40 space-y-1.5 shadow-2xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-purple-900">{cl.label}</span>
+                              <span className="text-[10px] text-slate-400 font-mono">({cl.apiKey})</span>
                             </div>
-                            <code className="text-[10px] px-1.5 py-0.5 rounded bg-white text-purple-700 font-mono border border-purple-200 font-bold">
-                              {cl.loopSyntax}
-                            </code>
+                            <div className="flex flex-col space-y-1 font-mono text-[10px]">
+                              <div className="flex items-center justify-between bg-white px-2 py-0.5 rounded border border-purple-100">
+                                <span className="text-slate-500 font-sans">循环起始行:</span>
+                                <code className="text-purple-700 font-bold">{`##={begin:${cl.apiKey}_prt}`}</code>
+                              </div>
+                              <div className="flex items-center justify-between bg-white px-2 py-0.5 rounded border border-purple-100">
+                                <span className="text-slate-500 font-sans">字段循环行:</span>
+                                <code className="text-purple-700 font-bold">{`##={prt.字段API}`}</code>
+                              </div>
+                              <div className="flex items-center justify-between bg-white px-2 py-0.5 rounded border border-purple-100">
+                                <span className="text-slate-500 font-sans">循环结束行:</span>
+                                <code className="text-purple-700 font-bold">##={"{"}end{"}"}</code>
+                              </div>
+                            </div>
                           </div>
                         ))}
                       </div>

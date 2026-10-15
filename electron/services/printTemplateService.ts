@@ -301,12 +301,18 @@ export class PrintTemplateService {
       }));
 
       const rawLinks = linksRes?.data?.data?.objectList || [];
-      const childLinks = rawLinks.map((l: any) => ({
-        apiKey: l.apiKey || l.name,
-        label: l.label || l.apiKey,
-        objectId: Number(l.objectId || l.id),
-        loopSyntax: `##={prt.${l.apiKey || l.name}}`,
-      }));
+      const childLinks = rawLinks.map((l: any) => {
+        const cKey = l.apiKey || l.name;
+        return {
+          apiKey: cKey,
+          label: l.label || l.apiKey,
+          objectId: Number(l.objectId || l.id),
+          loopSyntax: `##={begin:${cKey}_prt} ... ##={prt.字段API} ... ##={end}`,
+          beginTag: `##={begin:${cKey}_prt}`,
+          fieldSyntax: `##={prt.字段API}`,
+          endTag: `##={end}`,
+        };
+      });
 
       const functionFields = [
         { name: '当前时间(默认格式)', syntax: '##={fun_now}', description: '输出系统当前打印时间' },
@@ -668,9 +674,64 @@ export class PrintTemplateService {
         })
       );
 
-      // 4. 二、明细子对象表格 (物理表格循环行)
-      if (params.detailTable && params.detailTable.columns?.length > 0) {
-        const childLabel = params.detailTable.childObjectLabel || '关联明细';
+      // 4. 二、明细子对象表格 (物理表格循环行 - 严格遵循起始 ##={begin:子对象_prt} 与结束 ##={end} 规范)
+      // 若未显式传入 detailTable，根据常见对象智能匹配默认明细子表
+      let effectiveDetailTable = params.detailTable;
+      if (!effectiveDetailTable || !effectiveDetailTable.columns || effectiveDetailTable.columns.length === 0) {
+        const entKey = params.entityApiKey.toLowerCase();
+        if (entKey === 'account' || entKey === '客户') {
+          effectiveDetailTable = {
+            childObjectApiKey: 'contact',
+            childObjectLabel: '客户联系人明细',
+            columns: [
+              { label: '联系人姓名', apiKey: 'contactName' },
+              { label: '职务', apiKey: 'title' },
+              { label: '移动电话', apiKey: 'mobile' },
+              { label: '电子邮箱', apiKey: 'email' },
+            ],
+          };
+        } else if (entKey === 'contract' || entKey === '合同') {
+          effectiveDetailTable = {
+            childObjectApiKey: 'orderProduct',
+            childObjectLabel: '合同产品与服务清单',
+            columns: [
+              { label: '产品名称', apiKey: 'productName' },
+              { label: '数量', apiKey: 'quantity' },
+              { label: '销售单价', apiKey: 'price' },
+              { label: '小计金额', apiKey: 'amount' },
+            ],
+          };
+        } else if (entKey === 'order' || entKey === '订单') {
+          effectiveDetailTable = {
+            childObjectApiKey: 'orderProduct',
+            childObjectLabel: '订单商品明细',
+            columns: [
+              { label: '商品名称', apiKey: 'productName' },
+              { label: '订购数量', apiKey: 'quantity' },
+              { label: '单价', apiKey: 'price' },
+              { label: '小计金额', apiKey: 'amount' },
+            ],
+          };
+        } else if (entKey.includes('maintenance') || entKey.includes('工单') || entKey === 'case') {
+          effectiveDetailTable = {
+            childObjectApiKey: 'caseComment',
+            childObjectLabel: '服务处理与流转明细',
+            columns: [
+              { label: '处理环节', apiKey: 'stepName' },
+              { label: '处理人员', apiKey: 'ownerId.name' },
+              { label: '处理时间', apiKey: 'createdAt' },
+              { label: '处理意见/说明', apiKey: 'comment' },
+            ],
+          };
+        }
+      }
+
+      if (effectiveDetailTable && effectiveDetailTable.columns && effectiveDetailTable.columns.length > 0) {
+        const childLabel = effectiveDetailTable.childObjectLabel || '关联明细';
+        const childKey = effectiveDetailTable.childObjectApiKey || 'items';
+        const cols = effectiveDetailTable.columns;
+        const colWidth = Math.floor(100 / cols.length);
+
         children.push(
           new Paragraph({
             spacing: { before: 300, after: 120 },
@@ -685,9 +746,51 @@ export class PrintTemplateService {
           })
         );
 
-        const cols = params.detailTable.columns;
-        const colWidth = Math.floor(100 / cols.length);
+        // 第 0 行：循环起始参数行 ##={begin:子对象_prt} (销售易列表打印必须包含的起始参数)
+        const startRow = new TableRow({
+          children: cols.map(() =>
+            new TableCell({
+              width: { size: colWidth, type: WidthType.PERCENTAGE },
+              shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: `##={begin:${childKey}_prt}`,
+                      size: 18,
+                      bold: true,
+                      color: '475569',
+                    }),
+                  ],
+                }),
+              ],
+            })
+          ),
+        });
 
+        // 第 1 行：表头重复控制开始 ##={fun_table notes:head=begin&repeat=Y}
+        const headStartRow = new TableRow({
+          children: cols.map(() =>
+            new TableCell({
+              width: { size: colWidth, type: WidthType.PERCENTAGE },
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: '##={fun_table notes:head=begin&repeat=Y}',
+                      size: 16,
+                      color: '94A3B8',
+                    }),
+                  ],
+                }),
+              ],
+            })
+          ),
+        });
+
+        // 第 2 行：表头中文列名
         const thRow = new TableRow({
           tableHeader: true,
           children: cols.map((col) =>
@@ -704,6 +807,28 @@ export class PrintTemplateService {
           ),
         });
 
+        // 第 3 行：表头重复控制结束 ##={fun_table notes:head=end}
+        const headEndRow = new TableRow({
+          children: cols.map(() =>
+            new TableCell({
+              width: { size: colWidth, type: WidthType.PERCENTAGE },
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: '##={fun_table notes:head=end}',
+                      size: 16,
+                      color: '94A3B8',
+                    }),
+                  ],
+                }),
+              ],
+            })
+          ),
+        });
+
+        // 第 4 行：数据循环行 ##={prt.字段API}
         const loopRow = new TableRow({
           children: cols.map((col) =>
             new TableCell({
@@ -713,9 +838,32 @@ export class PrintTemplateService {
                   alignment: AlignmentType.CENTER,
                   children: [
                     new TextRun({
-                      text: `##={prt.${params.detailTable!.childObjectApiKey}.${col.apiKey}}`,
+                      text: `##={prt.${col.apiKey}}`,
                       size: 20,
                       color: '0F172A',
+                    }),
+                  ],
+                }),
+              ],
+            })
+          ),
+        });
+
+        // 第 5 行：循环结束参数行 ##={end} (销售易列表打印必须包含的结束参数)
+        const endRow = new TableRow({
+          children: cols.map(() =>
+            new TableCell({
+              width: { size: colWidth, type: WidthType.PERCENTAGE },
+              shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: '##={end}',
+                      size: 18,
+                      bold: true,
+                      color: '475569',
                     }),
                   ],
                 }),
@@ -727,7 +875,7 @@ export class PrintTemplateService {
         children.push(
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
-            rows: [thRow, loopRow],
+            rows: [startRow, headStartRow, thRow, headEndRow, loopRow, endRow],
           })
         );
       }
