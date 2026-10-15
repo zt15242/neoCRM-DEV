@@ -70,6 +70,7 @@ interface AiHarnessStudioProps {
   activeProject?: WorkspaceProject;
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
+  onOpenLicenseModal?: () => void;
 }
 
 export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
@@ -88,6 +89,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   activeProject,
   onOpenFlowManager,
   onOpenPrintManager,
+  onOpenLicenseModal,
 }) => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
@@ -650,6 +652,32 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
               {currentPreset.name.split(" (")[0]}
             </span>
+
+            {/* 自动流程与审批流角色专属设备安全锁与剩余天数状态 (点击可查看或更换密码) */}
+            {isFlowEnginePreset(currentPreset.id) && (
+              <button
+                type="button"
+                onClick={() => onOpenLicenseModal ? onOpenLicenseModal() : setIsLicenseModalOpen(true)}
+                className={`text-[10px] px-2.5 py-0.5 rounded-full font-semibold border flex items-center space-x-1 transition-all cursor-pointer shrink-0 ${
+                  workflowLicenseStatus?.isAuthorized
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 shadow-2xs"
+                    : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 shadow-2xs"
+                }`}
+                title="点击查看设备机器码、有效天数或更换授权密码"
+              >
+                {workflowLicenseStatus?.isAuthorized ? (
+                  <>
+                    <Unlock className="w-2.5 h-2.5 text-emerald-600 mr-0.5 shrink-0" />
+                    <span>设备已绑定 · 剩余 {workflowLicenseStatus.remainingDays} 天</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-2.5 h-2.5 text-amber-600 mr-0.5 shrink-0" />
+                    <span>已上锁 · 点击输入密码</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           {/* 右侧动作控制区 (流程库、模板库、更多选项、分栏展开切换) */}
@@ -951,6 +979,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onOpenFlowManager={onOpenFlowManager}
               onOpenPrintManager={onOpenPrintManager}
               externalAttachmentToAdd={pendingComposerAttachment}
+              workflowLicenseStatus={workflowLicenseStatus}
+              onOpenLicenseModal={onOpenLicenseModal || (() => setIsLicenseModalOpen(true))}
             />
           </div>
         </div>

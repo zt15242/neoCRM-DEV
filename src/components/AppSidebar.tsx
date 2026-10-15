@@ -63,6 +63,7 @@ interface AppSidebarProps {
   selectedPresetId: string;
   onSelectPreset: (presetId: string) => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  onOpenLicenseModal?: () => void;
   projects?: WorkspaceProject[];
   activeProjectId?: string | null;
   onSelectProject?: (projectId: string) => void;
@@ -93,6 +94,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   selectedPresetId,
   onSelectPreset,
   workflowLicenseStatus,
+  onOpenLicenseModal,
   projects = [],
   activeProjectId,
   onSelectProject,
@@ -190,12 +192,17 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               {AI_AGENT_PRESETS.map((p: any) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isLocked = (p.id === 'autoflow-architect' || p.id === 'approval-architect') && !workflowLicenseStatus?.isAuthorized;
+                const isFlow = p.id === 'autoflow-architect' || p.id === 'approval-architect';
 
                 return (
                   <button
                     key={p.id}
                     onClick={() => {
+                      if (isFlow && !workflowLicenseStatus?.isAuthorized) {
+                        onOpenLicenseModal?.();
+                        setPresetDropdownOpen(false);
+                        return;
+                      }
                       onSelectPreset(p.id);
                       setPresetDropdownOpen(false);
                     }}
@@ -207,10 +214,44 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                       <Icon className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">{p.name.split(' (')[0]}</span>
                     </div>
-                    {isLocked ? (
-                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 font-mono">锁</span>
+                    {isFlow ? (
+                      workflowLicenseStatus?.isAuthorized ? (
+                        <span
+                          onClick={(e) => {
+                            if (onOpenLicenseModal) {
+                              e.stopPropagation();
+                              onOpenLicenseModal();
+                              setPresetDropdownOpen(false);
+                            }
+                          }}
+                          className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono shrink-0 flex items-center space-x-0.5 hover:bg-emerald-100 transition-colors"
+                          title="设备已绑定，点击查看有效天数或更换密码"
+                        >
+                          <Unlock className="w-2.5 h-2.5 text-emerald-600 mr-0.5" />
+                          <span>剩{workflowLicenseStatus.remainingDays}天</span>
+                        </span>
+                      ) : (
+                        <span
+                          onClick={(e) => {
+                            if (onOpenLicenseModal) {
+                              e.stopPropagation();
+                              onOpenLicenseModal();
+                              setPresetDropdownOpen(false);
+                            }
+                          }}
+                          className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-mono shrink-0 flex items-center space-x-0.5 hover:bg-amber-100 transition-colors"
+                          title="已上锁，点击输入设备绑定密码激活"
+                        >
+                          <Lock className="w-2.5 h-2.5 text-amber-600 mr-0.5" />
+                          <span>已上锁</span>
+                        </span>
+                      )
                     ) : (
-                      p.badge && <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">{p.badge}</span>
+                      p.badge && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
+                          {p.badge}
+                        </span>
+                      )
                     )}
                   </button>
                 );

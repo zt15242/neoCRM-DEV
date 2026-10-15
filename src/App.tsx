@@ -14,6 +14,7 @@ import { UpdateModal } from './components/UpdateModal';
 import { FlowManagerModal } from './components/ai/FlowManagerModal';
 import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
 import { CreateProjectModal } from './components/ai/CreateProjectModal';
+import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
 import { PluginManagerPage } from './components/plugins/PluginManagerPage';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
 import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
@@ -57,6 +58,7 @@ export const App: React.FC = () => {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
   const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
+  const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
   const [isFlowManagerOpen, setIsFlowManagerOpen] = useState(false);
   const [isPrintManagerOpen, setIsPrintManagerOpen] = useState(false);
 
@@ -459,6 +461,7 @@ export const App: React.FC = () => {
           setActiveTab('ai');
         }}
         workflowLicenseStatus={workflowLicenseStatus}
+        onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
         projects={projects}
         activeProjectId={activeProjectId}
         onSelectProject={setActiveProjectId}
@@ -607,6 +610,7 @@ export const App: React.FC = () => {
             selectedPresetId={selectedPresetId}
             onSelectPreset={setSelectedPresetId}
             workflowLicenseStatus={workflowLicenseStatus}
+            onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
             activeProject={projects.find((p) => p.id === activeProjectId) || projects[0]}
             onOpenFlowManager={() => setIsFlowManagerOpen(true)}
             onOpenPrintManager={() => setIsPrintManagerOpen(true)}
@@ -692,6 +696,19 @@ export const App: React.FC = () => {
         editingProject={editingProject}
         onClose={() => setIsCreateProjectOpen(false)}
         onSave={handleSaveProject}
+        showToast={showToast}
+      />
+
+      {/* 自动流程与审批流设备授权安全锁弹窗 (全局可打开查看或激活) */}
+      <WorkflowLicenseModal
+        isOpen={isLicenseModalOpen}
+        initialStatus={workflowLicenseStatus}
+        onClose={() => setIsLicenseModalOpen(false)}
+        onActivated={(newStatus) => {
+          setWorkflowLicenseStatus(newStatus);
+          setIsLicenseModalOpen(false);
+          showToast('success', `设备安全锁激活成功！剩余有效天数: ${newStatus.remainingDays} 天`);
+        }}
         showToast={showToast}
       />
 

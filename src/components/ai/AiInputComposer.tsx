@@ -26,7 +26,9 @@ import {
   Minimize2,
   HelpCircle,
   FolderOpen,
-  Code2
+  Code2,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { 
   AiContextEntityRef, 
@@ -35,7 +37,8 @@ import {
   McpServerConfig, 
   AiProviderConfig,
   WorkspaceProject,
-  EntityMetadata
+  EntityMetadata,
+  WorkflowLicenseStatus
 } from '../../../shared/types';
 
 interface SlashCommandItem {
@@ -60,6 +63,8 @@ interface ComposerContext {
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
   externalAttachmentToAdd?: AiFileAttachment | null;
+  workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  onOpenLicenseModal?: () => void;
 }
 
 interface AiInputComposerProps {
@@ -101,6 +106,8 @@ interface AiInputComposerProps {
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
   externalAttachmentToAdd?: AiFileAttachment | null;
+  workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  onOpenLicenseModal?: () => void;
 }
 
 export const AiInputComposer: React.FC<AiInputComposerProps> = ({
@@ -135,6 +142,8 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   onOpenFlowManager,
   onOpenPrintManager,
   externalAttachmentToAdd,
+  workflowLicenseStatus,
+  onOpenLicenseModal,
 }) => {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AiFileAttachment[]>([]);
@@ -935,6 +944,32 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-mono">
               {currentPresetName.split(' (')[0]}
             </span>
+          )}
+
+          {/* 自动流程与审批流角色设备锁状态胶囊 (直观可见剩余天数与锁状态) */}
+          {(currentPresetName?.includes('流程') || currentPresetName?.includes('审批')) && (
+            <button
+              type="button"
+              onClick={onOpenLicenseModal}
+              className={`hidden sm:inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-mono border cursor-pointer transition-colors ${
+                workflowLicenseStatus?.isAuthorized
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 shadow-2xs'
+                  : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 shadow-2xs'
+              }`}
+              title="点击查看设备机器码、有效天数或更换密码"
+            >
+              {workflowLicenseStatus?.isAuthorized ? (
+                <>
+                  <Unlock className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                  <span>剩{workflowLicenseStatus.remainingDays}天</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                  <span>已上锁</span>
+                </>
+              )}
+            </button>
           )}
         </div>
 
