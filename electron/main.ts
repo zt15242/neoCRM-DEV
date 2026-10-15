@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EnvService } from './services/envService';
@@ -14,6 +14,7 @@ import { FileService } from './services/fileService';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
 import { ProjectService } from './services/projectService';
+import { DshToolService } from './services/dshToolService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 
@@ -38,6 +39,7 @@ const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
 const projectService = new ProjectService();
+const dshToolService = new DshToolService();
 
 function createWindow() {
   win = new BrowserWindow({
@@ -615,3 +617,21 @@ ipcMain.handle("project:deleteProject", async (_, projectId: string) => projectS
 ipcMain.handle("project:openFolder", async (_, folderPath: string) => projectService.openFolder(folderPath));
 ipcMain.handle("project:listFiles", async (_, params) => projectService.listFiles(params));
 ipcMain.handle("file:parseLocalPath", async (_, filePath: string) => fileService.parseLocalFile(filePath));
+ipcMain.handle("clipboard:writeText", async (_, text: string) => {
+  clipboard.writeText(text);
+  return true;
+});
+ipcMain.handle("shell:openPath", async (_, targetPath: string) => shell.openPath(targetPath));
+ipcMain.handle("shell:showItemInFolder", async (_, targetPath: string) => {
+  shell.showItemInFolder(targetPath);
+  return true;
+});
+ipcMain.handle("project:getDirTree", async (_, folderPath?: string, maxDepth?: number) => {
+  return projectService.getDirTree(folderPath, maxDepth);
+});
+ipcMain.handle("project:getRecentArtifacts", async (_, folderPath?: string, limit?: number) => {
+  return projectService.getRecentArtifacts(folderPath, limit);
+});
+ipcMain.handle("terminal:execute", async (_, params: { command: string; workdir?: string; timeoutMs?: number }) => {
+  return dshToolService.executeBash(params);
+});

@@ -64,6 +64,12 @@ declare global {
         size: number;
       }>>;
       fileParseLocalPath: (filePath: string) => Promise<AiFileAttachment>;
+      clipboardWriteText: (text: string) => Promise<boolean>;
+      shellOpenPath: (targetPath: string) => Promise<string>;
+      shellShowItemInFolder: (targetPath: string) => Promise<boolean>;
+      projectGetDirTree: (folderPath?: string, maxDepth?: number) => Promise<ProjectDirNode[]>;
+      projectGetRecentArtifacts: (folderPath?: string, limit?: number) => Promise<WorkspaceArtifactItem[]>;
+      terminalExecute: (params: { command: string; workdir?: string; timeoutMs?: number }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
       testApiCall: () => Promise<{ success: boolean; data?: any; error?: string }>;
       openExternal: (url: string) => Promise<void>;
       openDesigner: (type: 'web' | 'h5') => Promise<void>;

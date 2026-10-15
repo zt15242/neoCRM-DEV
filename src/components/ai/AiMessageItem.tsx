@@ -33,8 +33,34 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
   const [copied, setCopied] = useState(false);
   const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(message.content);
+  const handleCopy = async () => {
+    let ok = false;
+    try {
+      if (window.neoApi?.clipboardWriteText) {
+        await window.neoApi.clipboardWriteText(message.content);
+        ok = true;
+      }
+    } catch {}
+    if (!ok && navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(message.content);
+        ok = true;
+      } catch {}
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = message.content;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        ok = true;
+      } catch {}
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -148,7 +174,7 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
         )}
 
         {/* 正文 Markdown 渲染 */}
-        <div className="bg-white rounded-2xl rounded-tl-xs border border-slate-200/80 p-4 shadow-2xs">
+        <div className="bg-white rounded-2xl rounded-tl-xs border border-slate-200/80 p-4 shadow-2xs select-text">
           {message.content ? (
             <>
               <MarkdownRenderer

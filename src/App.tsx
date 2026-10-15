@@ -427,7 +427,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-row bg-white text-slate-900 overflow-hidden font-sans select-none">
+    <div className="h-screen w-screen flex flex-row bg-white text-slate-900 overflow-hidden font-sans">
       {/* 全局 Codex 经典左侧项目树与功能导航栏 (彻底替代原顶部横条) */}
       <AppSidebar
         platform={platform}

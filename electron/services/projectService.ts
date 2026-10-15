@@ -145,6 +145,110 @@ export class ProjectService {
     return results;
   }
 
+  public getDirTree(folderPath?: string, maxDepth = 4): Array<{
+    name: string;
+    path: string;
+    relativePath: string;
+    type: 'directory' | 'file';
+    ext?: string;
+    size?: number;
+    children?: any[];
+  }> {
+    const baseDir = folderPath && fs.existsSync(folderPath) ? folderPath : process.cwd();
+    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
+
+    const scan = (dir: string, depth: number): any[] => {
+      if (depth > maxDepth) return [];
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        entries.sort((a, b) => {
+          if (a.isDirectory() && !b.isDirectory()) return -1;
+          if (!a.isDirectory() && b.isDirectory()) return 1;
+          return a.name.localeCompare(b.name, 'en', { numeric: true });
+        });
+
+        const items: any[] = [];
+        for (const entry of entries) {
+          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          const rel = path.relative(baseDir, full);
+
+          if (entry.isDirectory()) {
+            items.push({
+              name: entry.name,
+              path: full,
+              relativePath: rel,
+              type: 'directory',
+              children: scan(full, depth + 1),
+            });
+          } else if (entry.isFile()) {
+            let size = 0;
+            try { size = fs.statSync(full).size; } catch {}
+            items.push({
+              name: entry.name,
+              path: full,
+              relativePath: rel,
+              type: 'file',
+              ext: path.extname(entry.name).toLowerCase(),
+              size,
+            });
+          }
+        }
+        return items;
+      } catch {
+        return [];
+      }
+    };
+
+    return scan(baseDir, 1);
+  }
+
+  public getRecentArtifacts(folderPath?: string, limit = 30): Array<{
+    name: string;
+    relativePath: string;
+    fullPath: string;
+    ext: string;
+    size: number;
+    mtime: number;
+  }> {
+    const baseDir = folderPath && fs.existsSync(folderPath) ? folderPath : process.cwd();
+    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
+    const list: Array<{ name: string; relativePath: string; fullPath: string; ext: string; size: number; mtime: number }> = [];
+
+    const walk = (dir: string, depth = 0) => {
+      if (depth > 5) return;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          const rel = path.relative(baseDir, full);
+
+          if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase();
+            try {
+              const stat = fs.statSync(full);
+              list.push({
+                name: entry.name,
+                relativePath: rel,
+                fullPath: full,
+                ext,
+                size: stat.size,
+                mtime: stat.mtimeMs,
+              });
+            } catch {}
+          } else if (entry.isDirectory()) {
+            walk(full, depth + 1);
+          }
+        }
+      } catch {}
+    };
+
+    walk(baseDir);
+    list.sort((a, b) => b.mtime - a.mtime);
+    return list.slice(0, limit);
+  }
+
   public async openFolder(folderPath: string): Promise<string> {
     if (fs.existsSync(folderPath)) {
       return shell.openPath(folderPath);

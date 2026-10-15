@@ -91,6 +91,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 }) => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
+  const [pendingComposerAttachment, setPendingComposerAttachment] = useState<AiFileAttachment | null>(null);
+  const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
   const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
@@ -944,17 +946,33 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onSelectPreset={setSelectedPresetId}
               onOpenFlowManager={onOpenFlowManager}
               onOpenPrintManager={onOpenPrintManager}
+              externalAttachmentToAdd={pendingComposerAttachment}
             />
           </div>
         </div>
       </div>
 
-      {/* 右侧 Codex 风格实时执行终端与调用日志分栏 */}
+      {/* 右侧 Codex 风格项目文件树、上传/产物与交互终端分栏 */}
       <CodexTerminalPanel
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}
+        activeProject={activeProject}
+        activeSessionAttachments={activeSession?.messages?.flatMap((m) => m.attachments || []) || []}
         toolCalls={activeToolCalls}
-        projectName={activeProject?.name || crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "neoCRM-DEV"}
+        activeExecutedSql={activeExecutedSql}
+        onExecuteSql={(sql) => handleSendMessage(`请执行并分析以下 XOQL 查询结果：\n\`\`\`sql\n${sql}\n\`\`\``)}
+        onAttachFileToComposer={async (file) => {
+          try {
+            if (window.neoApi?.fileParseLocalPath) {
+              const parsed = await window.neoApi.fileParseLocalPath(file.fullPath);
+              setPendingComposerAttachment(parsed);
+              showToast("success", `已挂载文件 [${file.name}] 至对话输入框`);
+            }
+          } catch (e: any) {
+            showToast("error", `读取文件失败: ${e.message}`);
+          }
+        }}
+        showToast={showToast}
       />
 
       {/* 引用业务对象弹窗 */}

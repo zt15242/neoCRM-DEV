@@ -59,6 +59,7 @@ interface ComposerContext {
   onSelectPreset?: (presetId: string) => void;
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
+  externalAttachmentToAdd?: AiFileAttachment | null;
 }
 
 interface AiInputComposerProps {
@@ -99,6 +100,7 @@ interface AiInputComposerProps {
   onSelectPreset?: (presetId: string) => void;
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
+  externalAttachmentToAdd?: AiFileAttachment | null;
 }
 
 export const AiInputComposer: React.FC<AiInputComposerProps> = ({
@@ -132,6 +134,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   onSelectPreset,
   onOpenFlowManager,
   onOpenPrintManager,
+  externalAttachmentToAdd,
 }) => {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AiFileAttachment[]>([]);
@@ -191,6 +194,18 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       }
     }
   }, [mentionMenuOpen, mentionQuery, activeProject?.localPath]);
+
+  // 2b. 外部拖入或侧边栏点击挂载附件
+  useEffect(() => {
+    if (externalAttachmentToAdd) {
+      setAttachments((prev) => {
+        if (prev.some((a) => a.id === externalAttachmentToAdd.id || a.name === externalAttachmentToAdd.name)) {
+          return prev;
+        }
+        return [...prev, externalAttachmentToAdd];
+      });
+    }
+  }, [externalAttachmentToAdd]);
 
   // 3. 高度自适应
   useEffect(() => {

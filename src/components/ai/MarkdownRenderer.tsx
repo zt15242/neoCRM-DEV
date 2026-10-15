@@ -18,8 +18,34 @@ interface MarkdownRendererProps {
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (copyText: string, id: string) => {
+    let ok = false;
+    try {
+      if (window.neoApi?.clipboardWriteText) {
+        await window.neoApi.clipboardWriteText(copyText);
+        ok = true;
+      }
+    } catch {}
+    if (!ok && navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(copyText);
+        ok = true;
+      } catch {}
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = copyText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        ok = true;
+      } catch {}
+    }
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -72,7 +98,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onE
   }
 
   return (
-    <div className="space-y-3 text-slate-800 text-[13px] leading-relaxed break-words">
+    <div className="space-y-3 text-slate-800 text-[13px] leading-relaxed break-words select-text">
       {parts.map((part, index) => {
         if (part.type === 'code') {
           const codeId = `code_${index}`;

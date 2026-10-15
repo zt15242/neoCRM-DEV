@@ -708,3 +708,22 @@ export interface WorkspaceProject {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface ProjectDirNode {
+  name: string;
+  path: string;
+  relativePath: string;
+  type: 'directory' | 'file';
+  ext?: string;
+  size?: number;
+  children?: ProjectDirNode[];
+}
+
+export interface WorkspaceArtifactItem {
+  name: string;
+  relativePath: string;
+  fullPath: string;
+  ext: string;
+  size: number;
+  mtime: number;
+}
