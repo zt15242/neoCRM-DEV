@@ -21,9 +21,51 @@ export const STANDARD_ENTITY_NAME_FIELD_MAP: Record<string, string> = {
   stage: 'stageName',
 };
 
+import { AuthService } from './authService';
+
 export class DataService {
   private fxiaokeService = new FxiaokeService();
   private salesforceService = new SalesforceService();
+  private tokenRefreshCallback?: (env: NeoEnvironment, newToken: TokenData) => void;
+
+  constructor(private authService?: AuthService) {}
+
+  public setTokenRefreshCallback(cb: (env: NeoEnvironment, newToken: TokenData) => void) {
+    this.tokenRefreshCallback = cb;
+    this.salesforceService.setTokenRefreshCallback(cb);
+  }
+
+  /**
+   * 自动 401 拦截与静默续期重试守护器
+   */
+  private async withAutoRetry<T>(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    fn: (currToken: TokenData) => Promise<T>
+  ): Promise<T> {
+    try {
+      return await fn(tokenData);
+    } catch (err: any) {
+      const is401 =
+        err.response?.status === 401 ||
+        err.message?.includes('401') ||
+        err.message?.includes('INVALID_SESSION_ID') ||
+        err.message?.includes('Session expired') ||
+        err.message?.includes('expired access/refresh token');
+
+      if (is401 && this.authService) {
+        console.warn(`[DataService] 检测到 [${env.name}] 会话失效 (401)，正在自动执行静默续期...`);
+        try {
+          const newToken = await this.authService.renewToken(env, tokenData);
+          this.tokenRefreshCallback?.(env, newToken);
+          return await fn(newToken);
+        } catch (renewErr: any) {
+          throw new Error(`当前环境 [${env.name}] 认证会话已过期，请在连接器详情页重新点击登录 (${renewErr.message})`);
+        }
+      }
+      throw err;
+    }
+  }
   // 内存缓存: key 为 `${entityApiKey}_${id}` -> name
   private nameCache = new Map<string, string>();
   private busiTypeCache = new Map<string, Array<{ id: string | number; apiKey: string; label: string; active?: boolean; custom?: boolean }>>();
@@ -396,6 +438,16 @@ export class DataService {
     tokenData: TokenData,
     rawSql: string
   ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
+    return await this.withAutoRetry(env, tokenData, async (currentToken) => {
+      return await this.doExecuteQuery(env, currentToken, rawSql);
+    });
+  }
+
+  private async doExecuteQuery(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    rawSql: string
+  ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
     if (env.productType === 'fxiaoke') {
       try {
         const data = await this.fxiaokeService.queryData(env, tokenData, { sql: rawSql });
@@ -514,6 +566,11 @@ export class DataService {
       return { success: false, error: rejectReason };
     }
 
+    // Salesforce 和 纷享销客直接走原生单次/分页执行即可
+    if (env.productType === 'salesforce' || env.productType === 'fxiaoke') {
+      return this.executeQuery(env, tokenData, rawSql);
+    }
+
     // 如果是聚合查询 (GROUP BY 或 COUNT/SUM/AVG/MAX/MIN)，直接走单次 XOQL 查询即可返回完整统计结果
     if (
       /\bGROUP\s+BY\b/i.test(checkedSql) ||
@@ -630,6 +687,22 @@ export class DataService {
     entityApiKey: string,
     id: string | number
   ): Promise<{ success: boolean; data?: Record<string, any>; error?: string }> {
+    if (env.productType === 'salesforce') {
+      try {
+        const data = await this.salesforceService.getRecordDetail(env, tokenData, entityApiKey, id);
+        return { success: true, data };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+    if (env.productType === 'fxiaoke') {
+      try {
+        const data = await this.fxiaokeService.getRecordDetail(env, tokenData, entityApiKey, id);
+        return { success: true, data };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
     const url = `${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}/${id}`;
@@ -1054,6 +1127,22 @@ export class DataService {
     entityApiKey: string,
     id: string | number
   ): Promise<{ success: boolean; error?: string }> {
+    if (env.productType === 'salesforce') {
+      try {
+        const res = await this.salesforceService.deleteRecord(env, tokenData, entityApiKey, id);
+        return { success: res.success };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+    if (env.productType === 'fxiaoke') {
+      try {
+        const res = await this.fxiaokeService.deleteRecord(env, tokenData, entityApiKey, id);
+        return { success: res.success };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
     const url = `${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}/${id}`;

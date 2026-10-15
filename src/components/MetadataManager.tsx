@@ -16,12 +16,17 @@ import { CreateEntityModal } from './CreateEntityModal';
 import { CreateFieldModal } from './CreateFieldModal';
 import { BatchFieldImportModal } from './BatchFieldImportModal';
 
+import { SessionState } from '../../shared/types';
+import { Cloud, Flame, Layers } from 'lucide-react';
+
 interface MetadataManagerProps {
+  session?: SessionState;
   onNavigateToData: (entityApiKey: string) => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
 export const MetadataManager: React.FC<MetadataManagerProps> = ({
+  session,
   onNavigateToData,
   showToast,
 }) => {
@@ -69,8 +74,9 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
   };
 
   useEffect(() => {
+    setSelectedEntity(null);
     loadEntities();
-  }, []);
+  }, [session?.activeAccountId, session?.environment?.id]);
 
   useEffect(() => {
     if (selectedEntity) {
@@ -115,13 +121,31 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
       {/* 顶部操作工具栏 */}
       <div className="h-13 px-5 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2">
-            <Box className="w-5 h-5 text-sky-600" />
-            <h2 className="text-sm font-semibold text-slate-900">对象与元数据中心 (Metadata Studio)</h2>
-          </div>
-          <span className="text-xs text-slate-500 font-mono">
-            已同步 {entities.length} 个对象
-          </span>
+          {session?.environment?.productType === 'salesforce' ? (
+            <div className="flex items-center space-x-2">
+              <Cloud className="w-5 h-5 text-cyan-600" />
+              <h2 className="text-sm font-semibold text-slate-900">Salesforce SObjects 与元数据中心</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 font-mono font-medium">
+                Salesforce · {entities.length} 个 SObjects
+              </span>
+            </div>
+          ) : session?.environment?.productType === 'fxiaoke' ? (
+            <div className="flex items-center space-x-2">
+              <Flame className="w-5 h-5 text-orange-600" />
+              <h2 className="text-sm font-semibold text-slate-900">纷享销客 业务对象中心</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 font-mono font-medium">
+                纷享销客 · {entities.length} 个业务对象
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-2">
+              <Layers className="w-5 h-5 text-sky-600" />
+              <h2 className="text-sm font-semibold text-slate-900">销售易 NeoCRM 实体元数据中心</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-mono font-medium">
+                NeoCRM · {entities.length} 个实体
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center space-x-2">
@@ -145,7 +169,17 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
           </button>
 
           <button
-            onClick={() => setIsCreateEntityOpen(true)}
+            onClick={() => {
+              if (session?.environment?.productType === 'salesforce') {
+                showToast('info', 'Salesforce 自定义对象与字段请在 Salesforce 设置【对象管理器 (Object Manager)】中创建');
+                return;
+              }
+              if (session?.environment?.productType === 'fxiaoke') {
+                showToast('info', '纷享销客自定义对象请在纷享管理后台【业务对象管理】中创建');
+                return;
+              }
+              setIsCreateEntityOpen(true);
+            }}
             className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all"
           >
             <Plus className="w-3.5 h-3.5" />

@@ -31,10 +31,24 @@ const envService = new EnvService();
 const sessionStore = new SessionStore();
 const authService = new AuthService();
 const apiService = new ApiService();
-const metadataService = new MetadataService();
-const dataService = new DataService();
+const metadataService = new MetadataService(authService);
+const dataService = new DataService(authService);
 const updateService = new UpdateService();
 const imageService = new ImageService();
+
+// 当底层服务检测到 Token 失效 (401) 并通过本地 CLI 或端点自动完成静默换新时，统一自动持久化并通知前端
+const handleTokenRefresh = (env: any, newToken: any) => {
+  try {
+    const saved = sessionStore.saveSession(env, newToken);
+    win?.webContents.send('session:updated', saved);
+    console.log(`[${env.name || 'CRM'}] Access Token 已在底层自动续期并同步更新会话`);
+  } catch (err: any) {
+    console.warn('持久化新 Token 异常:', err.message);
+  }
+};
+metadataService.setTokenRefreshCallback(handleTokenRefresh);
+dataService.setTokenRefreshCallback(handleTokenRefresh);
+
 const aiService = new AiService(sessionStore, metadataService, dataService);
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);

@@ -34,6 +34,15 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
   showToast,
 }) => {
   const getEntityPrimaryNameCol = (apiKey: string) => {
+    // 纷享销客
+    if (apiKey.endsWith('Obj')) {
+      return 'name';
+    }
+    // Salesforce
+    if (apiKey.includes('__c') || /^[A-Z]/.test(apiKey)) {
+      return 'Name';
+    }
+    // 销售易
     const map: Record<string, string> = {
       account: "accountName",
       contact: "contactName",
@@ -76,6 +85,17 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
 
   const getRecommendedSql = (apiKey: string, type: "default" | "latest" | "all" = "default") => {
     const nameCol = getEntityPrimaryNameCol(apiKey);
+    // 1. 纷享销客 SQL 推荐范式
+    if (apiKey.endsWith('Obj')) {
+      if (type === "all") return `SELECT _id, ${nameCol} FROM ${apiKey}`;
+      return `SELECT _id, ${nameCol} FROM ${apiKey} LIMIT 50 OFFSET 0`;
+    }
+    // 2. Salesforce SOQL 推荐范式
+    if (/^[A-Z]/.test(apiKey) || apiKey.includes('__c')) {
+      if (type === "all") return `SELECT Id, ${nameCol} FROM ${apiKey}`;
+      return `SELECT Id, ${nameCol}, CreatedDate FROM ${apiKey} ORDER BY CreatedDate DESC LIMIT 50`;
+    }
+    // 3. 销售易 XOQL 推荐范式
     if (type === "latest") {
       return `SELECT id, ${nameCol}, createdAt FROM ${apiKey} ORDER BY createdAt DESC LIMIT 50`;
     }

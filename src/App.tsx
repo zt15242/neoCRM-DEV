@@ -605,6 +605,7 @@ export const App: React.FC = () => {
         {activeTab === 'metadata' && (
           session.isLoggedIn ? (
             <MetadataManager
+              session={session}
               onNavigateToData={handleNavigateToData}
               showToast={showToast}
             />
@@ -628,6 +629,7 @@ export const App: React.FC = () => {
         {activeTab === 'data' && (
           session.isLoggedIn ? (
             <DataManager
+              session={session}
               initialEntityApiKey={dataTargetEntity}
               showToast={showToast}
             />

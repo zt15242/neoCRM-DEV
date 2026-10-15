@@ -66,7 +66,8 @@ export const DataViewer: React.FC<DataViewerProps> = ({
       return { entity: selectedEntityApiKey, id: paramIdMatch[1], isId: true };
     }
 
-    if (/^\d{8,20}$/.test(text)) {
+    // 支持三套系统的 ID 识别：销售易纯数字 ID (13位时间戳ID)、Salesforce 15/18 位复合 ID、纷享销客 24 位 Hex ID
+    if (/^\d{8,20}$/.test(text) || /^[a-zA-Z0-9]{15}$/.test(text) || /^[a-zA-Z0-9]{18}$/.test(text) || /^[a-f0-9]{24}$/i.test(text)) {
       return { entity: selectedEntityApiKey, id: text, isId: true };
     }
 

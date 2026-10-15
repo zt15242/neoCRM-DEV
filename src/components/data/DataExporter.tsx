@@ -41,35 +41,42 @@ export const DataExporter: React.FC<DataExporterProps> = ({
     return () => cleanup?.();
   }, []);
 
+  // 动态解析主键字段名 (Salesforce: Id, 纷享销客: _id, 销售易: id)
+  const getPrimaryKeyName = (fieldList: FieldMetadata[]) => {
+    const found = fieldList.find((f) => f.apiKey === 'Id' || f.apiKey === '_id' || f.apiKey === 'id');
+    return found ? found.apiKey : 'id';
+  };
+
   const loadFields = async (apiKey: string) => {
     setLoadingFields(true);
     try {
       const rawList = await window.neoApi.getFields(apiKey);
-      // 确保数据主键 id 始终排在第一位，且名称清晰展示为“数据ID”
-      const existingIdField = rawList.find((f) => f.apiKey === 'id');
+      const pkName = getPrimaryKeyName(rawList);
+
+      const existingIdField = rawList.find((f) => f.apiKey === pkName);
       const idField: FieldMetadata = existingIdField
         ? { ...existingIdField, label: existingIdField.label || '数据ID' }
         : {
-            apiKey: 'id',
+            apiKey: pkName,
             label: '数据ID',
             itemType: 19,
-            typeName: '长整数',
+            typeName: '主键ID',
             custom: false,
           };
 
-      const otherFields = rawList.filter((f) => f.apiKey !== 'id');
+      const otherFields = rawList.filter((f) => f.apiKey !== pkName);
       const normalizedList = [idField, ...otherFields];
 
       setFields(normalizedList);
-      // 默认勾选 id + 前 15 个核心业务字段
-      const defaultSelected = ['id', ...otherFields.slice(0, 15).map((f) => f.apiKey)];
+      // 默认勾选主键 ID + 前 15 个核心业务字段
+      const defaultSelected = [pkName, ...otherFields.slice(0, 15).map((f) => f.apiKey)];
       setSelectedFieldKeys(defaultSelected);
     } catch {
       const fallbackId: FieldMetadata = {
         apiKey: 'id',
         label: '数据ID',
         itemType: 19,
-        typeName: '长整数',
+        typeName: '主键ID',
         custom: false,
       };
       setFields([fallbackId]);
@@ -94,13 +101,13 @@ export const DataExporter: React.FC<DataExporterProps> = ({
   });
 
   const handleToggleAll = () => {
+    const pkName = getPrimaryKeyName(fields);
     if (selectedFieldKeys.length === fields.length) {
-      // 取消全选时仍默认保留主键数据 ID
-      setSelectedFieldKeys(['id']);
+      setSelectedFieldKeys([pkName]);
     } else {
       setSelectedFieldKeys([
-        'id',
-        ...fields.filter((f) => f.apiKey !== 'id').map((f) => f.apiKey),
+        pkName,
+        ...fields.filter((f) => f.apiKey !== pkName).map((f) => f.apiKey),
       ]);
     }
   };
@@ -119,27 +126,30 @@ export const DataExporter: React.FC<DataExporterProps> = ({
   };
 
   const handleResetDefault = () => {
-    const otherFields = fields.filter((f) => f.apiKey !== 'id');
-    setSelectedFieldKeys(['id', ...otherFields.slice(0, 15).map((f) => f.apiKey)]);
+    const pkName = getPrimaryKeyName(fields);
+    const otherFields = fields.filter((f) => f.apiKey !== pkName);
+    setSelectedFieldKeys([pkName, ...otherFields.slice(0, 15).map((f) => f.apiKey)]);
   };
 
   const handleToggleField = (key: string) => {
-    if (key === 'id') {
-      showToast('info', '数据 ID (id) 为导出默认必选主键列');
+    const pkName = getPrimaryKeyName(fields);
+    if (key === pkName) {
+      showToast('info', `数据主键 (${pkName}) 为导出默认必选列`);
       return;
     }
     if (selectedFieldKeys.includes(key)) {
       setSelectedFieldKeys(selectedFieldKeys.filter((k) => k !== key));
     } else {
-      setSelectedFieldKeys(['id', ...selectedFieldKeys.filter((k) => k !== 'id'), key]);
+      setSelectedFieldKeys([pkName, ...selectedFieldKeys.filter((k) => k !== pkName), key]);
     }
   };
 
   const handleExport = async () => {
     // 强制保证 id (数据ID) 排在导出字段的第一列
+    const pkName = getPrimaryKeyName(fields);
     const exportFieldKeys = [
-      'id',
-      ...selectedFieldKeys.filter((k) => k !== 'id'),
+      pkName,
+      ...selectedFieldKeys.filter((k) => k !== pkName),
     ];
 
     setIsExporting(true);
@@ -154,7 +164,10 @@ export const DataExporter: React.FC<DataExporterProps> = ({
         const maxRecords = limit === 0 ? 50000 : limit;
         res = await window.neoApi.executeScrollQuery(sql, 1000, maxRecords);
       } else {
-        const sql = `SELECT ${fieldsStr} FROM ${selectedEntityApiKey} ${whereClause ? whereClause : 'WHERE id > 0'} LIMIT ${limit}`;
+        const isSfOrFx = /^[A-Z]/.test(selectedEntityApiKey) || selectedEntityApiKey.endsWith('Obj');
+        const fallbackWhere = isSfOrFx ? '' : 'WHERE id > 0';
+        const finalWhere = whereClause || (fallbackWhere ? ` ${fallbackWhere}` : '');
+        const sql = `SELECT ${fieldsStr} FROM ${selectedEntityApiKey}${finalWhere} LIMIT ${limit}`;
         res = await window.neoApi.executeQuery(sql);
       }
 

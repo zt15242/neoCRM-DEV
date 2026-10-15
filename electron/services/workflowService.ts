@@ -67,6 +67,54 @@ export class WorkflowService {
     allFlowsSummary?: Array<{ name: string; objectName: string; entityApiKey: string; status: string; procType: number }>;
     error?: string 
   }> {
+    if (env.productType === 'salesforce') {
+      try {
+        const soql = "SELECT Id, ApiName, Label, ProcessType, Description, IsActive FROM FlowDefinitionView LIMIT 200";
+        const qRes = await this.dataService.executeQuery(env, tokenData, soql);
+        const flows: TenantFlowItem[] = (qRes.data?.records || []).map((r: any) => ({
+          procdefId: r.Id,
+          name: r.Label || r.ApiName,
+          entityApiKey: r.ProcessType || 'Global',
+          objectName: r.ProcessType || 'Salesforce Flow',
+          status: r.IsActive ? 1 : 0,
+          statusName: r.IsActive ? '已激活' : '未激活',
+          version: 1,
+          procType: 1,
+          flowType: r.ProcessType,
+          description: r.Description || '',
+          actKey: r.ApiName,
+        }));
+        let filtered = flows;
+        if (params?.keyword) {
+          const kw = params.keyword.toLowerCase();
+          filtered = filtered.filter((f) => 
+            f.name.toLowerCase().includes(kw) || 
+            (f.actKey && f.actKey.toLowerCase().includes(kw)) ||
+            (f.description && f.description.toLowerCase().includes(kw))
+          );
+        }
+        return {
+          success: true,
+          data: filtered,
+          total: filtered.length,
+          totalInTenant: flows.length,
+          matchedKeyword: params?.keyword,
+        };
+      } catch (sfErr: any) {
+        return { success: false, error: sfErr.message };
+      }
+    }
+
+    if (env.productType === 'fxiaoke') {
+      return {
+        success: true,
+        data: [],
+        total: 0,
+        totalInTenant: 0,
+        matchedKeyword: params?.keyword,
+      };
+    }
+
     const baseUrl = this.resolveBaseUrl(env, tokenData);
     const headers = this.buildAdminHeaders(baseUrl, tokenData);
     const targetProcTypes = params?.procType ? [params.procType] : [1, 2];

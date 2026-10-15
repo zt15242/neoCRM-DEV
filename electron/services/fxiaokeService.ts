@@ -281,4 +281,179 @@ export class FxiaokeService {
       fields,
     };
   }
+
+  /**
+   * 4. 获取纷享销客单个记录详情 (POST /cgi/crm/v2/data/get)
+   */
+  public async getRecordDetail(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectApiName: string,
+    recordId: string | number
+  ): Promise<Record<string, any>> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const token = tokenData.access_token;
+    const openCorpId = String(tokenData.userInfo?.userId || tokenData.tenant_id || '');
+    const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
+
+    let targetObj = objectApiName.trim();
+    if (!targetObj.endsWith('Obj') && !targetObj.endsWith('__c')) {
+      targetObj = `${targetObj.charAt(0).toUpperCase()}${targetObj.slice(1)}Obj`;
+    }
+
+    const url = `${baseUrl}/cgi/crm/v2/data/get?thirdTraceId=${randomUUID()}`;
+    const payload = {
+      corpAccessToken: token,
+      corpId: openCorpId,
+      currentOpenUserId,
+      data: {
+        dataObjectApiName: targetObj,
+        dataId: String(recordId),
+      },
+    };
+
+    const res = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (res.data?.errorCode !== 0 && res.data?.errorCode !== '0') {
+      throw new Error(`获取纷享销客记录失败: ${res.data?.errorMessage || JSON.stringify(res.data)}`);
+    }
+
+    return res.data?.data?.data || {};
+  }
+
+  /**
+   * 5. 按关键字搜索纷享销客记录
+   */
+  public async searchRecords(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectApiName: string,
+    keyword: string,
+    limit = 20
+  ): Promise<Array<{ id: string | number; name: string }>> {
+    const res = await this.queryData(env, tokenData, {
+      objectApiName,
+      limit,
+    });
+    return (res.records || []).map((r: any) => ({
+      id: r._id || r.id,
+      name: r.name || r._id,
+    }));
+  }
+
+  /**
+   * 6. 创建纷享销客数据记录 (POST /cgi/crm/v2/data/create)
+   */
+  public async createRecord(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectApiName: string,
+    recordData: Record<string, any>
+  ): Promise<{ dataId: string; success: boolean }> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const token = tokenData.access_token;
+    const openCorpId = String(tokenData.userInfo?.userId || tokenData.tenant_id || '');
+    const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
+
+    let targetObj = objectApiName.trim();
+    if (!targetObj.endsWith('Obj') && !targetObj.endsWith('__c')) {
+      targetObj = `${targetObj.charAt(0).toUpperCase()}${targetObj.slice(1)}Obj`;
+    }
+
+    const url = `${baseUrl}/cgi/crm/v2/data/create?thirdTraceId=${randomUUID()}`;
+    const payload = {
+      corpAccessToken: token,
+      corpId: openCorpId,
+      currentOpenUserId,
+      data: {
+        dataObjectApiName: targetObj,
+        data: recordData,
+      },
+    };
+
+    const res = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (res.data?.errorCode !== 0 && res.data?.errorCode !== '0') {
+      throw new Error(`创建纷享销客记录失败: ${res.data?.errorMessage || JSON.stringify(res.data)}`);
+    }
+
+    return { dataId: res.data?.data?.dataId, success: true };
+  }
+
+  /**
+   * 7. 更新纷享销客数据记录 (POST /cgi/crm/v2/data/update)
+   */
+  public async updateRecord(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectApiName: string,
+    recordId: string | number,
+    recordData: Record<string, any>
+  ): Promise<{ success: boolean }> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const token = tokenData.access_token;
+    const openCorpId = String(tokenData.userInfo?.userId || tokenData.tenant_id || '');
+    const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
+
+    let targetObj = objectApiName.trim();
+    if (!targetObj.endsWith('Obj') && !targetObj.endsWith('__c')) {
+      targetObj = `${targetObj.charAt(0).toUpperCase()}${targetObj.slice(1)}Obj`;
+    }
+
+    const url = `${baseUrl}/cgi/crm/v2/data/update?thirdTraceId=${randomUUID()}`;
+    const payload = {
+      corpAccessToken: token,
+      corpId: openCorpId,
+      currentOpenUserId,
+      data: {
+        dataObjectApiName: targetObj,
+        dataId: String(recordId),
+        data: recordData,
+      },
+    };
+
+    const res = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (res.data?.errorCode !== 0 && res.data?.errorCode !== '0') {
+      throw new Error(`更新纷享销客记录失败: ${res.data?.errorMessage || JSON.stringify(res.data)}`);
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * 8. 删除纷享销客数据记录 (POST /cgi/crm/v2/data/delete)
+   */
+  public async deleteRecord(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectApiName: string,
+    recordId: string | number
+  ): Promise<{ success: boolean }> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const token = tokenData.access_token;
+    const openCorpId = String(tokenData.userInfo?.userId || tokenData.tenant_id || '');
+    const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
+
+    let targetObj = objectApiName.trim();
+    if (!targetObj.endsWith('Obj') && !targetObj.endsWith('__c')) {
+      targetObj = `${targetObj.charAt(0).toUpperCase()}${targetObj.slice(1)}Obj`;
+    }
+
+    const url = `${baseUrl}/cgi/crm/v2/data/delete?thirdTraceId=${randomUUID()}`;
+    const payload = {
+      corpAccessToken: token,
+      corpId: openCorpId,
+      currentOpenUserId,
+      data: {
+        dataObjectApiName: targetObj,
+        dataId: String(recordId),
+      },
+    };
+
+    const res = await axios.post(url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (res.data?.errorCode !== 0 && res.data?.errorCode !== '0') {
+      throw new Error(`删除纷享销客记录失败: ${res.data?.errorMessage || JSON.stringify(res.data)}`);
+    }
+
+    return { success: true };
+  }
+
 }

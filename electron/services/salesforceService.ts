@@ -1,29 +1,128 @@
-import axios from 'axios';
+import axios, { AxiosRequestConfig } from 'axios';
+import { execSync } from 'node:child_process';
 import { NeoEnvironment, TokenData, EntityMetadata, FieldMetadata, QueryResultData } from '../../shared/types';
 
 export class SalesforceService {
+  private tokenRefreshCallback?: (env: NeoEnvironment, newToken: TokenData) => void;
+
+  public setTokenRefreshCallback(cb: (env: NeoEnvironment, newToken: TokenData) => void) {
+    this.tokenRefreshCallback = cb;
+  }
+
   private getBaseUrl(env: NeoEnvironment, tokenData: TokenData): string {
     const raw = tokenData.instance_uri || env.neoBaseURL || 'https://login.salesforce.com';
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
   }
 
-  private getHeaders(tokenData: TokenData) {
-    return {
+  /**
+   * 自动探测并从本地 Salesforce CLI (sf) 或端点获取最新有效的 Access Token
+   */
+  private getLatestTokenFromCli(): string | null {
+    try {
+      const stdout = execSync('sf org auth show-access-token -o aliNewStageFull --json', {
+        encoding: 'utf-8',
+        timeout: 8000,
+      });
+      const data = JSON.parse(stdout);
+      return data.result?.accessToken || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 核心请求包装器：具备 401 自动无感重试与 Token 静默换新机制
+   * 彻底避免因会话过期将 401 错误直接抛出给大模型或前端页面
+   */
+  private async requestWithAuth<T = any>(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    config: AxiosRequestConfig
+  ): Promise<T> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const fullUrl = config.url?.startsWith('http') ? config.url : `${baseUrl}${config.url}`;
+
+    const headers = {
       Authorization: `Bearer ${tokenData.access_token}`,
       'Content-Type': 'application/json',
+      ...(config.headers || {}),
     };
+
+    try {
+      const res = await axios({
+        ...config,
+        url: fullUrl,
+        headers,
+        timeout: config.timeout || 20000,
+      });
+      return res.data;
+    } catch (err: any) {
+      const is401 = err.response?.status === 401 || err.response?.data?.[0]?.errorCode === 'INVALID_SESSION_ID';
+
+      if (is401) {
+        console.warn('[Salesforce] 检测到 Access Token 失效 (401)，正在启动自动无感静默续期与重试...');
+
+        // 1. 优先尝试从本地 sf CLI 提取最新已被 CLI 自动刷新的 token
+        let newAccessToken = this.getLatestTokenFromCli();
+
+        // 2. 若 CLI 提取不到，尝试向 tokenURL 发送 refresh_token 请求
+        if (!newAccessToken && tokenData.refresh_token && env.clientId) {
+          try {
+            const tokenUrl = `${baseUrl}/services/oauth2/token`;
+            const params = new URLSearchParams();
+            params.append('grant_type', 'refresh_token');
+            params.append('client_id', env.clientId);
+            if (env.clientSecret) params.append('client_secret', env.clientSecret);
+            params.append('refresh_token', tokenData.refresh_token);
+
+            const refreshRes = await axios.post(tokenUrl, params.toString(), {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 10000,
+            });
+            if (refreshRes.data?.access_token) {
+              newAccessToken = refreshRes.data.access_token;
+            }
+          } catch (rErr: any) {
+            console.warn('[Salesforce] API 刷新失败:', rErr.message);
+          }
+        }
+
+        // 3. 拿到有效新 Token 后，立即更新内存与本地持久化，并执行自动无感重试
+        if (newAccessToken && newAccessToken !== tokenData.access_token) {
+          tokenData.access_token = newAccessToken;
+          tokenData.savedAt = Date.now();
+          tokenData.expiresAt = Date.now() + (tokenData.expires_in || 7200) * 1000;
+          this.tokenRefreshCallback?.(env, tokenData);
+
+          console.log('[Salesforce] Access Token 续期成功，正在自动重发刚刚失败的 API 请求...');
+          const retryRes = await axios({
+            ...config,
+            url: fullUrl,
+            headers: {
+              ...headers,
+              Authorization: `Bearer ${newAccessToken}`,
+            },
+            timeout: config.timeout || 20000,
+          });
+          return retryRes.data;
+        }
+      }
+
+      // 非 401 或重试后依然失败时抛出友好错误
+      const apiMsg = err.response?.data?.[0]?.message || err.response?.data?.message || err.message;
+      throw new Error(apiMsg || `Salesforce 请求失败 (HTTP ${err.response?.status || '网络异常'})`);
+    }
   }
 
   /**
    * 1. 拉取 Salesforce 所有 SObject 列表 (GET /services/data/v59.0/sobjects/)
    */
   public async fetchObjectList(env: NeoEnvironment, tokenData: TokenData): Promise<EntityMetadata[]> {
-    const baseUrl = this.getBaseUrl(env, tokenData);
-    const headers = this.getHeaders(tokenData);
-    const url = `${baseUrl}/services/data/v59.0/sobjects/`;
-
-    const res = await axios.get(url, { headers, timeout: 15000 });
-    const sobjects = res.data?.sobjects || [];
+    const data = await this.requestWithAuth(env, tokenData, {
+      method: 'GET',
+      url: '/services/data/v59.0/sobjects/',
+    });
+    const sobjects = data?.sobjects || [];
 
     return sobjects
       .filter((s: any) => s.queryable && !s.deprecatedAndHidden)
@@ -50,12 +149,11 @@ export class SalesforceService {
     tokenData: TokenData,
     sObjectName: string
   ): Promise<FieldMetadata[]> {
-    const baseUrl = this.getBaseUrl(env, tokenData);
-    const headers = this.getHeaders(tokenData);
-    const url = `${baseUrl}/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/describe`;
-
-    const res = await axios.get(url, { headers, timeout: 15000 });
-    const fields = res.data?.fields || [];
+    const data = await this.requestWithAuth(env, tokenData, {
+      method: 'GET',
+      url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/describe`,
+    });
+    const fields = data?.fields || [];
 
     return fields.map((f: any) => {
       const typeStr = String(f.type || 'string').toLowerCase();
@@ -96,15 +194,17 @@ export class SalesforceService {
   public async executeQuery(
     env: NeoEnvironment,
     tokenData: TokenData,
-    soql: string
+    rawSoql: string
   ): Promise<QueryResultData> {
-    const baseUrl = this.getBaseUrl(env, tokenData);
-    const headers = this.getHeaders(tokenData);
-    const url = `${baseUrl}/services/data/v59.0/query/?q=${encodeURIComponent(soql)}`;
+    const cleanSoql = rawSoql.replace(/^```(?:soql|sql)?\s*/i, '').replace(/\s*```$/i, '').trim().replace(/;+$/, '');
+    const data = await this.requestWithAuth(env, tokenData, {
+      method: 'GET',
+      url: `/services/data/v59.0/query/?q=${encodeURIComponent(cleanSoql)}`,
+      timeout: 25000,
+    });
 
-    const res = await axios.get(url, { headers, timeout: 20000 });
-    const records = res.data?.records || [];
-    const totalSize = Number(res.data?.totalSize || records.length);
+    const records = data?.records || [];
+    const totalSize = Number(data?.totalSize || records.length);
     const fields = records.length > 0 ? Object.keys(records[0]).filter((k) => k !== 'attributes') : ['Id', 'Name'];
 
     return {
@@ -112,5 +212,100 @@ export class SalesforceService {
       totalSize,
       fields,
     };
+  }
+
+  /**
+   * 4. 查看单个记录详情 (GET /services/data/v59.0/sobjects/{sObjectName}/{id})
+   */
+  public async getRecordDetail(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    sObjectName: string,
+    recordId: string | number
+  ): Promise<Record<string, any>> {
+    return await this.requestWithAuth(env, tokenData, {
+      method: 'GET',
+      url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/${encodeURIComponent(String(recordId))}`,
+    });
+  }
+
+  /**
+   * 5. 按关键字搜索记录 (通过 SOQL 模糊查询)
+   */
+  public async searchRecords(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    sObjectName: string,
+    keyword: string,
+    limit = 20
+  ): Promise<Array<{ id: string | number; name: string }>> {
+    try {
+      // 优先探测主名称字段，一般为 Name 或 Title/Subject
+      const soql = `SELECT Id, Name FROM ${sObjectName} WHERE Name LIKE '%${keyword.replace(/'/g, "\\'")}%' LIMIT ${limit}`;
+      const res = await this.executeQuery(env, tokenData, soql);
+      return (res.records || []).map((r: any) => ({
+        id: r.Id,
+        name: r.Name || r.Id,
+      }));
+    } catch {
+      // 兜底查询
+      const soql = `SELECT Id FROM ${sObjectName} LIMIT ${limit}`;
+      const res = await this.executeQuery(env, tokenData, soql);
+      return (res.records || []).map((r: any) => ({
+        id: r.Id,
+        name: r.Id,
+      }));
+    }
+  }
+
+  /**
+   * 6. 创建记录 (POST /services/data/v59.0/sobjects/{sObjectName})
+   */
+  public async createRecord(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    sObjectName: string,
+    recordData: Record<string, any>
+  ): Promise<{ id: string; success: boolean }> {
+    const data = await this.requestWithAuth(env, tokenData, {
+      method: 'POST',
+      url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}`,
+      data: recordData,
+    });
+    return { id: data.id, success: Boolean(data.success) };
+  }
+
+  /**
+   * 7. 更新记录 (PATCH /services/data/v59.0/sobjects/{sObjectName}/{id})
+   */
+  public async updateRecord(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    sObjectName: string,
+    recordId: string | number,
+    recordData: Record<string, any>
+  ): Promise<{ success: boolean }> {
+    await this.requestWithAuth(env, tokenData, {
+      method: 'PATCH',
+      url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/${encodeURIComponent(String(recordId))}`,
+      data: recordData,
+    });
+    return { success: true };
+  }
+
+  /**
+   * 8. 删除记录 (DELETE /services/data/v59.0/sobjects/{sObjectName}/{id})
+   */
+  public async deleteRecord(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    sObjectName: string,
+    recordId: string | number
+  ): Promise<{ success: boolean }> {
+    await this.requestWithAuth(env, tokenData, {
+      method: 'DELETE',
+      url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/${encodeURIComponent(String(recordId))}`,
+    });
+    return { success: true };
   }
 }

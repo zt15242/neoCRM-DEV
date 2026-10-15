@@ -6,7 +6,8 @@ import {
   FileDown,
   Terminal
 } from 'lucide-react';
-import { EntityMetadata } from '../../shared/types';
+import { EntityMetadata, SessionState } from '../../shared/types';
+import { Cloud, Flame, Layers } from 'lucide-react';
 import { DataViewer } from './data/DataViewer';
 import { DataEditor } from './data/DataEditor';
 import { DataExporter } from './data/DataExporter';
@@ -15,11 +16,13 @@ import { SqlQueryExplorer } from './data/SqlQueryExplorer';
 export type DataSubTab = 'viewer' | 'editor' | 'sql' | 'exporter';
 
 interface DataManagerProps {
+  session?: SessionState;
   initialEntityApiKey?: string;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
 export const DataManager: React.FC<DataManagerProps> = ({
+  session,
   initialEntityApiKey,
   showToast,
 }) => {
@@ -37,11 +40,11 @@ export const DataManager: React.FC<DataManagerProps> = ({
       if (initialEntityApiKey) {
         setActiveEntityApiKey(initialEntityApiKey);
       } else if (list.length > 0) {
-        const def = list.find((e) => e.apiKey === 'account') || list[0];
+        const def = list.find((e) => e.apiKey.toLowerCase() === 'account' || e.apiKey.toLowerCase() === 'accountobj') || list[0];
         setActiveEntityApiKey(def.apiKey);
       }
     }).catch(() => {});
-  }, [initialEntityApiKey]);
+  }, [initialEntityApiKey, session?.activeAccountId, session?.environment?.id]);
 
   const handleNavigateToEdit = (entityKey: string, recordId: string | number, recordData: Record<string, any>) => {
     setActiveEntityApiKey(entityKey);
@@ -61,13 +64,31 @@ export const DataManager: React.FC<DataManagerProps> = ({
       {/* 顶部子导航栏 (白色风格) */}
       <div className="h-14 px-5 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2">
-            <Database className="w-5 h-5 text-sky-600" />
-            <h2 className="text-sm font-semibold text-slate-900">数据中心与全功能工作台</h2>
-          </div>
-          <span className="text-[11px] text-slate-500 hidden lg:inline">
-            精准钻取 • 关联穿透 • Lookup 录入 • SQL 检索 • 批量导出
-          </span>
+          {session?.environment?.productType === 'salesforce' ? (
+            <div className="flex items-center space-x-2">
+              <Cloud className="w-5 h-5 text-cyan-600" />
+              <h2 className="text-sm font-semibold text-slate-900">Salesforce 数据中心 (SOQL / 数据管理)</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 font-mono font-medium">
+                Salesforce · {entities.length} 个对象
+              </span>
+            </div>
+          ) : session?.environment?.productType === 'fxiaoke' ? (
+            <div className="flex items-center space-x-2">
+              <Flame className="w-5 h-5 text-orange-600" />
+              <h2 className="text-sm font-semibold text-slate-900">纷享销客 数据中心 (OpenAPI v2 / SQL)</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 font-mono font-medium">
+                纷享销客 · {entities.length} 个对象
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-2">
+              <Layers className="w-5 h-5 text-sky-600" />
+              <h2 className="text-sm font-semibold text-slate-900">销售易 NeoCRM 数据中心 (XOQL / 数据管理)</h2>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-mono font-medium">
+                NeoCRM · {entities.length} 个对象
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 4 大核心功能子模块切换 */}
@@ -109,7 +130,7 @@ export const DataManager: React.FC<DataManagerProps> = ({
             }`}
           >
             <Terminal className="w-3.5 h-3.5" />
-            <span>SQL 查询</span>
+            <span>{session?.environment?.productType === 'salesforce' ? 'SOQL 检索' : 'SQL 查询'}</span>
           </button>
 
           <button

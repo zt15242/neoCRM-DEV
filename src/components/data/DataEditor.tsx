@@ -104,8 +104,16 @@ export const DataEditor: React.FC<DataEditorProps> = ({
     if (f.itemType === 27) return '汇总统计';
     // 自动计算: 28
     if (f.itemType === 28) return '系统计算';
-    // 系统只读字段
-    if (['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'deleteFlag', 'version'].includes(f.apiKey)) {
+    // 系统只读字段 (全面适配 NeoCRM, Salesforce 与 纷享销客)
+    if ([
+      'id', 'Id', '_id',
+      'createdAt', 'CreatedDate', 'create_time',
+      'updatedAt', 'LastModifiedDate', 'modify_time',
+      'createdBy', 'CreatedById',
+      'updatedBy', 'LastModifiedById',
+      'deleteFlag', 'IsDeleted', 'is_deleted',
+      'version', 'SystemModstamp', 'attributes'
+    ].includes(f.apiKey)) {
       return '系统属性';
     }
     return null;
@@ -253,7 +261,15 @@ export const DataEditor: React.FC<DataEditorProps> = ({
     Object.entries(payload).forEach(([key, val]) => {
       // 过滤接口返回的展示用衍生字段
       if (key.includes("-") || key.endsWith("_compound") || key.endsWith("_data")) return;
-      if (["id", "createdAt", "updatedAt", "createdBy", "updatedBy", "deleteFlag", "deleteFlg", "tenantId", "groupId", "innerGroupId", "version"].includes(key)) return;
+      if ([
+        "id", "Id", "_id", "attributes",
+        "createdAt", "CreatedDate", "create_time",
+        "updatedAt", "LastModifiedDate", "modify_time",
+        "createdBy", "CreatedById",
+        "updatedBy", "LastModifiedById",
+        "deleteFlag", "deleteFlg", "IsDeleted", "is_deleted",
+        "tenantId", "groupId", "innerGroupId", "version", "SystemModstamp"
+      ].includes(key)) return;
 
       const f = validFieldMap.get(key);
       if (f && getReadOnlyReason(f)) return;

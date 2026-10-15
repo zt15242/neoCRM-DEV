@@ -15,9 +15,51 @@ import { FxiaokeService } from './fxiaokeService';
 import { SalesforceService } from './salesforceService';
 export { ITEM_TYPE_MAP };
 
+import { AuthService } from './authService';
+
 export class MetadataService {
   private fxiaokeService = new FxiaokeService();
   private salesforceService = new SalesforceService();
+  private tokenRefreshCallback?: (env: NeoEnvironment, newToken: TokenData) => void;
+
+  constructor(private authService?: AuthService) {}
+
+  public setTokenRefreshCallback(cb: (env: NeoEnvironment, newToken: TokenData) => void) {
+    this.tokenRefreshCallback = cb;
+    this.salesforceService.setTokenRefreshCallback(cb);
+  }
+
+  /**
+   * 自动 401 拦截与静默续期重试守护器
+   */
+  private async withAutoRetry<T>(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    fn: (currToken: TokenData) => Promise<T>
+  ): Promise<T> {
+    try {
+      return await fn(tokenData);
+    } catch (err: any) {
+      const is401 =
+        err.response?.status === 401 ||
+        err.message?.includes('401') ||
+        err.message?.includes('INVALID_SESSION_ID') ||
+        err.message?.includes('Session expired') ||
+        err.message?.includes('expired access/refresh token');
+
+      if (is401 && this.authService) {
+        console.warn(`[MetadataService] 检测到 [${env.name}] 会话失效 (401)，正在自动执行静默续期...`);
+        try {
+          const newToken = await this.authService.renewToken(env, tokenData);
+          this.tokenRefreshCallback?.(env, newToken);
+          return await fn(newToken);
+        } catch (renewErr: any) {
+          throw new Error(`当前环境 [${env.name}] 认证会话已过期，请在连接器详情页重新点击登录 (${renewErr.message})`);
+        }
+      }
+      throw err;
+    }
+  }
   private getBaseUrl(env: NeoEnvironment, tokenData: TokenData): string {
     const raw = tokenData.instance_uri || env.neoBaseURL;
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
@@ -298,13 +340,19 @@ export class MetadataService {
       const standard = entities.filter((e) => e.isStandard);
       const custom = entities.filter((e) => !e.isStandard);
 
+      const isSf = baseUrl?.includes('salesforce') || baseUrl?.includes('sfcrmproducts');
+      const isFx = baseUrl?.includes('fxiaoke');
+      const title = isSf ? '# Salesforce SObjects 字典清单' : isFx ? '# 纷享销客 业务对象字典清单' : '# NeoCRM 实体字典 (AllxObjects)';
+      const tenantLabel = isSf ? '组织' : isFx ? '企业' : '租户';
+      const objUnit = isSf ? '个 SObject' : '个业务对象';
+
       const lines = [
-        '# NeoCRM 实体字典 (AllxObjects)',
+        title,
         '',
-        `* 租户: ${tenantName || '未命名'} (${tenantId || ''})`,
+        `* ${tenantLabel}: ${tenantName || '未命名'} (${tenantId || ''})`,
         `* 实例地址: ${baseUrl || ''}`,
         `* 同步时间: ${new Date().toLocaleString()}`,
-        `* 总计: ${entities.length} 个对象（${standard.length} 个标准对象 + ${custom.length} 个自定义对象）`,
+        `* 总计: ${entities.length} ${objUnit}（${standard.length} 个标准对象 + ${custom.length} 个自定义对象）`,
         '',
         '## 实体列表',
         '',
