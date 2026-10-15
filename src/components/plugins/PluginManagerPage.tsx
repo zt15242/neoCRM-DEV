@@ -32,7 +32,8 @@ interface PluginManagerPageProps {
   onToggleMcpServer: (id: string) => void;
   onSaveMcpServer: (server: McpServerConfig) => void;
   onDeleteMcpServer: (id: string) => void;
-  onBackToAi: () => void;
+  onBackToAi?: () => void;
+  hideHeader?: boolean;
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
@@ -43,6 +44,7 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
   onSaveMcpServer,
   onDeleteMcpServer,
   onBackToAi,
+  hideHeader = false,
   showToast,
 }) => {
   const [activeTab, setActiveTab] = useState<'installed' | 'market' | 'skills'>('installed');
@@ -237,7 +239,8 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
   return (
     <div className="flex flex-col flex-1 h-full w-full bg-slate-50/50 overflow-hidden font-sans select-none">
       {/* 1. 顶部 Header (Codex / DSH 标准导航与操作栏) */}
-      <div className="h-14 px-6 border-b border-slate-200/80 bg-white flex items-center justify-between shrink-0 shadow-2xs">
+      {!hideHeader && (
+        <div className="h-14 px-6 border-b border-slate-200/80 bg-white flex items-center justify-between shrink-0 shadow-2xs">
         <div className="flex items-center space-x-3">
           <button
             onClick={onBackToAi}
@@ -273,6 +276,7 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
           </button>
         </div>
       </div>
+      )}
 
       {/* 2. 中部标签页与搜索条 */}
       <div className="px-6 py-3 border-b border-slate-200/60 bg-white flex items-center justify-between gap-4 shrink-0">
@@ -311,15 +315,26 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
           </button>
         </div>
 
-        <div className="relative w-72">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索插件名称、描述或工具..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-purple-400 focus:bg-white"
-          />
+        <div className="flex items-center space-x-2">
+          <div className="relative w-64">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索插件名称、描述或工具..."
+              className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-purple-400 focus:bg-white"
+            />
+          </div>
+          {hideHeader && (
+            <button
+              onClick={() => setIsInstallModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center space-x-1 shadow-xs cursor-pointer shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>添加插件</span>
+            </button>
+          )}
         </div>
       </div>
 

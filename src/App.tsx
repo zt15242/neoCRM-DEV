@@ -6,7 +6,7 @@ import { SessionDashboard } from './components/SessionDashboard';
 import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
 import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
-import { SettingsManager } from './components/settings/SettingsManager';
+import { SettingsManager, SettingsSubTab } from './components/settings/SettingsManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
@@ -15,7 +15,6 @@ import { FlowManagerModal } from './components/ai/FlowManagerModal';
 import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
 import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
-import { PluginManagerPage } from './components/plugins/PluginManagerPage';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
 import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
 import { ShieldAlert, LogIn, Minus, Square, X } from 'lucide-react';
@@ -61,6 +60,15 @@ export const App: React.FC = () => {
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
   const [isFlowManagerOpen, setIsFlowManagerOpen] = useState(false);
   const [isPrintManagerOpen, setIsPrintManagerOpen] = useState(false);
+
+  // 系统与 AI 设置弹窗状态 (整体以弹窗展示)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsSubTab>('models');
+
+  const handleOpenSettings = (tab: SettingsSubTab = 'models') => {
+    setSettingsInitialTab(tab);
+    setIsSettingsOpen(true);
+  };
 
   // 本地工程工作区项目列表与活动项目
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
@@ -462,6 +470,7 @@ export const App: React.FC = () => {
         }}
         workflowLicenseStatus={workflowLicenseStatus}
         onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
+        onOpenSettings={() => handleOpenSettings('models')}
         projects={projects}
         activeProjectId={activeProjectId}
         onSelectProject={setActiveProjectId}
@@ -614,34 +623,14 @@ export const App: React.FC = () => {
             activeProject={projects.find((p) => p.id === activeProjectId) || projects[0]}
             onOpenFlowManager={() => setIsFlowManagerOpen(true)}
             onOpenPrintManager={() => setIsPrintManagerOpen(true)}
-            onNavigateToSettings={() => setActiveTab('settings')}
+            onNavigateToSettings={(tab) => handleOpenSettings((tab as SettingsSubTab) || 'models')}
             onNavigateToMetadata={() => setActiveTab('metadata')}
             onNavigateToData={() => setActiveTab('data')}
             showToast={showToast}
           />
         )}
 
-        {/* Tab 5: 系统与 AI 设置中心 */}
-        {activeTab === 'settings' && (
-          <SettingsManager
-            onBackToAi={() => setActiveTab('ai')}
-            onCheckUpdate={() => handleCheckUpdate(true)}
-            showToast={showToast}
-          />
-        )}
 
-        {/* Tab 6: DeepSeek Harness 插件与扩展中心 */}
-        {activeTab === 'plugins' && (
-          <PluginManagerPage
-            mcpServers={mcpServers}
-            skills={skills}
-            onToggleMcpServer={handleToggleMcpServer}
-            onSaveMcpServer={handleSaveMcpServer}
-            onDeleteMcpServer={handleDeleteMcpServer}
-            onBackToAi={() => setActiveTab('ai')}
-            showToast={showToast}
-          />
-        )}
       </main>
 
       {/* 自定义环境创建/编辑弹窗 */}
@@ -709,6 +698,15 @@ export const App: React.FC = () => {
           setIsLicenseModalOpen(false);
           showToast('success', `设备安全锁激活成功！剩余有效天数: ${newStatus.remainingDays} 天`);
         }}
+        showToast={showToast}
+      />
+
+      {/* 系统与 AI 设置中心弹窗 (含模型供应商、DeepSeek Harness 插件中心、技能库与偏好) */}
+      <SettingsManager
+        isOpen={isSettingsOpen}
+        initialTab={settingsInitialTab}
+        onClose={() => setIsSettingsOpen(false)}
+        onCheckUpdate={() => handleCheckUpdate(true)}
         showToast={showToast}
       />
 

@@ -16,35 +16,47 @@ import { McpSettings } from './McpSettings';
 import { SkillSettings } from './SkillSettings';
 import { AgentHarnessSettings } from './AgentHarnessSettings';
 import { GeneralSettings } from './GeneralSettings';
+import { PluginManagerPage } from '../plugins/PluginManagerPage';
 import { 
   Cpu, 
   Sparkles, 
   Sliders, 
   Settings as SettingsIcon,
-  ArrowLeft,
   Plug,
-  Lightbulb
+  Lightbulb,
+  X
 } from 'lucide-react';
 
-export type SettingsSubTab = 'models' | 'mcp' | 'skills' | 'agent' | 'general';
+export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general';
 
 interface SettingsManagerProps {
-  onBackToAi?: () => void;
+  isOpen: boolean;
+  initialTab?: SettingsSubTab;
+  onClose: () => void;
   onCheckUpdate: () => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
 export const SettingsManager: React.FC<SettingsManagerProps> = ({
-  onBackToAi,
+  isOpen,
+  initialTab = 'models',
+  onClose,
   onCheckUpdate,
   showToast,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>('models');
+  const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>(initialTab);
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(BUILTIN_MCP_SERVERS);
   const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
   const [loading, setLoading] = useState(true);
+
+  // 当外部切换打开时，对齐初始 Tab
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveSubTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   const loadConfig = async () => {
     setLoading(true);
@@ -64,8 +76,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   };
 
   useEffect(() => {
-    loadConfig();
-  }, []);
+    if (isOpen) {
+      loadConfig();
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
 
   const handleSaveProvider = async (provider: AiProviderConfig) => {
     const list = await window.neoApi.aiSaveProvider(provider);
@@ -98,10 +114,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   };
 
   const handleDeleteMcpServer = async (id: string) => {
-    if (!window.confirm('确定要删除该 MCP 服务吗？')) return;
+    if (!window.confirm('确定要删除该 MCP 插件扩展吗？')) return;
     const list = await window.neoApi.aiDeleteMcpServer(id);
     setMcpServers(list);
-    showToast('info', '已删除 MCP 服务');
+    showToast('info', '已删除插件扩展');
   };
 
   const handleSaveSkill = async (skill: AiSkillItem) => {
@@ -126,143 +142,183 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   };
 
   return (
-    <div className="bg-white overflow-hidden flex flex-1 h-full w-full">
-      {/* 左侧设置导航菜单 */}
-      <div className="w-64 bg-slate-50/50 border-r border-slate-200 p-4 flex flex-col justify-between shrink-0 select-none">
-        <div className="space-y-4">
-          <div className="flex items-center space-x-2.5 px-2">
-            <div className="p-2 rounded-xl bg-sky-600 text-white shadow-xs">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150 select-none">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/90 w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden">
+        {/* 顶部标题栏 */}
+        <div className="px-6 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 rounded-xl bg-slate-800 text-white shadow-xs">
               <SettingsIcon className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-800">系统与 AI 设置</h2>
-              <p className="text-[11px] text-slate-400">Settings Studio</p>
+              <h3 className="text-sm font-bold text-slate-800">系统与 AI 设置 (Settings Studio)</h3>
+              <p className="text-[11px] text-slate-400">配置模型 API 供应商、DeepSeek Harness 插件中心、技能库与系统偏好</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 cursor-pointer transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* 主体两栏布局: 左侧设置导航菜单，右侧设置内容 */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* 左侧设置导航菜单 */}
+          <div className="w-60 bg-slate-50/50 border-r border-slate-100 p-3 flex flex-col justify-between shrink-0">
+            <div className="space-y-1">
+              <button
+                onClick={() => setActiveSubTab('models')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
+                  activeSubTab === 'models'
+                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+                }`}
+              >
+                <Cpu className="w-4 h-4 shrink-0" />
+                <span>模型与供应商 (Models)</span>
+              </button>
+
+              <button
+                onClick={() => setActiveSubTab('plugins')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                  activeSubTab === 'plugins'
+                    ? 'bg-white text-purple-700 shadow-2xs border border-purple-200/80 font-bold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+                }`}
+              >
+                <div className="flex items-center space-x-2.5 truncate">
+                  <Plug className="w-4 h-4 shrink-0 text-purple-600" />
+                  <span className="truncate">插件与扩展中心</span>
+                </div>
+                <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-mono font-semibold border border-purple-200 shrink-0">
+                  DSH
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveSubTab('skills')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
+                  activeSubTab === 'skills'
+                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+                }`}
+              >
+                <Lightbulb className="w-4 h-4 shrink-0" />
+                <span>Skill 技能库 (Skills)</span>
+              </button>
+
+              <button
+                onClick={() => setActiveSubTab('agent')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
+                  activeSubTab === 'agent'
+                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+                }`}
+              >
+                <Sparkles className="w-4 h-4 shrink-0" />
+                <span>智能体与对话引擎</span>
+              </button>
+
+              <button
+                onClick={() => setActiveSubTab('general')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
+                  activeSubTab === 'general'
+                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
+                }`}
+              >
+                <Sliders className="w-4 h-4 shrink-0" />
+                <span>通用与工作台偏好</span>
+              </button>
+            </div>
+
+            {/* 底部信息 */}
+            <div className="pt-2 border-t border-slate-200/60 px-2 text-[10px] text-slate-400 font-mono">
+              NeoCRM Desktop v1.4.0
             </div>
           </div>
 
-          <div className="space-y-1">
-            <button
-              onClick={() => setActiveSubTab('models')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                activeSubTab === 'models'
-                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-              }`}
-            >
-              <Cpu className="w-4 h-4 shrink-0" />
-              <span>模型与供应商 (Models)</span>
-            </button>
+          {/* 右侧设置内容详情面板 */}
+          <div className="flex-1 overflow-y-auto bg-white flex flex-col">
+            {activeSubTab === 'models' && (
+              <div className="p-6 max-w-4xl">
+                <ModelProviderSettings
+                  providers={providers}
+                  onSaveProvider={handleSaveProvider}
+                  onDeleteProvider={handleDeleteProvider}
+                  showToast={showToast}
+                />
+              </div>
+            )}
 
-            <button
-              onClick={() => setActiveSubTab('mcp')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                activeSubTab === 'mcp'
-                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-              }`}
-            >
-              <Plug className="w-4 h-4 shrink-0" />
-              <span>MCP 扩展服务 (MCP)</span>
-            </button>
+            {activeSubTab === 'plugins' && (
+              <PluginManagerPage
+                mcpServers={mcpServers}
+                skills={skills}
+                onToggleMcpServer={async (id) => {
+                  const target = mcpServers.find((m) => m.id === id);
+                  if (!target) return;
+                  const updated = { ...target, enabled: !target.enabled };
+                  await handleSaveMcpServer(updated);
+                }}
+                onSaveMcpServer={handleSaveMcpServer}
+                onDeleteMcpServer={handleDeleteMcpServer}
+                hideHeader={true}
+                showToast={showToast}
+              />
+            )}
 
-            <button
-              onClick={() => setActiveSubTab('skills')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                activeSubTab === 'skills'
-                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-              }`}
-            >
-              <Lightbulb className="w-4 h-4 shrink-0" />
-              <span>Skill 技能库 (Skills)</span>
-            </button>
+            {activeSubTab === 'skills' && (
+              <div className="p-6 max-w-4xl">
+                <SkillSettings
+                  skills={skills}
+                  onSaveSkill={handleSaveSkill}
+                  onDeleteSkill={handleDeleteSkill}
+                  onSkillsChange={setSkills}
+                  showToast={showToast}
+                />
+              </div>
+            )}
 
-            <button
-              onClick={() => setActiveSubTab('agent')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                activeSubTab === 'agent'
-                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-              }`}
-            >
-              <Sparkles className="w-4 h-4 shrink-0" />
-              <span>智能体与对话引擎</span>
-            </button>
+            {activeSubTab === 'agent' && (
+              <div className="p-6 max-w-4xl">
+                <AgentHarnessSettings
+                  settings={settings}
+                  providers={providers}
+                  onSaveSettings={handleSaveSettings}
+                  showToast={showToast}
+                />
+              </div>
+            )}
 
-            <button
-              onClick={() => setActiveSubTab('general')}
-              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                activeSubTab === 'general'
-                  ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-              }`}
-            >
-              <Sliders className="w-4 h-4 shrink-0" />
-              <span>通用与工作台偏好</span>
-            </button>
+            {activeSubTab === 'general' && (
+              <div className="p-6 max-w-4xl">
+                <GeneralSettings
+                  settings={settings}
+                  onSaveSettings={handleSaveSettings}
+                  onClearAiSessions={handleClearAiSessions}
+                  onCheckUpdate={onCheckUpdate}
+                  showToast={showToast}
+                />
+              </div>
+            )}
           </div>
         </div>
 
-        {onBackToAi && (
+        {/* 底部关闭栏 */}
+        <div className="px-6 py-2.5 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between text-xs text-slate-500 shrink-0">
+          <span className="text-[11px] text-slate-400 font-mono">
+            配置变更将自动实时保存至桌面存储
+          </span>
           <button
-            onClick={onBackToAi}
-            className="w-full py-2 px-3 rounded-xl border border-slate-200 hover:bg-white text-slate-600 text-xs font-medium flex items-center justify-center space-x-1.5 transition-colors shadow-2xs cursor-pointer"
+            onClick={onClose}
+            className="px-4 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold cursor-pointer text-xs transition-colors"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>返回 AI 对话工作台</span>
+            关闭
           </button>
-        )}
-      </div>
-
-      {/* 右侧设置内容详情面板 */}
-      <div className="flex-1 overflow-y-auto p-6 max-w-4xl">
-        {activeSubTab === 'models' && (
-          <ModelProviderSettings
-            providers={providers}
-            onSaveProvider={handleSaveProvider}
-            onDeleteProvider={handleDeleteProvider}
-            showToast={showToast}
-          />
-        )}
-
-        {activeSubTab === 'mcp' && (
-          <McpSettings
-            mcpServers={mcpServers}
-            onSaveMcpServer={handleSaveMcpServer}
-            onDeleteMcpServer={handleDeleteMcpServer}
-            onMcpServersChange={setMcpServers}
-            showToast={showToast}
-          />
-        )}
-
-        {activeSubTab === 'skills' && (
-          <SkillSettings
-            skills={skills}
-            onSaveSkill={handleSaveSkill}
-            onDeleteSkill={handleDeleteSkill}
-            onSkillsChange={setSkills}
-            showToast={showToast}
-          />
-        )}
-
-        {activeSubTab === 'agent' && (
-          <AgentHarnessSettings
-            settings={settings}
-            providers={providers}
-            onSaveSettings={handleSaveSettings}
-            showToast={showToast}
-          />
-        )}
-
-        {activeSubTab === 'general' && (
-          <GeneralSettings
-            settings={settings}
-            onSaveSettings={handleSaveSettings}
-            onClearAiSessions={handleClearAiSessions}
-            onCheckUpdate={onCheckUpdate}
-            showToast={showToast}
-          />
-        )}
+        </div>
       </div>
     </div>
   );

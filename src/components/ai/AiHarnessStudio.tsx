@@ -56,7 +56,7 @@ import {
 
 interface AiHarnessStudioProps {
   crmSession: SessionState;
-  onNavigateToSettings: () => void;
+  onNavigateToSettings: (tab?: string) => void;
   onNavigateToMetadata?: () => void;
   onNavigateToData?: () => void;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
@@ -741,7 +741,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   <button
                     onClick={() => {
                       setMoreMenuOpen(false);
-                      onNavigateToSettings();
+                      onNavigateToSettings('models');
                     }}
                     className="w-full px-3 py-2 text-left hover:bg-slate-50 text-slate-700 flex items-center space-x-2 cursor-pointer"
                   >
@@ -806,7 +806,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     </button>
                   </div>
                   <button
-                    onClick={onNavigateToSettings}
+                    onClick={() => onNavigateToSettings('models')}
                     className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-medium cursor-pointer"
                   >
                     前往设置
@@ -960,7 +960,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   prev.includes(srvId) ? prev.filter((x) => x !== srvId) : [...prev, srvId]
                 )
               }
-              onOpenMcpSettings={onNavigateToSettings}
+              onOpenMcpSettings={() => onNavigateToSettings('plugins')}
               quickPrompts={currentPreset.quickPrompts}
               showToast={showToast}
               configuredProviders={configuredProviders}

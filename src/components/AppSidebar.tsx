@@ -40,7 +40,7 @@ import {
 import { Plus, ExternalLink, FolderPlus, Plug } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
-export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings' | 'plugins';
+export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai';
 
 interface AppSidebarProps {
   platform: string;
@@ -64,6 +64,7 @@ interface AppSidebarProps {
   onSelectPreset: (presetId: string) => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
+  onOpenSettings?: () => void;
   projects?: WorkspaceProject[];
   activeProjectId?: string | null;
   onSelectProject?: (projectId: string) => void;
@@ -95,6 +96,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onSelectPreset,
   workflowLicenseStatus,
   onOpenLicenseModal,
+  onOpenSettings,
   projects = [],
   activeProjectId,
   onSelectProject,
@@ -352,23 +354,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           </span>
         </button>
 
-        {/* DeepSeek Harness 插件中心 */}
-        <button
-          onClick={() => onSelectTab('plugins')}
-          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
-            activeTab === 'plugins'
-              ? 'bg-slate-200 text-slate-900 font-bold'
-              : 'text-slate-700 hover:bg-slate-200/60 hover:text-slate-900'
-          }`}
-        >
-          <div className="flex items-center space-x-2.5">
-            <Plug className="w-4 h-4 text-purple-600" />
-            <span>插件与扩展中心</span>
-          </div>
-          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 border border-purple-200">
-            DSH
-          </span>
-        </button>
+
 
         {/* 对象与字段元数据 */}
         <button
@@ -611,15 +597,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             {hasUpdate && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />}
           </button>
 
-          {/* 系统设置 */}
+          {/* 系统设置 (弹窗展示，含模型、插件扩展、技能库) */}
           <button
-            onClick={() => onSelectTab('settings')}
-            title="系统与模型设置"
-            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-              activeTab === 'settings'
-                ? 'bg-slate-200 text-slate-900 font-bold'
-                : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200/60'
-            }`}
+            onClick={onOpenSettings}
+            title="系统与 AI 设置 (含模型供应商、插件扩展中心、技能库与系统偏好)"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
           >
             <Settings className="w-3.5 h-3.5" />
           </button>
