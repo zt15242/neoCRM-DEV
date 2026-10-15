@@ -69,32 +69,66 @@ export const PRESET_ENVIRONMENTS: NeoEnvironment[] = [
     tokenURL: 'https://login-tencentuat.xiaoshouyi.com/auc/oauth2/token',
     ...DEFAULT_AUTH_CONFIG,
   },
-  // 2. Salesforce 官方生态连接器预置
+  // 2. Salesforce 官方生态连接器预置 (支持阿里中国版 *.sfcrmproducts.cn 与 全球版 *.salesforce.com)
   {
-    id: 'sf-production',
-    name: 'Salesforce - 生产/开发者环境',
+    id: 'sf-alicloud-production',
+    name: 'Salesforce 阿里中国 - 生产正式环境',
     productType: 'salesforce',
     envType: 'production',
-    description: 'Salesforce 官方生产或 Developer Edition 组织 (login.salesforce.com)',
+    cloudDomain: 'login.sfcrmproducts.cn',
+    authMode: 'client_credentials',
+    description: 'Salesforce on Alibaba Cloud 阿里云中国版生产组织 (*.sfcrmproducts.cn)',
     isPreset: true,
-    neoBaseURL: 'https://login.salesforce.com',
-    loginURL: 'https://login.salesforce.com/services/oauth2/authorize',
-    tokenURL: 'https://login.salesforce.com/services/oauth2/token',
-    scope: 'full refresh_token api',
+    neoBaseURL: 'https://login.sfcrmproducts.cn',
+    loginURL: 'https://login.sfcrmproducts.cn/services/oauth2/authorize',
+    tokenURL: 'https://login.sfcrmproducts.cn/services/oauth2/token',
+    scope: '',
     oauthType: 'standard',
     accessType: 'offline',
   },
   {
     id: 'sf-sandbox',
-    name: 'Salesforce - 沙盒测试环境 (Sandbox)',
+    name: 'Salesforce 阿里中国 - 沙盒测试环境 (Sandbox)',
     productType: 'salesforce',
     envType: 'sandbox',
-    description: 'Salesforce 客户专属开发与回归测试沙盒 (test.salesforce.com)',
+    cloudDomain: 'test.sfcrmproducts.cn',
+    authMode: 'client_credentials',
+    description: 'Salesforce on Alibaba Cloud 阿里云中国版测试沙盒 (*.sfcrmproducts.cn)',
+    isPreset: true,
+    neoBaseURL: 'https://test.sfcrmproducts.cn',
+    loginURL: 'https://test.sfcrmproducts.cn/services/oauth2/authorize',
+    tokenURL: 'https://test.sfcrmproducts.cn/services/oauth2/token',
+    scope: '',
+    oauthType: 'standard',
+    accessType: 'offline',
+  },
+  {
+    id: 'sf-global-production',
+    name: 'Salesforce 全球版 - 生产/开发者环境 (Global)',
+    productType: 'salesforce',
+    envType: 'production',
+    cloudDomain: 'login.salesforce.com',
+    description: 'Salesforce 国际版生产或 Developer 组织 (*.salesforce.com)',
+    isPreset: true,
+    neoBaseURL: 'https://login.salesforce.com',
+    loginURL: 'https://login.salesforce.com/services/oauth2/authorize',
+    tokenURL: 'https://login.salesforce.com/services/oauth2/token',
+    scope: '',
+    oauthType: 'standard',
+    accessType: 'offline',
+  },
+  {
+    id: 'sf-global-sandbox',
+    name: 'Salesforce 全球版 - 沙盒测试环境 (Global)',
+    productType: 'salesforce',
+    envType: 'sandbox',
+    cloudDomain: 'test.salesforce.com',
+    description: 'Salesforce 国际版客户专属测试沙盒 (*.salesforce.com)',
     isPreset: true,
     neoBaseURL: 'https://test.salesforce.com',
     loginURL: 'https://test.salesforce.com/services/oauth2/authorize',
     tokenURL: 'https://test.salesforce.com/services/oauth2/token',
-    scope: 'full refresh_token api',
+    scope: '',
     oauthType: 'standard',
     accessType: 'offline',
   },
@@ -170,29 +204,12 @@ export class EnvService {
   }
 
   public getAllEnvironments(): NeoEnvironment[] {
-    const custom = this.getCustomEnvironments();
-    const envMap = new Map<string, NeoEnvironment>();
+    // 彻底去除内置死板预置列表的强占位，仅返回用户实际配置与创建的连接器
+    return this.getCustomEnvironments();
+  }
 
-    // 1. 先载入官方预置连接器基线
-    for (const preset of PRESET_ENVIRONMENTS) {
-      envMap.set(preset.id, { ...preset });
-    }
-
-    // 2. 载入用户自定义连接器及对内置预置连接器的凭据配置覆盖 (appId, appSecret, permanentCode 等)
-    for (const c of custom) {
-      const existing = envMap.get(c.id);
-      if (existing) {
-        envMap.set(c.id, {
-          ...existing,
-          ...c,
-          isPreset: existing.isPreset,
-        });
-      } else {
-        envMap.set(c.id, c);
-      }
-    }
-
-    return Array.from(envMap.values());
+  public getPresetTemplates(): NeoEnvironment[] {
+    return PRESET_ENVIRONMENTS;
   }
 
   public getEnvironmentById(id: string): NeoEnvironment | undefined {

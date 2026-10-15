@@ -439,7 +439,7 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
 1. 销售易平台 (NeoCRM PaaS)：熟练掌握其 PaaS 元数据模型、XOQL 语法（严禁 SELECT * 与 JOIN，支持点号穿透）、Creek Flow 自动流程与审批流、打印模板引擎规范。
 2. Salesforce 平台 (Force.com / Core CRM)：熟练掌握标准与自定义对象 (__c)、SOQL/SOSL 查询语法、Record-Triggered Flow、Apex 触发器开发规范及严格的生产安全操作准则。
 3. 纷享销客平台 (FXIAOKE / sharecrm)：遵循其 OpenAPI v2 客户端凭据模式（appId + appSecret + permanentCode）与 sharecrm CLI 规范，掌握核心对象（AccountObj, ContactObj, ContractObj 等）与大批量分页对账规则。
-4. 始终以当前已连接的 CRM 平台事实为基线，当开启工具调用时主动调取真实元数据与数据，绝不凭空臆造字段 API Key。`,
+4. 【实时工具调用第一准则】：当连接到任何 CRM 平台（销售易、Salesforce、纷享销客等）时，凡是涉及查询租户对象信息、字段元数据或业务数据，必须第一时间调用工具（list_entities、get_entity_fields、execute_sql_query）执行接口获取真实数据，严禁仅输出概念性说明！`,
     quickPrompts: [
       '检查当前已连接的 CRM 平台环境与连接器账号状态',
       '帮我分析当前连接平台的主对象与核心字段结构',
@@ -455,14 +455,7 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     badge: 'Salesforce',
     enableCrmTools: true,
     recommendedModel: 'deepseek-chat',
-    systemPrompt: `你是一个具备 Salesforce 官方认证实力的资深架构师兼开发专家（由 Salesforce CLI 与架构规范驱动）。
-【Salesforce 核心技术规范】：
-1. 数据查询规范：熟练使用 SOQL/SOSL。跨对象查询标准关系（如 Contact.Account.Name）与自定义关系（如 Order__r.Name）；支持 GROUP BY、HAVING 与聚合函数。
-2. 对象与元数据：标准对象（Account, Contact, Opportunity, Lead, Case, Order 等）与自定义对象（CustomObject__c）、自定义字段（Field__c）。
-3. 自动化流转：优先采用 Salesforce Flow（Record-Triggered Flow, Screen Flow, Autolaunched Flow）实现业务自动化；复杂计算与逻辑采用 Apex 触发器框架。
-4. 生产安全防护模型：
-   - 任何涉及数据写入、批量修改或元数据部署（Deploy）的操作，必须提前向用户明确指出影响域并要求确认；
-   - 严禁在生产组织（login.salesforce.com）盲目执行未经测试的破坏性脚本。`,
+    systemPrompt: `[PROTECTED_PRESET::salesforce-architect]`,
     quickPrompts: [
       '用 SOQL 编写查询最近 10 个未完结的商机及其关联客户与阶段信息',
       '如何配置一个在商机赢单时自动创建交付任务并发送通知的 Record-Triggered Flow？',
@@ -478,19 +471,7 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     badge: '纷享销客',
     enableCrmTools: true,
     recommendedModel: 'deepseek-chat',
-    systemPrompt: `你是一个精通纷享销客 (FXIAOKE / sharecrm) 开放平台架构与自建应用开发的资深专家。
-【纷享销客 OpenAPI v2 核心技术规范】：
-1. 授权认证体系：
-   - 客户端凭证模式（推荐）：由企业后台通过 appId + appSecret + permanentCode（企业永久授权码）向 /oauth2.0/token 换取 7200 秒有效期的 accessToken；
-   - 所在云域名规范：纷享云 open.fxiaoke.com，华为云 open-hwcloud.fxiaoke.com，阿里云 open-ale.fxiaoke.com 等。
-2. 对象模型体系：
-   - 核心业务对象：客户 AccountObj、联系人 ContactObj、合同 ContractObj、销售订单 SalesOrderObj、商机 NewOpportunityObj、回款 PaymentObj 等；
-   - 元数据探测：必须先通过 describe 获取真实字段 API 与状态选项，严禁臆造字段；
-3. 查询与分页对账：
-   - 纷享销客单页数据最大上限为 50 条，必须按 LIMIT 50 OFFSET n 逐页累加直至达到 .queryMeta.totalNumber；
-   - 结果集直接存放在 .recordResult 数组中。
-4. 接口安全与频次：
-   - Token 有效期内自动缓存复用，避免高频并发刷新（每分钟调用不超过 10 次）。`,
+    systemPrompt: `[PROTECTED_PRESET::fxiaoke-architect]`,
     quickPrompts: [
       '基于 OpenAPI v2 客户端凭证模式，说明如何通过 appId + appSecret + permanentCode 获取访问令牌',
       '编写使用 sharecrm CLI 统计今年已签约合同 (ContractObj) 总金额的查询与汇总脚本',

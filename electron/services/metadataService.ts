@@ -11,9 +11,13 @@ import {
 } from '../../shared/types';
 
 import { ITEM_TYPE_MAP } from '../../shared/constants';
+import { FxiaokeService } from './fxiaokeService';
+import { SalesforceService } from './salesforceService';
 export { ITEM_TYPE_MAP };
 
 export class MetadataService {
+  private fxiaokeService = new FxiaokeService();
+  private salesforceService = new SalesforceService();
   private getBaseUrl(env: NeoEnvironment, tokenData: TokenData): string {
     const raw = tokenData.instance_uri || env.neoBaseURL;
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
@@ -31,6 +35,12 @@ export class MetadataService {
    * 拉取租户所有对象列表（标准实体 + 自定义实体）
    */
   public async fetchEntityList(env: NeoEnvironment, tokenData: TokenData): Promise<EntityMetadata[]> {
+    if (env.productType === 'fxiaoke') {
+      return this.fxiaokeService.fetchObjectList(env, tokenData);
+    }
+    if (env.productType === 'salesforce') {
+      return this.salesforceService.fetchObjectList(env, tokenData);
+    }
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
     const allEntities: EntityMetadata[] = [];
@@ -73,6 +83,12 @@ export class MetadataService {
     tokenData: TokenData, 
     entityApiKey: string
   ): Promise<FieldMetadata[]> {
+    if (env.productType === 'fxiaoke') {
+      return this.fxiaokeService.describeObject(env, tokenData, entityApiKey);
+    }
+    if (env.productType === 'salesforce') {
+      return this.salesforceService.describeObject(env, tokenData, entityApiKey);
+    }
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
     const url = `${baseUrl}/rest/metadata/v2.0/xobjects/${entityApiKey}/items`;

@@ -72,6 +72,7 @@ export interface AccountRecord {
   instanceUri?: string;
   lastLoginAt: number;
   tokenData: TokenData;
+  environment?: NeoEnvironment;
 }
 
 export interface CliSyncResult {

@@ -31,6 +31,7 @@ declare global {
   interface Window {
     neoApi: {
       getEnvironments: () => Promise<NeoEnvironment[]>;
+      getEnvTemplates?: () => Promise<NeoEnvironment[]>;
       saveCustomEnvironment: (env: Partial<NeoEnvironment> & { name: string; neoBaseURL: string }) => Promise<NeoEnvironment>;
       deleteCustomEnvironment: (id: string) => Promise<boolean>;
       testConnectivity: (url: string) => Promise<TestConnectionResult>;
@@ -40,6 +41,8 @@ declare global {
       loginWithPassword: (envId: string, username: string, pass: string) => Promise<SessionState>;
       cancelLogin: () => Promise<boolean>;
       refreshToken: () => Promise<SessionState>;
+      onSessionUpdated?: (callback: (session: SessionState) => void) => () => void;
+      pullProjectCode?: (options: { targetDir: string; pullType?: 'all' | 'backend' | 'frontend' | 'metadata'; entityNames?: string[] }) => Promise<any>;
       logout: () => Promise<SessionState>;
       captureWebCookie: () => Promise<SessionState>;
       updateSessionCookie: (cookieString: string) => Promise<SessionState>;

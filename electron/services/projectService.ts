@@ -145,7 +145,7 @@ export class ProjectService {
     return results;
   }
 
-  public getDirTree(folderPath?: string, maxDepth = 4): Array<{
+  public getDirTree(folderPath?: string, maxDepth = 10): Array<{
     name: string;
     path: string;
     relativePath: string;

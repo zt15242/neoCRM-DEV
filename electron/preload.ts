@@ -4,6 +4,7 @@ import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
 export const neoApi = {
   // 环境
   getEnvironments: () => ipcRenderer.invoke('env:getAll'),
+  getEnvTemplates: () => ipcRenderer.invoke('env:getTemplates'),
   saveCustomEnvironment: (env: any) => ipcRenderer.invoke('env:saveCustom', env),
   deleteCustomEnvironment: (id: string) => ipcRenderer.invoke('env:deleteCustom', id),
   testConnectivity: (url: string) => ipcRenderer.invoke('env:testConnectivity', url),
@@ -15,6 +16,13 @@ export const neoApi = {
     ipcRenderer.invoke('auth:loginWithPassword', envId, username, password),
   cancelLogin: () => ipcRenderer.invoke('auth:cancelLogin'),
   refreshToken: () => ipcRenderer.invoke('auth:refreshToken'),
+  onSessionUpdated: (callback: (session: any) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('session:updated', handler);
+    return () => ipcRenderer.removeListener('session:updated', handler);
+  },
+  pullProjectCode: (options: { targetDir: string; pullType?: 'all' | 'backend' | 'frontend' | 'metadata'; entityNames?: string[] }) =>
+    ipcRenderer.invoke('code:pullProjectCode', options),
   logout: () => ipcRenderer.invoke('auth:logout'),
   captureWebCookie: () => ipcRenderer.invoke('auth:captureWebCookie'),
   updateSessionCookie: (cookieString: string) => ipcRenderer.invoke('auth:updateCookie', cookieString),

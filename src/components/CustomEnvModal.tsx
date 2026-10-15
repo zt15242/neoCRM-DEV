@@ -44,6 +44,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   const [authMode, setAuthMode] = useState<'client_credentials' | 'authorization_code'>('client_credentials');
   const [permanentCode, setPermanentCode] = useState('');
   const [cloudDomain, setCloudDomain] = useState('open.fxiaoke.com');
+  const [sfRegion, setSfRegion] = useState<'alicloud' | 'global' | 'custom'>('alicloud');
   const [ea, setEa] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
@@ -66,6 +67,16 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       setPermanentCode(initialEnv.permanentCode || '');
       setCloudDomain(initialEnv.cloudDomain || 'open.fxiaoke.com');
       setEa(initialEnv.ea || '');
+      if (initialEnv.productType === 'salesforce') {
+        const u = initialEnv.neoBaseURL || '';
+        if (u.includes('sfcrmproducts.cn')) {
+          setSfRegion('alicloud');
+        } else if (u.includes('login.salesforce.com') || u.includes('test.salesforce.com')) {
+          setSfRegion('global');
+        } else {
+          setSfRegion('custom');
+        }
+      }
     } else {
       setProductType('neocrm');
       setEnvType('sandbox');
@@ -93,13 +104,15 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
     setProductType(pType);
     if (!initialEnv) {
       if (pType === 'salesforce') {
-        setName('Salesforce - 沙盒测试环境');
+        setName('Salesforce 阿里中国 - 沙盒测试环境');
         setEnvType('sandbox');
-        setNeoBaseURL('https://test.salesforce.com');
-        setLoginURL('https://test.salesforce.com/services/oauth2/authorize');
-        setTokenURL('https://test.salesforce.com/services/oauth2/token');
-        setScope('full refresh_token api');
-        setDescription('Salesforce 沙盒测试组织连接器');
+        setSfRegion('alicloud');
+        setNeoBaseURL('https://test.sfcrmproducts.cn');
+        setLoginURL('https://test.sfcrmproducts.cn/services/oauth2/authorize');
+        setTokenURL('https://test.sfcrmproducts.cn/services/oauth2/token');
+        setAuthMode('client_credentials');
+        setScope('');
+        setDescription('Salesforce on Alibaba Cloud 阿里云中国版沙盒测试组织');
       } else if (pType === 'fxiaoke') {
         setName('纷享销客 - 开放平台连接器');
         setEnvType('production');
@@ -127,6 +140,23 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
         setScope('api');
         setDescription('自定义 CRM 系统 REST 接口连接器');
       }
+    }
+  };
+
+  // Salesforce 区域与部署形态切换 (阿里中国版 vs 全球版)
+  const handleSfRegionChange = (region: 'alicloud' | 'global' | 'custom', targetEnvType = envType) => {
+    setSfRegion(region);
+    const isProd = targetEnvType === 'production';
+    if (region === 'alicloud') {
+      const host = isProd ? 'login.sfcrmproducts.cn' : 'test.sfcrmproducts.cn';
+      setNeoBaseURL(`https://${host}`);
+      setLoginURL(`https://${host}/services/oauth2/authorize`);
+      setTokenURL(`https://${host}/services/oauth2/token`);
+    } else if (region === 'global') {
+      const host = isProd ? 'login.salesforce.com' : 'test.salesforce.com';
+      setNeoBaseURL(`https://${host}`);
+      setLoginURL(`https://${host}/services/oauth2/authorize`);
+      setTokenURL(`https://${host}/services/oauth2/token`);
     }
   };
 
@@ -354,6 +384,138 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               </select>
             </div>
           </div>
+
+          {/* Salesforce 专属配置面板 (支持阿里中国版与全球版) */}
+          {productType === 'salesforce' && (
+            <div className="p-3.5 bg-cyan-50/60 rounded-2xl border border-cyan-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-cyan-950 flex items-center space-x-1.5 text-xs">
+                  <Cloud className="w-4 h-4 text-cyan-600" />
+                  <span>Salesforce 地域部署与授权规范</span>
+                </span>
+                <span className="text-[11px] text-cyan-700 font-medium">
+                  全面支持阿里中国版 & 全球版
+                </span>
+              </div>
+
+              {/* 地域部署版本选择 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-cyan-900">
+                    地域部署形态 (Cloud Region) *
+                  </label>
+                  <select
+                    value={sfRegion}
+                    onChange={(e) => handleSfRegionChange(e.target.value as any)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-cyan-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                  >
+                    <option value="alicloud">🇨🇳 阿里中国版 (*.sfcrmproducts.cn)</option>
+                    <option value="global">🌐 全球版 / 国际版 (*.salesforce.com)</option>
+                    <option value="custom">🏢 专属“我的域” (My Domain / 自定义)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-cyan-900">
+                    授权认证模式 *
+                  </label>
+                  <select
+                    value={authMode}
+                    onChange={(e) => setAuthMode(e.target.value as any)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-cyan-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                  >
+                    <option value="client_credentials">客户端凭证模式 (Connected App 直连 · 推荐)</option>
+                    <option value="authorization_code">授权码模式 (Web 浏览器 / 内嵌窗口登录)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Client ID & Secret */}
+              <div className="space-y-2 pt-1 border-t border-cyan-200/60">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-cyan-900">
+                      Client ID (Consumer Key) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                      placeholder="Connected App Consumer Key"
+                      className="w-full px-2.5 py-1.5 bg-white border border-cyan-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-cyan-900">
+                      Client Secret (Consumer Secret) *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      placeholder="Consumer Secret"
+                      className="w-full px-2.5 py-1.5 bg-white border border-cyan-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 回调地址配置 (授权码模式必须匹配 Connected App) */}
+              {authMode === 'authorization_code' && (
+                <div className="space-y-2 pt-1 border-t border-cyan-200/60">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] font-semibold text-cyan-900">
+                      回调地址 (Redirect URI / Callback URL) *
+                    </label>
+                    <span className="text-[10px] text-cyan-700 font-sans">
+                      需与 Salesforce Connected App 严格一致
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={redirectUri}
+                    onChange={(e) => setRedirectUri(e.target.value)}
+                    placeholder="如 http://localhost:1028"
+                    className="w-full px-2.5 py-1.5 bg-white border border-cyan-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-cyan-500"
+                  />
+                  {/* 常用预选地址 */}
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {[
+                      'http://localhost:1028',
+                      'http://localhost:1028/',
+                      'http://localhost:1717/OauthRedirect',
+                      'https://test.salesforce.com/services/oauth2/success',
+                      'https://login.salesforce.com/services/oauth2/success',
+                    ].map((uri) => (
+                      <button
+                        key={uri}
+                        type="button"
+                        onClick={() => setRedirectUri(uri)}
+                        className={`text-[10px] px-2 py-0.5 rounded-lg border font-mono transition-colors cursor-pointer ${
+                          redirectUri === uri
+                            ? 'bg-cyan-600 text-white border-cyan-600 font-bold'
+                            : 'bg-white text-cyan-800 border-cyan-200 hover:bg-cyan-100/60'
+                        }`}
+                      >
+                        {uri}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-amber-800 leading-relaxed bg-amber-50/90 p-2 rounded-xl border border-amber-200 font-sans">
+                    ⚠️ <strong>关键报错排查：</strong>若登录报错 <code className="font-mono bg-white px-1 rounded text-rose-600 font-bold">redirect_uri_mismatch</code>，代表此处的地址与您在 Salesforce 设置【已连接的应用 (Connected App)】中的【回调 URL】不匹配。请点击上方常用地址或手动输入您在 Salesforce 中配置的 Callback URL。
+                  </p>
+                </div>
+              )}
+
+              <div className="text-[10px] text-cyan-900 leading-relaxed bg-white/70 p-2 rounded-xl border border-cyan-200/60">
+                💡 <strong>架构支持说明：</strong>阿里中国版部署于阿里云本土环境，域名为 <code className="bg-cyan-100/60 px-1 rounded font-mono">*.sfcrmproducts.cn</code>；全球版域名为 <code className="bg-cyan-100/60 px-1 rounded font-mono">*.salesforce.com</code>。若使用客户端凭据模式直连，推荐将实例地址配置为您组织的 My Domain 专属域。
+              </div>
+            </div>
+          )}
 
           {/* 纷享销客专属配置面板 */}
           {productType === 'fxiaoke' && (

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import http from 'node:http';
 import url from 'node:url';
 import net from 'node:net';
@@ -47,12 +48,25 @@ export class AuthService {
   /**
    * 生成回调成功 HTML 页面
    */
-  private getAuthSuccessHtml(tenantDesc: string, instanceUri: string): string {
+  private getAuthSuccessHtml(tenantDesc: string, instanceUri: string, env?: NeoEnvironment): string {
+    const isSf = env?.productType === 'salesforce';
+    const isFx = env?.productType === 'fxiaoke';
+    const platformTitle = isSf ? 'Salesforce 组织认证成功' : isFx ? '纷享销客授权成功' : '销售易统一认证成功';
+    const descText = isSf
+      ? `您已成功登录 Salesforce 组织【${tenantDesc}】，凭据已安全回传至桌面客户端。您可以关闭此浏览器标签页。`
+      : isFx
+      ? `您已成功登录纷享销客企业【${tenantDesc}】，凭据已安全回传至桌面客户端。您可以关闭此浏览器标签页。`
+      : `您已成功登录销售易租户【${tenantDesc}】，凭据已安全回传至 NeoCRM 桌面客户端。您可以关闭此浏览器标签页。`;
+
+    const tenantLabel = isSf ? '组织标识 (Org ID):' : isFx ? '企业账号 (ea):' : '当前租户:';
+    const brandColor = isSf ? '#0284c7' : isFx ? '#ea580c' : '#0284c7';
+    const brandBg = isSf ? '#e0f2fe' : isFx ? '#ffedd5' : '#e0f2fe';
+
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <title>NeoCRM 客户端授权成功</title>
+  <title>${platformTitle}</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -66,7 +80,7 @@ export class AuthService {
     }
     .card {
       background: #ffffff;
-      border-radius: 16px;
+      border-radius: 18px;
       padding: 40px;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08);
       max-width: 480px;
@@ -77,8 +91,8 @@ export class AuthService {
     .icon {
       width: 64px;
       height: 64px;
-      background: #e0f2fe;
-      color: #0284c7;
+      background: ${brandBg};
+      color: ${brandColor};
       border-radius: 50%;
       display: inline-flex;
       align-items: center;
@@ -99,7 +113,7 @@ export class AuthService {
     }
     .info-box {
       background: #f1f5f9;
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 14px;
       text-align: left;
       font-size: 13px;
@@ -107,21 +121,21 @@ export class AuthService {
     }
     .info-row {
       display: flex;
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }
     .info-row:last-child { margin-bottom: 0; }
-    .label { color: #64748b; width: 80px; flex-shrink: 0; }
-    .val { color: #0f172a; font-weight: 500; word-break: break-all; }
+    .label { color: #64748b; width: 130px; flex-shrink: 0; }
+    .val { color: #0f172a; font-weight: 600; word-break: break-all; font-family: monospace; }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="icon">✓</div>
-    <h2>授权成功</h2>
-    <p>您已成功登录销售易统一认证中心，凭据已安全回传至 NeoCRM 桌面客户端。您可以关闭此浏览器标签页。</p>
+    <h2>${platformTitle}</h2>
+    <p>${descText}</p>
     <div class="info-box">
-      <div class="info-row"><span class="label">当前租户:</span><span class="val">${tenantDesc}</span></div>
-      <div class="info-row"><span class="label">实例地址:</span><span class="val">${instanceUri}</span></div>
+      <div class="info-row"><span class="label">${tenantLabel}</span><span class="val">${tenantDesc}</span></div>
+      <div class="info-row"><span class="label">服务实例:</span><span class="val">${instanceUri}</span></div>
     </div>
   </div>
 </body>
@@ -179,6 +193,81 @@ export class AuthService {
    * 纷享销客 OpenAPI v2 客户端凭证模式直连 (适用于自建应用无人工参与后台授权)
    * 参考: https://developer.fxiaoke.com/openapi_v2/start/auth/app-info.html
    */
+  /**
+   * Salesforce OAuth 2.0 客户端凭证模式直连 (Client Credentials Flow)
+   * 适用于 Connected App / 外部客户端应用服务端直通，全面支持阿里中国版 (*.sfcrmproducts.cn) 与全球版 (*.salesforce.com)
+   */
+  public async loginWithSalesforceClientCredentials(env: NeoEnvironment): Promise<TokenData> {
+    const rawBaseUrl = (env.neoBaseURL || 'https://login.salesforce.com').trim().replace(/\/+$/, '');
+    const tokenUrl = env.tokenURL || `${rawBaseUrl}/services/oauth2/token`;
+
+    if (!env.clientId || !env.clientSecret) {
+      throw new Error('Salesforce 客户端凭证模式需要配置 Client ID (Consumer Key) 与 Client Secret (Consumer Secret)');
+    }
+
+    const params = new URLSearchParams();
+    params.append('grant_type', 'client_credentials');
+    params.append('client_id', env.clientId.trim());
+    params.append('client_secret', env.clientSecret.trim());
+
+    try {
+      const res = await axios.post(tokenUrl, params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 15000,
+      });
+
+      const data = res.data;
+      if (!data || !data.access_token) {
+        throw new Error(`Salesforce 认证未返回有效 access_token: ${JSON.stringify(data)}`);
+      }
+
+      const instanceUrl = data.instance_url || rawBaseUrl;
+      const orgId = data.id ? data.id.split('/')[4] : 'salesforce_org';
+
+      let userInfo: UserInfo = {
+        userId: orgId,
+        name: `Salesforce 客户端应用 (${orgId})`,
+        tenant_id: orgId,
+        tenantName: `Salesforce 组织 (${orgId})`,
+      };
+
+      if (data.id) {
+        try {
+          const idRes = await axios.get(data.id, {
+            headers: { Authorization: `Bearer ${data.access_token}` },
+            timeout: 10000,
+          });
+          if (idRes.data) {
+            userInfo = {
+              userId: idRes.data.user_id || orgId,
+              name: idRes.data.username || idRes.data.display_name || 'Salesforce 用户',
+              tenant_id: idRes.data.organization_id || orgId,
+              tenantName: `Salesforce (${idRes.data.organization_id || orgId})`,
+              email: idRes.data.email,
+            };
+          }
+        } catch {}
+      }
+
+      const expiresIn = 7200;
+      return {
+        access_token: data.access_token,
+        expires_in: expiresIn,
+        instance_uri: instanceUrl,
+        tenant_id: userInfo.tenant_id || orgId,
+        userInfo,
+        savedAt: Date.now(),
+        expiresAt: Date.now() + expiresIn * 1000,
+      };
+    } catch (err: any) {
+      const respErr = err.response?.data?.error_description || err.response?.data?.error || err.message;
+      if (respErr && respErr.includes('request not supported on this domain')) {
+        throw new Error(`Salesforce 登录失败: ${respErr}。提示: Salesforce 客户端凭证模式 (Client Credentials) 要求使用您组织的专属“我的域” (My Domain，例如 https://<MyDomain>.my.sfcrmproducts.cn 或沙盒 https://<MyDomain>--<Sandbox>.sandbox.my.sfcrmproducts.cn)，请在连接器设置中将实例地址修改为您企业的 My Domain 域名后重试。`);
+      }
+      throw new Error(`Salesforce 客户端凭证授权失败: ${respErr}`);
+    }
+  }
+
   public async loginWithFxiaoKeClientCredentials(env: NeoEnvironment): Promise<TokenData> {
     const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
     const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
@@ -233,19 +322,42 @@ export class AuthService {
     if (env.productType === 'fxiaoke' && (env.authMode === 'client_credentials' || env.permanentCode)) {
       return this.loginWithFxiaoKeClientCredentials(env);
     }
+    if (env.productType === 'salesforce' && env.authMode === 'client_credentials') {
+      return this.loginWithSalesforceClientCredentials(env);
+    }
+
+    const configuredRedirectUri = (env.redirectUri || '').trim();
     this.cancelActiveAuth();
 
     let targetPort = 1028;
-    try {
-      if (env.redirectUri) {
-        const u = new URL(env.redirectUri);
-        targetPort = parseInt(u.port, 10) || 1028;
-      }
-    } catch {}
+    let redirectUri = 'http://localhost:1028';
+    let port = 1028;
 
-    const port = await this.getAvailablePort(targetPort);
-    const redirectUri = `http://localhost:${port}`;
-    const authUrl = this.buildAuthUrl(env, redirectUri);
+    if (env.redirectUri && env.redirectUri.trim()) {
+      const trimmed = env.redirectUri.trim();
+      try {
+        const u = new URL(trimmed);
+        if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+          targetPort = parseInt(u.port, 10) || 1028;
+          port = await this.getAvailablePort(targetPort);
+          const hasSlash = trimmed.replace(/[?#].*$/, '').endsWith('/');
+          const pathPart = u.pathname === '/' ? (hasSlash ? '/' : '') : u.pathname;
+          redirectUri = `${u.protocol}//${u.hostname}:${port}${pathPart}${u.search}`;
+        } else {
+          redirectUri = trimmed;
+          port = await this.getAvailablePort(targetPort);
+        }
+      } catch {
+        redirectUri = trimmed;
+        port = await this.getAvailablePort(targetPort);
+      }
+    } else {
+      port = await this.getAvailablePort(targetPort);
+      redirectUri = `http://localhost:${port}`;
+    }
+    const codeVerifier = crypto.randomBytes(32).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const authUrl = this.buildAuthUrl(env, redirectUri, codeChallenge);
 
     return new Promise<TokenData>((resolve, reject) => {
       let isSettled = false;
@@ -274,21 +386,24 @@ export class AuthService {
           res.end(this.getAuthErrorHtml(String(error_description || error)));
           server.close();
           this.activeServer = null;
-          return reject(new Error(`销售易授权返回错误: ${error_description || error}`));
+          if (error === 'redirect_uri_mismatch') {
+            return reject(new Error(`Salesforce 回调地址不匹配 (redirect_uri_mismatch)：当前请求回调地址为【${redirectUri}】，与 Salesforce Connected App 中配置的【回调 URL】不一致！请在连接器设置中修改回调地址。`));
+          }
+          return reject(new Error(`授权返回错误: ${error_description || error}`));
         }
 
         if (code) {
           isSettled = true;
           try {
             // 仅在此处换取一次 Token (OAuth2 Code 只能单次消费)
-            const tokenData = await this.fetchTokenByCode(env, String(code), redirectUri);
+            const tokenData = await this.fetchTokenByCode(env, String(code), redirectUri, codeVerifier);
             const tenantDesc = tokenData.userInfo?.tenantName
               ? `${tokenData.userInfo.tenantName} (${tokenData.tenant_id})`
               : `${tokenData.tenant_id || "未返回"}`;
             const instanceUri = tokenData.instance_uri || env.neoBaseURL;
 
             res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-            res.end(this.getAuthSuccessHtml(tenantDesc, instanceUri));
+            res.end(this.getAuthSuccessHtml(tenantDesc, instanceUri, env));
             server.close();
             this.activeServer = null;
             return resolve(tokenData);
@@ -339,10 +454,24 @@ export class AuthService {
     if (env.productType === 'fxiaoke' && (env.authMode === 'client_credentials' || env.permanentCode)) {
       return this.loginWithFxiaoKeClientCredentials(env);
     }
+    if (env.productType === 'salesforce' && env.authMode === 'client_credentials') {
+      return this.loginWithSalesforceClientCredentials(env);
+    }
     this.cancelActiveAuth();
 
-    const redirectUri = env.redirectUri || "http://localhost:1028";
-    const authUrl = this.buildAuthUrl(env, redirectUri);
+    const codeVerifier = crypto.randomBytes(32).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const rawRedirect = (env.redirectUri || (env.productType === 'salesforce' ? 'http://localhost:1028' : 'http://localhost:1028')).trim();
+    let redirectUri = rawRedirect;
+    try {
+      const u = new URL(rawRedirect);
+      if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+        const hasSlash = rawRedirect.replace(/[?#].*$/, '').endsWith('/');
+        const pathPart = u.pathname === '/' ? (hasSlash ? '/' : '') : u.pathname;
+        redirectUri = `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}${pathPart}${u.search}`;
+      }
+    } catch {}
+    const authUrl = this.buildAuthUrl(env, redirectUri, codeChallenge);
 
     return new Promise<TokenData>((resolve, reject) => {
       let isSettled = false;
@@ -359,7 +488,7 @@ export class AuthService {
         height: 740,
         parent: parentWindow,
         modal: true,
-        title: `销售易登录 - ${env.name}`,
+        title: `${env.productType === "salesforce" ? "Salesforce" : env.productType === "fxiaoke" ? "纷享销客" : "销售易"}登录 - ${env.name}`,
         autoHideMenuBar: true,
         webPreferences: {
           nodeIntegration: false,
@@ -374,7 +503,8 @@ export class AuthService {
         if (isSettled) return;
         try {
           const u = new URL(targetUrl);
-          if (targetUrl.startsWith(redirectUri) || u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+          const isMatch = targetUrl.startsWith(redirectUri) || u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.pathname.includes('/services/oauth2/success') || (u.searchParams.has('code') && (targetUrl.includes('salesforce') || targetUrl.includes('sfcrmproducts')));
+          if (isMatch) {
             const code = u.searchParams.get("code");
             const error = u.searchParams.get("error");
 
@@ -407,7 +537,7 @@ export class AuthService {
               authWin.close();
               this.embeddedAuthWindow = null;
               try {
-                const token = await this.fetchTokenByCode(env, code, redirectUri);
+                const token = await this.fetchTokenByCode(env, code, redirectUri, codeVerifier);
                 if (cookieString) {
                   token.cookieString = cookieString;
                   token.cookies = capturedCookies;
@@ -493,37 +623,48 @@ export class AuthService {
   }
 
   /**
+   * 统一自动/手动续期方法，全面支持多平台（纷享销客客户端凭据直连、Salesforce、销售易 NeoCRM）
+   */
+  public async renewToken(env: NeoEnvironment, currentTokenData?: TokenData): Promise<TokenData> {
+    // 1. 纷享销客：客户端凭证模式直接重新获取 7200s 有效 Token
+    if (env.productType === 'fxiaoke' || env.authMode === 'client_credentials' || env.permanentCode) {
+      if (env.clientId && env.clientSecret && env.permanentCode) {
+        return await this.loginWithFxiaoKeClientCredentials(env);
+      }
+      if (currentTokenData?.refresh_token) {
+        return await this.refreshToken(env, currentTokenData.refresh_token);
+      }
+      throw new Error('纷享销客自动续期需要配置完整的 appId、appSecret 及 permanentCode 凭据');
+    }
+
+    // 2. Salesforce 续期 (支持客户端凭证直连换新与 OAuth2 refresh_token)
+    if (env.productType === 'salesforce') {
+      if (env.authMode === 'client_credentials' || (env.clientId && env.clientSecret && !currentTokenData?.refresh_token)) {
+        return await this.loginWithSalesforceClientCredentials(env);
+      }
+      if (currentTokenData?.refresh_token) {
+        return await this.refreshToken(env, currentTokenData.refresh_token);
+      }
+      throw new Error('Salesforce 续期需要 Client Credentials 凭证或有效 refresh_token');
+    }
+
+    // 3. 销售易 NeoCRM 续期
+    if (currentTokenData?.refresh_token) {
+      return await this.refreshToken(env, currentTokenData.refresh_token);
+    }
+
+    throw new Error('当前环境无可用续期凭据，请重新连接环境');
+  }
+
+  /**
    * 刷新 Access Token
    */
   public async refreshToken(env: NeoEnvironment, refreshTokenStr: string): Promise<TokenData> {
     if (env.productType === 'fxiaoke') {
-      const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
-      const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
-      const thirdTraceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const payload = {
-        grantType: 'refresh_token',
-        appId: env.clientId,
-        appSecret: env.clientSecret,
-        refreshToken: refreshTokenStr.trim(),
-      };
-      const res = await axios.post(`${tokenUrl}?thirdTraceId=${thirdTraceId}`, payload, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 15000,
-      });
-      const data = res.data;
-      if (data.errorCode !== 0 && data.errorCode !== '0') {
-        throw new Error(`纷享销客刷新令牌失败: ${data.errorMessage || JSON.stringify(data)}`);
+      // 纷享销客客户端凭据模式下无 refresh_token 概念，续期即通过 appId + permanentCode 获取新 token
+      if (env.clientId && env.clientSecret && env.permanentCode) {
+        return await this.loginWithFxiaoKeClientCredentials(env);
       }
-      const expiresIn = Number(data.expiresIn || 7200);
-      return {
-        access_token: data.accessToken,
-        refresh_token: data.refreshToken || refreshTokenStr,
-        expires_in: expiresIn,
-        instance_uri: `https://${cloudDomain}`,
-        tenant_id: data.ea || data.openUserId,
-        savedAt: Date.now(),
-        expiresAt: Date.now() + expiresIn * 1000,
-      };
     }
     const params = new URLSearchParams();
     params.append('grant_type', 'refresh_token');
@@ -591,7 +732,24 @@ export class AuthService {
   /**
    * 组装授权 URL
    */
-  private buildAuthUrl(env: NeoEnvironment, redirectUri: string): string {
+  private buildAuthUrl(env: NeoEnvironment, redirectUri: string, codeChallenge?: string): string {
+    if (env.productType === 'salesforce') {
+      const searchParams = new URLSearchParams({
+        response_type: 'code',
+        client_id: env.clientId || '',
+        redirect_uri: redirectUri,
+      });
+      // 关键修复：Salesforce 规定若省略 scope，将自动继承 Connected App 中已配置的权限范围。
+      // 严禁默认携带 'full'，否则企业组织（如 Olympus 等）因安全策略未开放 full 权限会报 "the requested scope is not allowed"！
+      if (env.scope && env.scope.trim() && env.scope !== 'all' && env.scope !== 'full refresh_token api') {
+        searchParams.append('scope', env.scope.trim());
+      }
+      if (codeChallenge) {
+        searchParams.append('code_challenge', codeChallenge);
+        searchParams.append('code_challenge_method', 'S256');
+      }
+      return `${env.loginURL}?${searchParams.toString()}`;
+    }
     const searchParams = new URLSearchParams({
       response_type: 'code',
       client_id: env.clientId || '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -600,13 +758,17 @@ export class AuthService {
       oauthType: env.oauthType || 'standard',
       access_type: env.accessType || 'offline',
     });
+    if (codeChallenge) {
+      searchParams.append('code_challenge', codeChallenge);
+      searchParams.append('code_challenge_method', 'S256');
+    }
     return `${env.loginURL}?${searchParams.toString()}`;
   }
 
   /**
    * 通过授权码向 tokenURL 换取 Token 并获取用户信息
    */
-  private async fetchTokenByCode(env: NeoEnvironment, code: string, redirectUri: string): Promise<TokenData> {
+  private async fetchTokenByCode(env: NeoEnvironment, code: string, redirectUri: string, codeVerifier?: string): Promise<TokenData> {
     if (env.productType === 'fxiaoke') {
       const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
       const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
@@ -649,6 +811,9 @@ export class AuthService {
     params.append('client_secret', env.clientSecret || '370817d1336a3737f95c671eea39a23b');
     params.append('code', code);
     params.append('redirect_uri', redirectUri);
+    if (codeVerifier) {
+      params.append('code_verifier', codeVerifier);
+    }
 
     const res = await axios.post(env.tokenURL, params.toString(), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -658,6 +823,56 @@ export class AuthService {
     const data = res.data;
     if (!data || !data.access_token) {
       throw new Error(`响应中未包含 access_token: ${JSON.stringify(data)}`);
+    }
+
+    if (env.productType === 'salesforce') {
+      const instanceUrl = data.instance_url || env.neoBaseURL;
+      const rawOrgId = data.access_token ? data.access_token.split('!')[0] : 'salesforce_org';
+      let userInfo: UserInfo = {
+        userId: rawOrgId,
+        name: 'Salesforce 用户',
+        tenant_id: rawOrgId,
+        tenantName: `Salesforce 组织 (${rawOrgId})`,
+      };
+
+      try {
+        const userinfoEndpoint = `${instanceUrl.replace(/\/+$/, '')}/services/oauth2/userinfo`;
+        const uRes = await axios.get(userinfoEndpoint, {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+          timeout: 10000,
+        });
+        if (uRes.data) {
+          const uData = uRes.data;
+          const orgId = uData.organization_id || rawOrgId;
+          const uname = uData.preferred_username || uData.name || 'Salesforce 用户';
+          let orgName = `Salesforce (${orgId})`;
+          if (uData.preferred_username && uData.preferred_username.includes('@')) {
+            const domainPart = uData.preferred_username.split('@')[1];
+            const companyName = domainPart.split('.')[0].toUpperCase();
+            orgName = `${companyName} (${orgId})`;
+          }
+          userInfo = {
+            userId: uData.user_id || rawOrgId,
+            name: `${uData.name || '用户'} (${uname})`,
+            tenant_id: orgId,
+            tenantName: orgName,
+            email: uData.email,
+          };
+        }
+      } catch (err: any) {
+        console.warn('获取 Salesforce userinfo 异常:', err.message);
+      }
+
+      return {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_in: data.expires_in || 7200,
+        instance_uri: instanceUrl,
+        tenant_id: userInfo.tenant_id,
+        userInfo,
+        savedAt: Date.now(),
+        expiresAt: Date.now() + (data.expires_in || 7200) * 1000,
+      };
     }
 
     const effectiveBaseUrl = this.resolveEffectiveBaseUrl(env, data.instance_uri);

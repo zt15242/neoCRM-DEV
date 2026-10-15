@@ -80,6 +80,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   const [loadingTree, setLoadingTree] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [treeSearch, setTreeSearch] = useState("");
+  const [folderLimits, setFolderLimits] = useState<Record<string, number>>({});
 
   // ================= 2. 上传与生成产物 (Artifacts) 状态 =================
   const [artifacts, setArtifacts] = useState<WorkspaceArtifactItem[]>([]);
@@ -100,12 +101,30 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   const projectPath = activeProject?.localPath || "";
   const projectName = activeProject?.name || "neoCRM-DEV";
 
+  const [isPullingCode, setIsPullingCode] = useState(false);
+
+  const handlePullProjectCode = async () => {
+    if (!projectPath || isPullingCode) return;
+    setIsPullingCode(true);
+    try {
+      if (window.neoApi?.pullProjectCode) {
+        const res = await window.neoApi.pullProjectCode({ targetDir: projectPath, pullType: 'all' });
+        showToast?.('success', res.summary || '代码与元数据拉取成功！');
+        await loadDirTree();
+      }
+    } catch (e: any) {
+      showToast?.('error', `拉取失败: ${e.message}`);
+    } finally {
+      setIsPullingCode(false);
+    }
+  };
+
   // 加载项目目录树
   const loadDirTree = async () => {
     if (!window.neoApi?.projectGetDirTree) return;
     setLoadingTree(true);
     try {
-      const tree = await window.neoApi.projectGetDirTree(projectPath, 4);
+      const tree = await window.neoApi.projectGetDirTree(projectPath, 10);
       if (Array.isArray(tree)) {
         setDirTree(tree);
         // 默认展开首层目录
@@ -393,6 +412,11 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
               getFileIcon(node.name)
             )}
             <span className="truncate">{node.name}</span>
+            {isFolder && node.children && node.children.length > 0 && (
+              <span className="text-[10px] text-slate-400 font-mono font-normal shrink-0">
+                ({node.children.length.toLocaleString()})
+              </span>
+            )}
           </div>
 
           {/* 悬停快捷操作 */}
@@ -437,10 +461,35 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
           </div>
         </div>
 
-        {/* 子节点递归 */}
+        {/* 子节点递归 (带大文件夹分批保护，平滑渲染几千个 Apex 文件) */}
         {isFolder && isExpanded && node.children && (
           <div>
-            {node.children.map((child) => renderTreeNode(child, depth + 1))}
+            {(() => {
+              const limit = folderLimits[node.path] || 100;
+              const isFiltered = Boolean(treeSearch.trim());
+              const visibleChildren = isFiltered ? node.children : node.children.slice(0, limit);
+              const remaining = node.children.length - limit;
+
+              return (
+                <>
+                  {visibleChildren.map((child) => renderTreeNode(child, depth + 1))}
+                  {!isFiltered && remaining > 0 && (
+                    <div style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }} className="py-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFolderLimits((prev) => ({ ...prev, [node.path]: limit + 150 }));
+                        }}
+                        className="text-[11px] text-amber-600 hover:text-amber-700 font-medium cursor-pointer transition-colors"
+                      >
+                        已展示前 ${limit} 个文件，点击加载更多 (+150 / 剩余 ${remaining} 个)...
+                      </button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -542,6 +591,14 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
                 />
               </div>
               <button
+                onClick={handlePullProjectCode}
+                disabled={isPullingCode}
+                title="一键拉取当前已连接 CRM 环境的线上代码与元数据到本地"
+                className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 text-slate-500 hover:text-amber-600 cursor-pointer shrink-0 transition-colors"
+              >
+                <Download className={`w-3.5 h-3.5 ${isPullingCode ? "animate-bounce text-amber-600" : ""}`} />
+              </button>
+              <button
                 onClick={loadDirTree}
                 disabled={loadingTree}
                 title="重新扫描目录树"
@@ -562,7 +619,17 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
                   <span>正在扫描项目文件树...</span>
                 </div>
               ) : dirTree.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-400">目录为空或无法访问</div>
+                <div className="py-12 text-center text-xs text-slate-400 flex flex-col items-center space-y-3">
+                  <span>目录为空或尚未拉取线上代码</span>
+                  <button
+                    onClick={handlePullProjectCode}
+                    disabled={isPullingCode}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium shadow-xs flex items-center space-x-1.5 cursor-pointer transition-colors"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${isPullingCode ? "animate-bounce" : ""}`} />
+                    <span>{isPullingCode ? "正在拉取代码与元数据..." : "一键拉取线上代码与元数据"}</span>
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-0.5">
                   {dirTree.map((node) => renderTreeNode(node, 0))}

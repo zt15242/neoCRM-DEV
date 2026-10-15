@@ -81,7 +81,7 @@ export const LoginCard: React.FC<LoginCardProps> = ({
         </div>
 
         {/* 模式切换 Tab (销售易/Salesforce 显示模式切换) */}
-        {environment.productType !== 'fxiaoke' && (
+        {environment.authMode !== 'client_credentials' && (
         <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200">
           <button
             onClick={() => setActiveTab('embedded')}
@@ -146,6 +146,70 @@ export const LoginCard: React.FC<LoginCardProps> = ({
               <X className="w-3.5 h-3.5" />
               <span>取消授权</span>
             </button>
+          </div>
+        ) : environment.productType === 'salesforce' && environment.authMode === 'client_credentials' ? (
+          <div className="space-y-4">
+            <div className="p-4 bg-cyan-50/70 border border-cyan-200/80 rounded-2xl space-y-2">
+              <div className="flex items-center space-x-2 text-cyan-950 font-bold text-xs">
+                <Cloud className="w-4 h-4 text-cyan-600" />
+                <span>Salesforce 客户端凭据直连 (Client Credentials Flow)</span>
+              </div>
+              <p className="text-xs text-cyan-900 leading-relaxed">
+                全面支持<strong>阿里中国版 (*.sfcrmproducts.cn)</strong> 与<strong>全球版 (*.salesforce.com)</strong>。通过 Connected App 的 Client ID (Consumer Key) 与 Client Secret 直连换取有效 Access Token。
+              </p>
+            </div>
+
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2.5 text-xs font-mono">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">部署形态 / 服务地址:</span>
+                <span className="text-cyan-800 font-bold">{environment.neoBaseURL}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">Client ID (Consumer Key):</span>
+                <span className="text-slate-800">{environment.clientId ? <span className="text-slate-900 font-bold">{environment.clientId}</span> : <span className="text-amber-600 font-sans">未配置</span>}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-sans">Client Secret:</span>
+                <span className="text-slate-800">{environment.clientSecret ? '●●●●●●●●' : <span className="text-amber-600 font-sans">未配置</span>}</span>
+              </div>
+            </div>
+
+            {(!environment.clientId || !environment.clientSecret) ? (
+              <div className="space-y-2.5">
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>当前连接器尚未配置 Salesforce Client ID 与 Secret，请点击下方按钮配置。</span>
+                </div>
+                {onOpenConfigure && (
+                  <button
+                    onClick={onOpenConfigure}
+                    className="w-full py-3 bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white font-semibold text-xs rounded-xl shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    <span>立即配置 Client ID 与 Client Secret</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2.5 pt-1">
+                <button
+                  onClick={onLoginEmbedded}
+                  className="w-full py-3 bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white font-semibold text-xs rounded-xl shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                >
+                  <Cloud className="w-4 h-4" />
+                  <span>发起凭据认证连接 Salesforce 组织</span>
+                  <ArrowRight className="w-4 h-4 ml-1" />
+                </button>
+                {onOpenConfigure && (
+                  <button
+                    onClick={onOpenConfigure}
+                    className="w-full py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs rounded-xl transition-all cursor-pointer"
+                  >
+                    修改连接器凭据配置
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : environment.productType === 'fxiaoke' && environment.authMode !== 'authorization_code' ? (
           <div className="space-y-4">
@@ -217,6 +281,23 @@ export const LoginCard: React.FC<LoginCardProps> = ({
           </div>
         ) : (
           <div>
+            {environment.productType === 'salesforce' && environment.authMode !== 'client_credentials' && (
+              <div className="flex items-center justify-between p-3 bg-cyan-50/80 border border-cyan-200 rounded-xl text-xs mb-3">
+                <div className="flex items-center space-x-2 text-cyan-900 truncate pr-2">
+                  <span className="font-semibold shrink-0">当前回调地址:</span>
+                  <span className="font-mono text-cyan-800 font-bold truncate">{environment.redirectUri || 'http://localhost:1028'}</span>
+                </div>
+                {onOpenConfigure && (
+                  <button
+                    type="button"
+                    onClick={onOpenConfigure}
+                    className="text-cyan-700 hover:text-cyan-900 font-medium text-[11px] underline shrink-0 cursor-pointer"
+                  >
+                    修改回调地址
+                  </button>
+                )}
+              </div>
+            )}
             {activeTab === 'embedded' && (
               <div className="space-y-5">
                 <div className="flex items-start space-x-3 p-4 bg-sky-50/70 border border-sky-200/80 rounded-xl">

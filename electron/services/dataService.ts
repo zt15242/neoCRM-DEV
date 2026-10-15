@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { NeoEnvironment, TokenData, QueryResultData } from '../../shared/types';
+import { FxiaokeService } from './fxiaokeService';
+import { SalesforceService } from './salesforceService';
 
 /**
  * 销售易标准实体主名称字段映射表
@@ -20,6 +22,8 @@ export const STANDARD_ENTITY_NAME_FIELD_MAP: Record<string, string> = {
 };
 
 export class DataService {
+  private fxiaokeService = new FxiaokeService();
+  private salesforceService = new SalesforceService();
   // 内存缓存: key 为 `${entityApiKey}_${id}` -> name
   private nameCache = new Map<string, string>();
   private busiTypeCache = new Map<string, Array<{ id: string | number; apiKey: string; label: string; active?: boolean; custom?: boolean }>>();
@@ -392,6 +396,22 @@ export class DataService {
     tokenData: TokenData,
     rawSql: string
   ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
+    if (env.productType === 'fxiaoke') {
+      try {
+        const data = await this.fxiaokeService.queryData(env, tokenData, { sql: rawSql });
+        return { success: true, data };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+    if (env.productType === 'salesforce') {
+      try {
+        const data = await this.salesforceService.executeQuery(env, tokenData, rawSql);
+        return { success: true, data };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
     const { sql, rejectReason } = this.sanitizeAndRewriteXoql(rawSql);
     if (rejectReason) {
       return { success: false, error: rejectReason };

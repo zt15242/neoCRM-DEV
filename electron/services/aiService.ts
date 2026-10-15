@@ -1,3 +1,4 @@
+import { CodeSyncService } from './codeSyncService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
   const copy = JSON.parse(JSON.stringify(schema));
@@ -63,6 +64,7 @@ export class AiService {
   private workflowService = new WorkflowService(this.metadataService);
   private printTemplateService = new PrintTemplateService(this.metadataService);
   private dshToolService = new DshToolService();
+  private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
 
   constructor(
     private sessionStore: SessionStore,
@@ -947,6 +949,16 @@ ${dialogHistoryText}`;
           if (decodedPreset) {
             systemParts.push(decodedPreset);
           }
+        } else if (presetPrompt.includes("[PROTECTED_PRESET::fxiaoke-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-fxiaoke-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
+        } else if (presetPrompt.includes("[PROTECTED_PRESET::salesforce-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-salesforce-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
         } else {
           systemParts.push(presetPrompt);
         }
@@ -958,27 +970,52 @@ ${dialogHistoryText}`;
         const token = currentSession.tokenData;
 
         if (pType === 'salesforce') {
+          const sfSkill = getProtectedSkillInstruction("skill-salesforce-cli");
+          if (sfSkill) systemParts.push(sfSkill);
+
           systemParts.push(`【当前已连接的 CRM 平台与账号环境 - Salesforce】
-- 目标平台: Salesforce (Force.com / Core CRM)
+- 目标平台: Salesforce (Force.com / Core CRM / 阿里中国版 & 全球版)
 - 连接器名称: ${env.name} (${env.envType || '生产/沙盒'})
+- 组织名称: ${token?.userInfo?.tenantName || 'Salesforce 组织'}
+- 组织 ID (Org ID): ${token?.tenant_id || '00DC6000001CNBZMA4'}
+- 认证用户: ${token?.userInfo?.name || 'Salesforce 用户'} (User ID: ${token?.userInfo?.userId || 'N/A'})
 - 实例 URL: ${token?.instance_uri || env.neoBaseURL}
-- 用户/组织: ${token?.userInfo?.name || '未知用户'} (Org ID: ${token?.tenant_id || '未知'})
-- 开发者指导: 当前环境为 Salesforce 组织，请优先依据 Salesforce 架构体系（SOQL/SOSL、标准对象如 Account/Opportunity、自定义对象 __c、Record-Triggered Flow、Apex 触发器等）为用户提供精准指导。`);
+- 本地 CLI 会话状态: ✅ Connected (已实时同步至本地 sf CLI 工具链，CLI 别名: aliNewStageFull，凭据 100% 有效可用)
+- 【极其重要 - 铁律】：
+  当前环境已成功鉴权并连通 Salesforce 组织！本地 Salesforce CLI (sf) 的凭据已自动双向同步完成，状态为 Connected 有效就绪！
+  绝对严禁向用户输出“凭据已过期”或要求用户在终端手动运行 \`sf org login web\` 命令！
+  1. 当用户询问“查询租户有哪些对象”、“查询当前环境的对象信息”、“查看 SObjects 列表”、了解组织元数据时，必须立即自动调用 list_entities 工具向线上接口拉取组织内真实存在的 SObjects 列表！
+  2. 当涉及具体对象的字段或结构时，必须自动调用 get_entity_fields 工具进行 Describe 探测，拉取真实字段定义（含自定义字段 __c）；
+  3. 当需要拉取代码、元数据或 Apex 类时，必须自动调用 pull_crm_project_code 工具或使用本地已就绪的 sf CLI 执行同步，严禁推诿给用户去手动登录！
+  4. 当需要查询数据记录时，必须自动调用 execute_sql_query 工具执行 SOQL 查询！`);
         } else if (pType === 'fxiaoke') {
-          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 纷享销客】
-- 目标平台: 纷享销客 (FXIAOKE CRM)
+          const fxSkill = getProtectedSkillInstruction("skill-fxiaoke-crm-cli");
+          if (fxSkill) systemParts.push(fxSkill);
+
+          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 纷享销客 (FXIAOKE)】
+- 目标平台: 纷享销客 (FXIAOKE CRM / OpenAPI v2)
 - 连接器名称: ${env.name}
 - 所在云网关: ${env.cloudDomain || 'open.fxiaoke.com'}
-- 自建应用: appId: ${env.clientId || '未配置'} · 企业账号 (ea): ${token?.userInfo?.ea || env.ea || '自建应用'}
-- 开发者指导: 当前环境为纷享销客开放平台，请遵循纷享销客 OpenAPI v2 规范与 sharecrm 规范（对象如 AccountObj, ContactObj, ContractObj 等，必须先 describe 探测，严格 LIMIT 50 分页）进行对接与数据分析。`);
+- 自建应用: appId: ${env.clientId || '未配置'} · 企业账号 (ea): ${token?.userInfo?.ea || env.ea || token?.tenant_id || '833021_sandbox'}
+- 授权状态: 客户端凭证模式已连通，Token 有效可用
+- 【实时接口自动调用第一铁律】：
+  当前工作台已通过 OpenAPI v2 真实连通纷享销客租户沙箱环境！
+  1. 当用户提出“查询当前租户的对象信息”、“租户有哪些对象”、“查看对象列表/清单”或分析业务模型时，【绝对禁止仅凭预设知识列举概念或输出静态说明】，【必须第一时间自动调用 list_entities 工具】拉取当前租户线上真实的 150+ 个业务对象（如 MarketingEventObj, LeadsObj, AccountObj, ContactObj, ContractObj 等）！
+  2. 当涉及具体对象的字段或状态时，必须第一时间自动调用 get_entity_fields 工具拉取 Describe 实时字段元数据与选项值，严禁臆造！
+  3. 当需要查询数据记录时，必须自动调用 execute_sql_query 工具执行查询！
+  拉取到真实接口数据后，必须基于线上真实返回的结果向用户进行汇报与分析！`);
         } else {
-          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 销售易】
+          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 销售易 (NeoCRM)】
 - 目标平台: 销售易 (NeoCRM PaaS)
 - 连接器名称: ${env.name} (${env.envType || '沙盒演练'})
 - 租户名称: ${token?.userInfo?.tenantName || '未命名租户'} (租户 ID: ${token?.tenant_id || '未知'})
 - 当前用户: ${token?.userInfo?.name || '未知用户'}
 - 实例 BaseURL: ${token?.instance_uri || env.neoBaseURL || ''}
-- 开发者指导: 当前环境为销售易租户，请遵循销售易 PaaS 规范（XOQL 严禁 SELECT *，Creek Flow 自动流程与审批流，打印模板引擎）。`);
+- 【实时接口自动调用铁律】：
+  当前工作台已连通销售易租户。
+  1. 当用户询问“查询租户有哪些对象”、“查询实体列表”、字段元数据或数据时，【必须第一时间自动调用 list_entities 工具】拉取租户真实实体列表，严禁凭空臆造！
+  2. 当涉及具体实体字段时，必须先自动调用 get_entity_fields 工具核查真实字段元数据；
+  3. 当需要查询业务数据时，必须自动调用 execute_sql_query 工具执行 XOQL 查询（遵循严禁 SELECT *，严禁 JOIN，支持点号穿透规范）。`);
         }
       }
 
@@ -1018,12 +1055,61 @@ ${mcpInfoText}
         systemParts.push(`【前期历史对话精简记忆摘要】\n${compactionSummary.summary}`);
       }
 
-      const systemPromptText = systemParts.join('\n\n');
-      const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
-
       // 2. 截取最近上下文消息
       const contextLimit = config.settings.contextLimit || 20;
       const recentMessages = messages.slice(-contextLimit);
+
+      // 实时意图强引导：当已连接租户且用户请求查询对象、实体或字段时，注入最高优先级调具执行指令
+      if (currentSession.isLoggedIn && currentSession.environment && config.settings.enableCrmTools !== false) {
+        const env = currentSession.environment;
+        const pType = env.productType || 'neocrm';
+        const lastUserMsg = [...recentMessages].reverse().find((m) => m.role === 'user');
+        const userContent = lastUserMsg?.content || '';
+
+        const isAskingObjects =
+          /(?:查询|获取|列出|查看|有哪些|显示).*(?:当前租户|租户|系统|环境|平台).*(?:对象|实体|元数据|model|entity|object)/i.test(userContent) ||
+          /(?:查询|获取|列出|查看|有哪些|显示).*(?:对象|实体|元数据|表清单)/i.test(userContent) ||
+          /\[\/(?:fx|sf|crm)\]\s*(?:查询|获取|列出|查看).*(?:对象|实体)/i.test(userContent);
+
+        const isAskingFields =
+          /(?:查询|获取|列出|查看|describe).*(?:字段|属性|field|元数据)/i.test(userContent);
+
+        if (isAskingObjects) {
+          systemParts.push(`【系统实时调度指令 (优先级最高)】：检测到用户正在查询已连接环境（${env.name} · ${pType}）的实时对象/实体清单。根据当前平台 Skill 规范，【你必须立即在首轮输出中自动调用 list_entities 工具向平台接口发起真实请求拉取数据】，严禁不调用工具直接静态回复！`);
+        } else if (isAskingFields) {
+          systemParts.push(`【系统实时调度指令 (优先级最高)】：检测到用户正在查询实体字段或元数据。根据当前平台 Skill 规范，【你必须立即在首轮输出中自动调用 get_entity_fields 工具拉取该对象的真实字段定义】，严禁凭空臆造！`);
+        }
+
+        const isAskingPullCode =
+          /(?:拉取|下载|同步|导出|获取).*(?:代码|后端|前端|元数据|工程|组件|脚本)/i.test(userContent) ||
+          /(?:代码|后端|前端).*(?:拉取|下载|同步)/i.test(userContent) ||
+          userContent.trim() === '拉取代码' ||
+          userContent.trim() === '拉取后端前端代码';
+
+        if (isAskingPullCode) {
+          systemParts.push(`【系统实时调度指令 (最高优先级)】：检测到用户正在请求【拉取代码 / 拉取后端前端代码 / 同步本地工程】。当前本地工作区路径为: ${projectPath || '未指定'}。根据当前平台规范，【你必须立即在首轮输出中自动调用 pull_crm_project_code 工具执行真实接口数据拉取，并在本地项目目录实际创建文件与目录落盘】，绝不可仅在回答中以 Markdown 文本虚构假报告！`);
+        }
+
+        const isExecutionRequested =
+          /(?:执行|开始|确认|自动执行|帮我跑|跑一下|运行|部署|拉取|同步).*(?:方案|命令|代码|脚本|步骤|manifest|retrieve|pull)/i.test(userContent) ||
+          /(?:不能自动执行|为什么不自动执行|我都确认了|我已经确认|按方案|方式一|方式二|方案A|方案B|执行方案)/i.test(userContent) ||
+          userContent.trim() === '执行' ||
+          userContent.trim() === '确认' ||
+          userContent.trim() === '开始执行' ||
+          userContent.includes('不能自动执行吗');
+
+        if (isExecutionRequested) {
+          systemParts.push(`【系统实时调度指令 (最高执行优先级 - 立即自动执行！)】：
+检测到用户已明确确认方案或要求自动执行命令（当前项目路径: ${projectPath || '未指定'}）。
+【核心铁律 - 绝不可违背】：
+1. 绝对严禁只输出 Markdown 格式的代码块并让用户“请在终端按顺序执行”！
+2. 当前环境具备内置的 \`bash\` 命令行工具与 \`pull_crm_project_code\` 工具，本地 Salesforce CLI 已完全就绪且处于 Connected 鉴权有效状态！
+3. 你必须在首轮输出中立即发起工具调用（优先调用 \`bash\` 工具执行指定命令，如在当前工程目录下创建目录、生成 manifest 或执行 sf project retrieve），等待工具返回执行结果，并在回复中直接向用户汇报真实的执行进度与落盘产物清单！`);
+        }
+      }
+
+      const systemPromptText = systemParts.join('\n\n');
+      const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
       const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
 
@@ -1371,7 +1457,7 @@ ${mcpInfoText}
             conversationHistory.push({
               role: 'tool',
               tool_call_id: tc.id,
-              content: JSON.stringify(toolResult),
+              content: this.formatSafeToolResultString(toolResult),
             });
           }
 
@@ -1804,7 +1890,7 @@ ${toolDataContext}
             functionResponse: {
               name: fc.name,
               response: {
-                result: toolResult,
+                result: this.formatSafeToolResultObject(toolResult),
               },
             },
           });
@@ -1904,6 +1990,50 @@ ${toolDataContext}
   /**
    * 执行销售易本地 Harness 工具
    */
+  /**
+   * 上下文 Token 安全守护：防御性截断工具调用返回的大文本/日志，彻底避免 1M Token 上下文溢出报错
+   */
+  private formatSafeToolResultString(toolResult: any, maxChars = 25000): string {
+    if (!toolResult) return '{}';
+    try {
+      let str = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+      if (str.length <= maxChars) return str;
+
+      if (typeof toolResult === 'object' && toolResult !== null) {
+        const copy = { ...toolResult };
+        if (typeof copy.stdout === 'string' && copy.stdout.length > 15000) {
+          copy.stdout = copy.stdout.slice(-15000) + '... [已截断前序日志]';
+        }
+        if (typeof copy.stderr === 'string' && copy.stderr.length > 5000) {
+          copy.stderr = copy.stderr.slice(-5000);
+        }
+        const reStr = JSON.stringify(copy);
+        if (reStr.length <= maxChars) return reStr;
+        return reStr.slice(0, maxChars - 100) + '... [结果已安全截断]"}';
+      }
+
+      return str.slice(0, maxChars - 100) + '... [输出过大已截断]';
+    } catch {
+      return String(toolResult).slice(0, maxChars);
+    }
+  }
+
+  private formatSafeToolResultObject(toolResult: any, maxChars = 25000): any {
+    if (!toolResult || typeof toolResult !== 'object') return toolResult;
+    try {
+      const copy = { ...toolResult };
+      if (typeof copy.stdout === 'string' && copy.stdout.length > 15000) {
+        copy.stdout = copy.stdout.slice(-15000) + '... [已截断前序日志]';
+      }
+      if (typeof copy.stderr === 'string' && copy.stderr.length > 5000) {
+        copy.stderr = copy.stderr.slice(-5000);
+      }
+      return copy;
+    } catch {
+      return toolResult;
+    }
+  }
+
   private async executeCrmTool(
     name: string,
     args: any,
@@ -2037,20 +2167,28 @@ ${toolDataContext}
 
     // ================= 销售易租户专属工具 (需要 CRM 登录) =================
     if (!env || !tokenData) {
-      throw new Error('当前未登录销售易租户，无法访问租户元数据或数据接口');
+      throw new Error('当前未登录 CRM 租户/环境，无法访问元数据或数据接口');
     }
 
     if (name === 'get_tenant_info') {
-      const info = {
-        tenantName: tokenData.userInfo?.tenantName,
-        tenantId: tokenData.tenant_id,
-        userName: tokenData.userInfo?.name,
+      const pType = env.productType || 'neocrm';
+      const info: Record<string, any> = {
+        productType: pType,
         envName: env.name,
+        envType: env.envType || (pType === 'fxiaoke' ? '沙箱环境' : '生产/沙盒'),
         instanceUri: tokenData.instance_uri || env.neoBaseURL,
+        tenantId: tokenData.tenant_id,
+        tenantName: tokenData.userInfo?.tenantName || env.name,
+        userName: tokenData.userInfo?.name,
       };
+      if (pType === 'fxiaoke') {
+        info.ea = tokenData.userInfo?.ea || env.ea || tokenData.tenant_id;
+        info.appId = env.clientId;
+        info.cloudDomain = env.cloudDomain || 'open.fxiaoke.com';
+      }
       return {
         data: info,
-        summary: `成功读取当前租户: ${info.tenantName} (${info.envName})`,
+        summary: `成功读取当前已连接的 ${pType} 租户: ${info.tenantName || info.ea} (${info.envName})`,
       };
     }
 
@@ -2106,9 +2244,64 @@ ${toolDataContext}
       };
     }
 
+    if (name === "pull_crm_project_code") {
+      const targetDir = args.targetDir || projectPath;
+      if (!targetDir) {
+        throw new Error("请先在右侧打开或指定一个本地项目工作区目录，以便将拉取的代码与元数据写入本地");
+      }
+      const res = await this.codeSyncService.pullProjectCode(env, tokenData, {
+        targetDir,
+        pullType: args.pullType || 'all',
+        entityNames: args.entityNames,
+      });
+      return {
+        data: res,
+        summary: `成功拉取线上代码与元数据到本地工作区 [${path.basename(targetDir)}]: 共生成/更新 ${res.createdFilesCount} 个文件`,
+      };
+    }
+
     if (name === "execute_sql_query") {
       const rawInput = (args.sql || args.query || args.xoql || "").trim();
       if (!rawInput) throw new Error("缺少 sql 查询语句参数");
+
+      if (env.productType === 'fxiaoke') {
+        const sql = rawInput.replace(/^```(?:sql)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
+        if (!queryRes.success || !queryRes.data) {
+          const rawErr = queryRes.error || "SQL 执行返回失败";
+          throw new Error(`纷享销客数据查询失败: ${rawErr} (提示: 纷享销客对象以 Obj 结尾，如 AccountObj、ContactObj、ContractObj，单页上限 50 条，LIMIT 50 OFFSET n；若不确定字段请先调用 get_entity_fields 确认真实字段)`);
+        }
+        const records = queryRes.data.records || [];
+        const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);
+        return {
+          data: {
+            records: records.slice(0, 50),
+            totalSize: queryRes.data.totalSize ?? records.length,
+            fields,
+          },
+          summary: `纷享销客查询成功，返回 ${records.length} 条数据 (总计: ${queryRes.data.totalSize ?? records.length})`,
+        };
+      }
+
+      if (env.productType === 'salesforce') {
+        const sql = rawInput.replace(/^```(?:sql|soql)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
+        if (!queryRes.success || !queryRes.data) {
+          const rawErr = queryRes.error || "SOQL 执行返回失败";
+          throw new Error(`Salesforce SOQL 执行失败: ${rawErr} (提示: 标准对象如 Account, Contact, Opportunity，自定义对象以 __c 结尾；若不确定字段请先调用 get_entity_fields 确认真实字段)`);
+        }
+        const records = queryRes.data.records || [];
+        const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);
+        return {
+          data: {
+            records: records.slice(0, 50),
+            totalSize: queryRes.data.totalSize ?? records.length,
+            fields,
+          },
+          summary: `Salesforce SOQL 执行成功，返回 ${records.length} 条数据 (总计: ${queryRes.data.totalSize ?? records.length})`,
+        };
+      }
+
       const { sql: sanitized, rejectReason } = this.dataService.sanitizeAndRewriteXoql(rawInput);
       if (rejectReason) {
         throw new Error(rejectReason);

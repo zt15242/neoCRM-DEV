@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -57,6 +58,7 @@ export class SessionStore {
       instanceUri: tokenData.instance_uri || env.neoBaseURL,
       lastLoginAt: Date.now(),
       tokenData,
+      environment: env,
     };
 
     const history = data.history.filter((h) => h.id !== accountId);
@@ -65,6 +67,13 @@ export class SessionStore {
     data.current = session;
     data.history = history.slice(0, 20); // 最多保留20条历史
     this.writeStorage(data);
+
+    // 自动联动同步本地 CLI 工具链凭据
+    if (env.productType === 'salesforce') {
+      this.syncToSalesforceCli(env, tokenData);
+    } else {
+      this.syncToNeoCli();
+    }
 
     return session;
   }
@@ -84,7 +93,7 @@ export class SessionStore {
     // 重新组合当前会话
     const session: SessionState = {
       isLoggedIn: true,
-      environment: {
+      environment: target.environment || {
         id: target.environmentId,
         name: target.environmentName,
         isPreset: !target.environmentId.startsWith('custom_'),
@@ -159,6 +168,54 @@ export class SessionStore {
    * 将当前桌面端登录凭证同步到 CLI 目录 (.neo-cli)
    * 支持指定工作区目录，或同步到用户主目录 (~/.neo-cli)
    */
+  /**
+   * 自动将 Salesforce 最新登录会话凭据无缝同步至本地 Salesforce CLI (sf)
+   */
+  public syncToSalesforceCli(env: NeoEnvironment, tokenData: TokenData): { success: boolean; message: string } {
+    if (env.productType !== 'salesforce' || !tokenData.refresh_token || !env.clientId) {
+      return { success: false, message: '无需同步或缺少 Salesforce 凭据' };
+    }
+    try {
+      const instanceHost = new URL(tokenData.instance_uri || env.neoBaseURL).host;
+      const clientSecret = env.clientSecret || '';
+      const sfdxAuthUrl = `force://${env.clientId}:${clientSecret}:${tokenData.refresh_token}@${instanceHost}`;
+      
+      const tmpFile = path.join(os.tmpdir(), `sfdx_auth_${Date.now()}.txt`);
+      fs.writeFileSync(tmpFile, sfdxAuthUrl, 'utf-8');
+
+      // 提取现有别名或使用默认别名
+      let alias = 'aliNewStageFull';
+      const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
+      if (fs.existsSync(aliasJsonPath)) {
+        try {
+          const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
+          const found = Object.entries(aliasData.orgs || {}).find(([a, u]) => 
+            u === tokenData.userInfo?.userId || 
+            u === tokenData.userInfo?.name || 
+            String(u).includes('stagefull') ||
+            String(u).includes('olympus')
+          );
+          if (found) alias = found[0];
+        } catch {}
+      }
+
+      try {
+        execSync(`sf org login sfdx-url -f "${tmpFile}" --alias ${alias} --set-default`, {
+          encoding: 'utf-8',
+          stdio: 'ignore',
+        });
+      } catch (err: any) {
+        console.warn('sf org login sfdx-url 同步提示:', err.message);
+      } finally {
+        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+      }
+
+      return { success: true, message: `已自动同步凭据到本地 Salesforce CLI (别名: ${alias})` };
+    } catch (e: any) {
+      return { success: false, message: `同步 Salesforce CLI 失败: ${e.message}` };
+    }
+  }
+
   public syncToNeoCli(targetDirPath?: string): CliSyncResult {
     const current = this.getCurrentSession();
     if (!current.isLoggedIn || !current.tokenData || !current.environment) {

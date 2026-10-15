@@ -24,8 +24,11 @@ import { NeoEnvironment, TestConnectionResult, CrmProductType } from '../../shar
 interface EnvironmentSelectorProps {
   environments: NeoEnvironment[];
   selectedEnvId: string;
+  activeSessionEnvId?: string;
+  isLoggedIn?: boolean;
   onSelect: (envId: string) => void;
-  onAddCustom: () => void;
+  onOpenDetail: (envId: string) => void;
+  onAddCustom: (template?: Partial<NeoEnvironment>) => void;
   onEditCustom: (env: NeoEnvironment) => void;
   onDeleteCustom: (envId: string) => void;
 }
@@ -33,7 +36,10 @@ interface EnvironmentSelectorProps {
 export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
   environments,
   selectedEnvId,
+  activeSessionEnvId,
+  isLoggedIn,
   onSelect,
+  onOpenDetail,
   onAddCustom,
   onEditCustom,
   onDeleteCustom,
@@ -157,7 +163,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
         </div>
 
         <button
-          onClick={onAddCustom}
+          onClick={() => onAddCustom()}
           className="flex items-center space-x-1.5 text-xs text-white font-semibold px-4 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 transition-all shadow-xs cursor-pointer shrink-0 self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
@@ -227,7 +233,50 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
         </button>
       </div>
 
-      {/* 3. 连接器卡片网格布局 */}
+      {/* 3. 连接器卡片网格布局与空状态 */}
+      {filteredEnvironments.length === 0 ? (
+        <div className="py-12 px-6 bg-slate-50/70 border border-dashed border-slate-200 rounded-3xl text-center space-y-4">
+          <div className="w-12 h-12 bg-white rounded-2xl shadow-xs border border-slate-200 mx-auto flex items-center justify-center text-slate-400">
+            <Server className="w-6 h-6" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-800">暂无配置的 CRM 连接器</h3>
+            <p className="text-xs text-slate-400 max-w-md mx-auto">
+              您可以点击右上角【+ 新建 CRM 连接器】自由配置环境，或点击下方官方模板卡片快速一键初始化
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 max-w-3xl mx-auto pt-2">
+            <button
+              onClick={() => onAddCustom({ productType: 'neocrm', name: '销售易 - 专属沙盒环境', neoBaseURL: 'https://crm-sandbox.xiaoshouyi.com' })}
+              className="p-3 bg-white hover:bg-sky-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
+            >
+              <Layers className="w-4 h-4 text-sky-600 shrink-0" />
+              <span className="truncate">+ 销售易 NeoCRM</span>
+            </button>
+            <button
+              onClick={() => onAddCustom({ productType: 'salesforce', name: 'Salesforce 阿里中国 - 沙盒环境', neoBaseURL: 'https://test.sfcrmproducts.cn' })}
+              className="p-3 bg-white hover:bg-cyan-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
+            >
+              <Cloud className="w-4 h-4 text-cyan-600 shrink-0" />
+              <span className="truncate">+ Salesforce 阿里中国</span>
+            </button>
+            <button
+              onClick={() => onAddCustom({ productType: 'salesforce', name: 'Salesforce 全球版 - 沙盒环境', neoBaseURL: 'https://test.salesforce.com' })}
+              className="p-3 bg-white hover:bg-cyan-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
+            >
+              <Cloud className="w-4 h-4 text-cyan-600 shrink-0" />
+              <span className="truncate">+ Salesforce 全球版</span>
+            </button>
+            <button
+              onClick={() => onAddCustom({ productType: 'fxiaoke', name: '纷享销客 - 开放平台连接器', neoBaseURL: 'https://open.fxiaoke.com' })}
+              className="p-3 bg-white hover:bg-orange-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
+            >
+              <Flame className="w-4 h-4 text-orange-600 shrink-0" />
+              <span className="truncate">+ 纷享销客 OpenAPI</span>
+            </button>
+          </div>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
         {filteredEnvironments.map((env) => {
           const isSelected = env.id === selectedEnvId;
@@ -240,7 +289,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
           return (
             <div
               key={env.id}
-              onClick={() => onSelect(env.id)}
+              onClick={() => onOpenDetail(env.id)}
               className={`group relative p-4 rounded-2xl border text-left cursor-pointer transition-all duration-200 select-none flex flex-col justify-between ${
                 isSelected
                   ? 'bg-gradient-to-br from-sky-50/80 via-white to-slate-50 border-sky-400 shadow-md ring-2 ring-sky-400/40'
@@ -280,10 +329,24 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                       </span>
                     )}
 
-                    {env.isPreset && (
-                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono">
-                        官方预置
-                      </span>
+
+
+                    {/* 针对 Salesforce 连接器：显式指示凭证配置状态与区域 */}
+                    {env.productType === 'salesforce' && (
+                      <>
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-cyan-50 text-cyan-700 border border-cyan-200 font-mono">
+                          {env.neoBaseURL.includes('sfcrmproducts.cn') ? '阿里中国' : '全球版'}
+                        </span>
+                        {env.clientId && (env.clientSecret || env.authMode === 'authorization_code') ? (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono font-medium">
+                            凭证已配
+                          </span>
+                        ) : (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono font-medium">
+                            待配凭据
+                          </span>
+                        )}
+                      </>
                     )}
 
                     {/* 针对纷享销客连接器：显式指示凭证配置状态 */}
@@ -321,8 +384,45 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                   </div>
                 </div>
 
-                {/* 实例服务地址 (针对纷享销客展示云域名与凭证概要) */}
-                {env.productType === 'fxiaoke' ? (
+                {/* 实例服务地址 (针对 Salesforce 与 纷享销客定制) */}
+                {env.productType === 'salesforce' ? (
+                  <div className="pt-1 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-cyan-50/50 p-2 rounded-xl border border-cyan-100">
+                      <div className="truncate pr-2">
+                        <span className="text-cyan-800 font-semibold">{env.neoBaseURL}</span>
+                        {env.clientId ? (
+                          <span className="ml-1.5 text-slate-600">· Key: {env.clientId.slice(0, 8)}...</span>
+                        ) : (
+                          <span className="ml-1.5 text-amber-600 italic">· 待配置 Consumer Key</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => handleCopyUrl(e, env.neoBaseURL, env.id)}
+                        title="复制服务地址"
+                        className="p-1 hover:bg-white rounded text-slate-400 hover:text-slate-700 shrink-0 transition-colors cursor-pointer"
+                      >
+                        {copiedId === env.id ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    {!env.clientId && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditCustom(env);
+                        }}
+                        className="w-full py-1.5 px-2 bg-cyan-50/80 hover:bg-cyan-100 text-cyan-800 rounded-xl text-xs font-medium flex items-center justify-center space-x-1.5 border border-cyan-200/60 transition-colors cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3 text-cyan-600" />
+                        <span>点击配置 Consumer Key 与 Secret</span>
+                      </button>
+                    )}
+                  </div>
+                ) : env.productType === 'fxiaoke' ? (
                   <div className="pt-1 space-y-1.5">
                     <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-orange-50/50 p-2 rounded-xl border border-orange-100">
                       <div className="truncate pr-2">
@@ -400,26 +500,17 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                   </span>
                 </button>
 
-                {/* 切换按键 */}
-                {isSelected ? (
-                  <div className="flex items-center space-x-1 text-emerald-600 font-semibold text-[11px]">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>已连接此环境</span>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => onSelect(env.id)}
-                    className="flex items-center space-x-1 text-[11px] font-semibold text-slate-600 hover:text-sky-600 group-hover:translate-x-0.5 transition-all cursor-pointer"
-                  >
-                    <span>切换连接</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </button>
-                )}
+                {/* 查看详情与连接 */}
+                <div className="flex items-center space-x-1 text-[11px] font-semibold text-slate-600 group-hover:text-sky-600 group-hover:translate-x-0.5 transition-all">
+                  <span>查看详情 / 登录连接</span>
+                  <ArrowRight className="w-3 h-3" />
+                </div>
               </div>
             </div>
           );
         })}
       </div>
+      )}
     </div>
   );
 };

@@ -1,3 +1,4 @@
+import { CodeSyncService } from './services/codeSyncService';
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,7 @@ const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
 const projectService = new ProjectService();
 const dshToolService = new DshToolService();
+const codeSyncService = new CodeSyncService(metadataService, dataService);
 
 function createWindow() {
   win = new BrowserWindow({
@@ -128,6 +130,7 @@ ipcMain.handle('window:close', () => win?.close());
 
 // 环境管理
 ipcMain.handle('env:getAll', async () => envService.getAllEnvironments());
+ipcMain.handle('env:getTemplates', async () => envService.getPresetTemplates());
 ipcMain.handle('env:saveCustom', async (_, env) => envService.saveCustomEnvironment(env));
 ipcMain.handle('env:deleteCustom', async (_, id: string) => envService.deleteCustomEnvironment(id));
 ipcMain.handle('env:testConnectivity', async (_, url: string) => envService.testConnectivity(url));
@@ -161,17 +164,61 @@ ipcMain.handle('auth:cancelLogin', async () => {
 
 ipcMain.handle('auth:refreshToken', async () => {
   const current = sessionStore.getCurrentSession();
-  if (!current.isLoggedIn || !current.environment || !current.tokenData?.refresh_token) {
-    throw new Error('当前未登录或无 refresh_token 凭据');
+  if (!current.isLoggedIn || !current.environment) {
+    throw new Error('当前未登录');
   }
-  const tokenData = await authService.refreshToken(current.environment, current.tokenData.refresh_token);
-  if (current.tokenData.cookieString && !tokenData.cookieString) {
+
+  // 补齐完整环境凭据（防止历史残留环境对象缺失 permanentCode 等私有凭证）
+  let fullEnv = current.environment;
+  if (!fullEnv.clientId || (!fullEnv.permanentCode && fullEnv.productType === 'fxiaoke')) {
+    const customList = envService.getCustomEnvironments();
+    const found = customList.find((e) => e.id === fullEnv.id) || envService.getEnvironments().find((e) => e.id === fullEnv.id);
+    if (found) {
+      fullEnv = { ...found, ...fullEnv };
+    }
+  }
+
+  const tokenData = await authService.renewToken(fullEnv, current.tokenData);
+  if (current.tokenData?.cookieString && !tokenData.cookieString) {
     tokenData.cookieString = current.tokenData.cookieString;
     tokenData.cookies = current.tokenData.cookies;
     tokenData.cookieSavedAt = current.tokenData.cookieSavedAt;
   }
-  return sessionStore.saveSession(current.environment, tokenData);
+  const saved = sessionStore.saveSession(fullEnv, tokenData);
+  win?.webContents.send('session:updated', saved);
+  return saved;
 });
+
+// 后台定时自动续期引擎 (每 30 秒执行一次过期预检)
+setInterval(async () => {
+  try {
+    const current = sessionStore.getCurrentSession();
+    if (!current.isLoggedIn || !current.environment || !current.tokenData?.expiresAt) {
+      return;
+    }
+    const remainingMs = current.tokenData.expiresAt - Date.now();
+    // 当 Token 剩余有效期小于 10 分钟或已过期时，自动静默续期
+    if (remainingMs <= 10 * 60 * 1000) {
+      let fullEnv = current.environment;
+      if (!fullEnv.clientId || (!fullEnv.permanentCode && fullEnv.productType === 'fxiaoke')) {
+        const customList = envService.getCustomEnvironments();
+        const found = customList.find((e) => e.id === fullEnv.id) || envService.getEnvironments().find((e) => e.id === fullEnv.id);
+        if (found) fullEnv = { ...found, ...fullEnv };
+      }
+      const tokenData = await authService.renewToken(fullEnv, current.tokenData);
+      if (current.tokenData.cookieString && !tokenData.cookieString) {
+        tokenData.cookieString = current.tokenData.cookieString;
+        tokenData.cookies = current.tokenData.cookies;
+        tokenData.cookieSavedAt = current.tokenData.cookieSavedAt;
+      }
+      const saved = sessionStore.saveSession(fullEnv, tokenData);
+      win?.webContents.send('session:updated', saved);
+      console.log(`[自动续期] 租户 ${fullEnv.name} Token 自动续期成功，新有效期至: ${new Date(tokenData.expiresAt).toLocaleTimeString()}`);
+    }
+  } catch (err: any) {
+    console.warn('[自动续期] 静默续期异常:', err.message);
+  }
+}, 30000);
 
 ipcMain.handle("auth:logout", async () => {
   authService.cancelActiveAuth();
@@ -199,6 +246,21 @@ ipcMain.handle('session:switchAccount', async (_, accountId: string) => sessionS
 ipcMain.handle('session:deleteAccount', async (_, accountId: string) => sessionStore.deleteAccountRecord(accountId));
 
 // CLI 凭据同步与调试工具
+// 线上代码与元数据本地同步
+ipcMain.handle('code:pullProjectCode', async (_, options: { targetDir: string; pullType?: 'all' | 'backend' | 'frontend' | 'metadata'; entityNames?: string[] }) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error('请先连接 CRM 租户/环境');
+  }
+  let fullEnv = current.environment;
+  if (!fullEnv.clientId || (!fullEnv.permanentCode && fullEnv.productType === 'fxiaoke')) {
+    const customList = envService.getCustomEnvironments();
+    const found = customList.find((e) => e.id === fullEnv.id) || envService.getEnvironments().find((e) => e.id === fullEnv.id);
+    if (found) fullEnv = { ...found, ...fullEnv };
+  }
+  return await codeSyncService.pullProjectCode(fullEnv, current.tokenData, options);
+});
+
 ipcMain.handle('cli:sync', async (_, targetDirPath?: string) => sessionStore.syncToNeoCli(targetDirPath));
 ipcMain.handle('dialog:selectFolder', async () => {
   if (!win) return null;

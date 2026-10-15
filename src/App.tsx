@@ -3,6 +3,7 @@ import { AppSidebar, AppNavTab } from './components/AppSidebar';
 import { EnvironmentSelector } from './components/EnvironmentSelector';
 import { LoginCard } from './components/LoginCard';
 import { SessionDashboard } from './components/SessionDashboard';
+import { ConnectorDetailView } from './components/ConnectorDetailView';
 import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
 import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
@@ -50,6 +51,7 @@ export const App: React.FC = () => {
 
   // 页面导航 Tab
   const [activeTab, setActiveTab] = useState<AppNavTab>('dashboard');
+  const [activeDetailEnvId, setActiveDetailEnvId] = useState<string | null>(null);
   const [dataTargetEntity, setDataTargetEntity] = useState<string>('account');
 
   // Codex 风格全局会话与智能体状态
@@ -160,6 +162,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadInitialData();
+    if (window.neoApi?.onSessionUpdated) {
+      const unsub = window.neoApi.onSessionUpdated((updatedSession) => {
+        setSession(updatedSession);
+      });
+      return unsub;
+    }
   }, []);
 
   const currentSelectedEnv =
@@ -532,16 +540,55 @@ export const App: React.FC = () => {
             </button>
           </div>
         )}
-        {/* Tab 1: 控制台与登录环境 */}
+        {/* Tab 1: CRM 连接器中心 与 连接器详情页 */}
         {activeTab === 'dashboard' && (
           <div className="flex-1 h-full overflow-y-auto p-4 md:p-6 max-w-[1400px] w-full mx-auto space-y-6">
-            <section>
+            {activeDetailEnvId ? (
+              // 连接器详情页 (将原主界面底部的 SessionDashboard / LoginCard 完整收敛并放入详情页)
+              <ConnectorDetailView
+                environment={environments.find((e) => e.id === activeDetailEnvId) || currentSelectedEnv}
+                session={session}
+                accountHistory={accountHistory}
+                onBack={() => setActiveDetailEnvId(null)}
+                onEdit={(env) => {
+                  setEditingCustomEnv(env);
+                  setIsCustomEnvOpen(true);
+                }}
+                onDelete={(envId) => {
+                  handleDeleteCustomEnv(envId);
+                  setActiveDetailEnvId(null);
+                }}
+                onSwitchConnector={handleSelectConnector}
+                isLoggingIn={isLoggingIn}
+                loginStatusText={loginStatusText}
+                onLoginBrowser={handleLoginBrowser}
+                onLoginEmbedded={handleLoginEmbedded}
+                onLoginPassword={handleLoginPassword}
+                onCancelLogin={handleCancelLogin}
+                onRefresh={handleRefresh}
+                onLogout={handleLogout}
+                onOpenDesigner={(type) => window.neoApi.openDesigner(type)}
+                onTestApi={() => window.neoApi.testApiCall()}
+                onRefreshSession={loadInitialData}
+                showToast={showToast}
+              />
+            ) : (
+              // 连接器中心概览列表 (彻底去除内置死板预置列表的霸屏占位，点击卡片直接进入详情页)
               <EnvironmentSelector
                 environments={environments}
                 selectedEnvId={selectedEnvId}
-                onSelect={handleSelectConnector}
-                onAddCustom={() => {
-                  setEditingCustomEnv(null);
+                activeSessionEnvId={session.environment?.id}
+                isLoggedIn={session.isLoggedIn}
+                onSelect={(envId) => {
+                  handleSelectConnector(envId);
+                  setActiveDetailEnvId(envId);
+                }}
+                onOpenDetail={(envId) => {
+                  handleSelectConnector(envId);
+                  setActiveDetailEnvId(envId);
+                }}
+                onAddCustom={(template) => {
+                  setEditingCustomEnv(template ? (template as any) : null);
                   setIsCustomEnvOpen(true);
                 }}
                 onEditCustom={(env) => {
@@ -550,35 +597,7 @@ export const App: React.FC = () => {
                 }}
                 onDeleteCustom={handleDeleteCustomEnv}
               />
-            </section>
-
-            <section>
-              {session.isLoggedIn && session.tokenData ? (
-                <SessionDashboard
-                  session={session}
-                  onRefresh={handleRefresh}
-                  onLogout={handleLogout}
-                  onOpenDesigner={(type) => window.neoApi.openDesigner(type)}
-                  onTestApi={() => window.neoApi.testApiCall()}
-                  onRefreshSession={loadInitialData}
-                  showToast={showToast}
-                />
-              ) : (
-                <LoginCard
-                  environment={currentSelectedEnv}
-                  isLoggingIn={isLoggingIn}
-                  loginStatusText={loginStatusText}
-                  onLoginBrowser={handleLoginBrowser}
-                  onLoginEmbedded={handleLoginEmbedded}
-                  onLoginPassword={handleLoginPassword}
-                  onCancelLogin={handleCancelLogin}
-                  onOpenConfigure={() => {
-                    setEditingCustomEnv(currentSelectedEnv);
-                    setIsCustomEnvOpen(true);
-                  }}
-                />
-              )}
-            </section>
+            )}
           </div>
         )}
 

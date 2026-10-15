@@ -23,7 +23,7 @@ import { SessionState } from '../../shared/types';
 
 interface SessionDashboardProps {
   session: SessionState;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
   onLogout: () => void;
   onOpenDesigner: (type: 'web' | 'h5') => void;
   onTestApi: () => Promise<{ success: boolean; data?: any; error?: string }>;
@@ -51,18 +51,52 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
   const [apiTestResult, setApiTestResult] = useState<{ success: boolean; msg: string } | null>(null);
   const [isTestingApi, setIsTestingApi] = useState(false);
 
-  // 计算 Token 剩余倒计时
+  // 计算 Token 剩余倒计时与客户端自动续期触发
   useEffect(() => {
     if (!tokenData?.expiresAt) return;
+
+    let autoRenewing = false;
 
     const updateCountdown = () => {
       const now = Date.now();
       const diff = tokenData.expiresAt - now;
 
       if (diff <= 0) {
-        setTimeLeftStr('已过期，请刷新令牌');
+        setTimeLeftStr('已过期，正在自动续期...');
         setIsExpiringSoon(true);
+        if (!autoRenewing && onRefresh) {
+          autoRenewing = true;
+          try {
+            const res = (onRefresh as any)();
+            if (res instanceof Promise) {
+              res.finally(() => {
+                setTimeout(() => { autoRenewing = false; }, 10000);
+              });
+            } else {
+              setTimeout(() => { autoRenewing = false; }, 10000);
+            }
+          } catch {
+            setTimeout(() => { autoRenewing = false; }, 10000);
+          }
+        }
         return;
+      }
+
+      // 剩余时间小于 5 分钟时提前触发自动续期
+      if (diff < 5 * 60 * 1000 && !autoRenewing && onRefresh) {
+        autoRenewing = true;
+        try {
+          const res = (onRefresh as any)();
+          if (res instanceof Promise) {
+            res.finally(() => {
+              setTimeout(() => { autoRenewing = false; }, 30000);
+            });
+          } else {
+            setTimeout(() => { autoRenewing = false; }, 30000);
+          }
+        } catch {
+          setTimeout(() => { autoRenewing = false; }, 30000);
+        }
       }
 
       const hours = Math.floor(diff / 3600000);
@@ -76,7 +110,7 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
     updateCountdown();
     const timer = setInterval(updateCountdown, 1000);
     return () => clearInterval(timer);
-  }, [tokenData?.expiresAt]);
+  }, [tokenData?.expiresAt, onRefresh]);
 
   const handleCopyCookie = () => {
     if (tokenData?.cookieString) {
@@ -178,6 +212,10 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
             <div className="flex items-center space-x-1.5 text-slate-500">
               <Clock className="w-4 h-4 text-amber-600" />
               <span className="font-medium">访问令牌有效性</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-50 text-emerald-600 font-medium border border-emerald-200/60 flex items-center space-x-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>自动续期</span>
+              </span>
             </div>
             <button
               onClick={onRefresh}

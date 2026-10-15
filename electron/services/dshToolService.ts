@@ -27,6 +27,50 @@ export class DshToolService {
     return process.cwd();
   }
 
+  /**
+   * 清理终端输出中的 ANSI 转义序列、动画进度条残余与退格字符，并进行安全长度截断保护
+   * 彻底避免包含几十万字符进度帧的巨大日志冲垮大模型上下文与 Token 预算
+   */
+  private cleanAndTruncateTerminalOutput(rawText: string, maxChars = 20000): string {
+    if (!rawText) return '';
+    // 1. 彻底清除 ANSI 颜色与控制序列 (如 \u001b[2K, \u001b[1A, \u001b[?25h 等)
+    let clean = rawText
+      .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '')
+      .replace(/\u001b\([a-zA-Z]/g, '')
+      .replace(/\r+/g, '\n');
+
+    // 2. 压缩由于 CLI 进度条 (如 Salesforce CLI / npm) 频繁刷新重绘产生的冗余重复行
+    const lines = clean.split('\n');
+    const deduped: string[] = [];
+    let lastTrimmed = '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (
+        trimmed === lastTrimmed &&
+        (trimmed.includes('Status:') ||
+          trimmed.includes('Elapsed Time:') ||
+          trimmed.includes('Waiting for the org') ||
+          trimmed.includes('Retrieving v') ||
+          trimmed.includes('Sending request to org'))
+      ) {
+        continue;
+      }
+      deduped.push(line);
+      lastTrimmed = trimmed;
+    }
+    clean = deduped.join('\n').trim();
+
+    // 3. 安全截断保护 (保留前 3000 字符启动信息与后部关键结论/报错/清单)
+    if (clean.length > maxChars) {
+      const head = clean.slice(0, 3000);
+      const tail = clean.slice(-(maxChars - 3000));
+      return `${head}\n\n... [终端输出过长，已自动过滤中间进度帧，原始共 ${rawText.length} 字符，保留关键执行结论] ...\n\n${tail}`;
+    }
+
+    return clean;
+  }
+
   // ================= 1. bash 工具 (命令执行) =================
   public async executeBash(params: {
     command: string;
@@ -35,7 +79,7 @@ export class DshToolService {
     workdir?: string;
   }): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const cwd = this.resolveWorkspaceDir(params.workdir);
-    const timeout = params.timeoutMs || 30000;
+    const timeout = Math.min(params.timeoutMs || 30000, 180000); // 允许最长3分钟
 
     return new Promise((resolve) => {
       exec(
@@ -43,13 +87,25 @@ export class DshToolService {
         {
           cwd,
           timeout,
-          maxBuffer: 10 * 1024 * 1024,
+          maxBuffer: 25 * 1024 * 1024,
+          env: {
+            ...process.env,
+            CI: 'true',
+            SF_USE_PROGRESS_BAR: 'false',
+            FORCE_COLOR: '0',
+          },
           shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/bash',
         },
         (error, stdout, stderr) => {
+          const rawStdout = stdout ? stdout.toString() : '';
+          const rawStderr = stderr ? stderr.toString() : '';
+
+          const cleanStdout = this.cleanAndTruncateTerminalOutput(rawStdout, 20000);
+          const cleanStderr = this.cleanAndTruncateTerminalOutput(rawStderr, 10000);
+
           resolve({
-            stdout: stdout.toString().trim(),
-            stderr: stderr.toString().trim(),
+            stdout: cleanStdout,
+            stderr: cleanStderr,
             exitCode: error ? error.code || 1 : 0,
           });
         }
