@@ -863,6 +863,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   key={msg.id}
                   message={msg}
                   isStreamingCurrent={streamingMessageId === msg.id}
+                  projectPath={activeProject?.localPath}
                   onOpenCreateSchema={(plan) => setPendingSchemaPlan(plan)}
                   onOpenDeployWorkflow={async (plan) => {
                     const latestLic = window.neoApi?.workflowGetLicenseStatus
@@ -888,7 +889,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     }
                     setPendingApprovalPlan(plan);
                   }}
+                  onOpenArtifactsPanel={() => setIsTerminalOpen(true)}
                   onSendMessage={(txt) => handleSendMessage(txt)}
+                  showToast={showToast}
                 />
               ))}
               {/* end marker */}

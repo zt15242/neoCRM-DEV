@@ -9,25 +9,32 @@ import { SchemaPlanCard } from './SchemaPlanCard';
 import { extractWorkflowPlanFromText } from './workflowPlanHelper';
 import { WorkflowPlanCard } from "./WorkflowPlanCard";
 import { InlineDecisionCard } from "./InlineDecisionCard";
+import { MessageArtifactsCard } from "./MessageArtifactsCard";
 import { extractDecisionsFromText, DecisionRequestPayload } from "./decisionHelper";
 import { Copy, Check, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
   isStreamingCurrent?: boolean;
+  projectPath?: string;
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
+  onOpenArtifactsPanel?: () => void;
   onSendMessage?: (text: string) => void;
+  showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
 export const AiMessageItem: React.FC<AiMessageItemProps> = ({
   message,
   isStreamingCurrent = false,
+  projectPath,
   onOpenCreateSchema,
   onOpenDeployWorkflow,
   onOpenDeployApproval,
+  onOpenArtifactsPanel,
   onSendMessage,
+  showToast,
 }) => {
 
   const [copied, setCopied] = useState(false);
@@ -194,6 +201,17 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
                       onSendMessage(confirmedText);
                     }
                   }}
+                />
+              )}
+
+              {/* 智能提取并展示生成的产物文件卡片 (完全对齐用户截图设计) */}
+              {!isStreamingCurrent && (
+                <MessageArtifactsCard
+                  content={message.content}
+                  toolCalls={message.toolCalls}
+                  projectPath={projectPath}
+                  onOpenArtifactsPanel={onOpenArtifactsPanel}
+                  showToast={showToast}
                 />
               )}
             </>

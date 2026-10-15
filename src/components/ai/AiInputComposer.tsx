@@ -140,6 +140,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [attachments, setAttachments] = useState<AiFileAttachment[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [activeCommand, setActiveCommand] = useState<SlashCommandItem | null>(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -215,132 +216,123 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
   }, [text]);
 
-  // ================= 4. 快捷指令清单 (Slash Commands) =================
+  // ================= 4. 快捷指令清单 (Slash Commands - 仅选中工具，绝不填充冗余示例！) =================
   const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
+    {
+      id: 'sql',
+      command: '/sql',
+      name: 'XOQL 数据查询',
+      description: '编写并执行销售易只读 SQL 查询，支持点号穿透关联与聚合分析',
+      icon: Database,
+      iconColor: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+      badge: 'XOQL 查询',
+      action: (ctx) => {
+        ctx.focusTextarea();
+      },
+    },
     {
       id: 'flow',
       command: '/flow',
-      name: '自动流程架构设计与部署',
+      name: '自动流程设计',
       description: '为当前对象设计状态跃迁、字段回写、循环与分支并一键代码级部署',
       icon: Workflow,
       iconColor: 'text-teal-600 bg-teal-50 border-teal-200',
       badge: '自动流程',
       action: (ctx) => {
         ctx.onSelectPreset?.('autoflow-architect');
-        ctx.setText('请为【服务工单】(case) 设计一套创建或更新时自动分流派单的自动流程方案，包含网关分支判定与字段回写动作');
         ctx.focusTextarea();
       },
     },
     {
       id: 'approval',
       command: '/approval',
-      name: '审批流架构与策略规划',
+      name: '审批流策略规划',
       description: '为业务对象规划多级审批人矩阵、编辑字段控制、加签/转办限制并输出部署方案',
       icon: FileCheck,
       iconColor: 'text-indigo-600 bg-indigo-50 border-indigo-200',
       badge: '审批流',
       action: (ctx) => {
         ctx.onSelectPreset?.('approval-architect');
-        ctx.setText('请为【合同】(contract) 规划基于合同金额与折扣率分流的多级审批流方案，包含直属上级逐级审批与财务会签');
         ctx.focusTextarea();
       },
     },
     {
       id: 'print',
       command: '/print',
-      name: '打印模板设计与占位符规范',
+      name: '打印模板规范',
       description: '规划 Word / Excel 打印模板标记、物理表格明细循环与系统时间函数',
       icon: Printer,
       iconColor: 'text-amber-600 bg-amber-50 border-amber-200',
       badge: '打印模板',
       action: (ctx) => {
         ctx.onSelectPreset?.('print-template-architect');
-        ctx.setText('请为【合同】(contract) 设计一套包含主信息、明细列表与签章的 Word 打印模板规范，输出主表占位符与物理表格明细循环语法');
         ctx.focusTextarea();
       },
     },
     {
       id: 'schema',
       command: '/schema',
-      name: '数据建模与字段规划',
+      name: '数据建模与字段',
       description: '规范规划销售易标准与自定义实体、字段类型(itemType)、关联关系与自动建表',
       icon: Box,
       iconColor: 'text-sky-600 bg-sky-50 border-sky-200',
       badge: '数据建模',
       action: (ctx) => {
-        ctx.setText('我需要设计一套业务对象，请规划其主键、核心业务字段(含精确 itemType 代码)、关联查找关系与 Schema Plan');
-        ctx.focusTextarea();
-      },
-    },
-    {
-      id: 'sql',
-      command: '/sql',
-      name: '编写与执行 XOQL 数据库查询',
-      description: '编写安全的销售易只读 SQL 查询，支持点号穿透关联与聚合分析',
-      icon: Database,
-      iconColor: 'text-emerald-600 bg-emerald-50 border-emerald-200',
-      badge: 'XOQL 查询',
-      action: (ctx) => {
-        ctx.setText('请根据当前租户元数据编写一条 XOQL 查询语句，检索前 10 条业务记录并使用 execute_sql_query 工具执行返回结果');
         ctx.focusTextarea();
       },
     },
     {
       id: 'bash',
       command: '/bash',
-      name: '在本地工作区终端执行命令',
+      name: '工作区终端命令',
       description: '调用原生 bash 工具在当前项目根目录执行 Shell 指令并捕获输出',
       icon: Terminal,
       iconColor: 'text-emerald-700 bg-emerald-50 border-emerald-200',
       badge: '工作区终端',
       action: (ctx) => {
-        ctx.setText('请在当前工作区终端执行命令：git status 并汇报工作树状态');
         ctx.focusTextarea();
       },
     },
     {
       id: 'web',
       command: '/web',
-      name: '联网搜索与网页内容抓取',
+      name: '联网搜索与抓取',
       description: '调用 web_search 检索互联网最新权威信息，并通过 web_fetch 抓取网页',
       icon: Globe,
       iconColor: 'text-sky-600 bg-sky-50 border-sky-200',
       badge: '联网搜索',
       action: (ctx) => {
-        ctx.setText('请使用 web_search 工具联网检索关于：');
         ctx.focusTextarea();
       },
     },
     {
       id: 'todo',
       command: '/todo',
-      name: '规划与维护任务待办清单',
+      name: '任务待办清单',
       description: '使用 todo_write 梳理多步骤任务的 pending、in_progress 与 completed 状态',
       icon: ListTodo,
       iconColor: 'text-orange-600 bg-orange-50 border-orange-200',
       badge: '任务管理',
       action: (ctx) => {
-        ctx.setText('请使用 todo_write 工具梳理本次开发任务的待办清单并开始推进第一项');
         ctx.focusTextarea();
       },
     },
     {
       id: 'goal',
       command: '/goal',
-      name: '设定工程任务目标与验收指标',
+      name: '工程任务目标',
       description: '使用 create_goal 为会话设定具体可验收的完成标准与 Token 预算',
       icon: Target,
       iconColor: 'text-purple-600 bg-purple-50 border-purple-200',
       badge: '工程目标',
       action: (ctx) => {
-        ctx.setText('请使用 create_goal 工具为本次任务设定明确的核心目标与验收标准');
         ctx.focusTextarea();
       },
     },
     {
       id: 'compact',
       command: '/compact',
-      name: '智能压缩当前会话历史记忆',
+      name: '压缩会话记忆',
       description: '浓缩提炼前序长对话为结构化记忆，释放大量 Token 上下文',
       icon: Minimize2,
       iconColor: 'text-indigo-600 bg-indigo-50 border-indigo-200',
@@ -351,33 +343,30 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         } else {
           ctx.showToast?.('info', '当前会话轮数较少，无需压缩');
         }
-        ctx.setText('');
       },
     },
     {
       id: 'clear',
       command: '/clear',
-      name: '清空当前对话所有消息记录',
+      name: '清空会话记录',
       description: '重置并清空当前会话的消息流，重新开始全新讨论',
       icon: Trash2,
       iconColor: 'text-rose-600 bg-rose-50 border-rose-200',
       badge: '会话清空',
       action: (ctx) => {
         ctx.onClearSession?.();
-        ctx.setText('');
       },
     },
     {
       id: 'help',
       command: '/help',
-      name: '查看常用命令与操作指引',
+      name: '查看帮助指引',
       description: '列出所有可用的快捷指令、工具驱动与智能体预设角色用法',
       icon: HelpCircle,
       iconColor: 'text-slate-600 bg-slate-100 border-slate-200',
       badge: '帮助文档',
       action: (ctx) => {
-        ctx.setText('请详细介绍当前 NeoCRM 开发者工作台支持的所有快捷指令(/)、工具能力与最佳操作姿势');
-        ctx.focusTextarea();
+        ctx.onSend('请详细介绍当前 NeoCRM 开发者工作台支持的所有快捷指令(/)、工具能力与最佳操作姿势');
       },
     },
   ];
@@ -492,10 +481,26 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
   };
 
-  // 执行选中的 Slash 命令
+  // 执行选中的 Slash 命令 (关键修复：仅高亮显示工具胶囊，彻底剥离长段示例句子)
   const executeSlashCommand = (cmd: SlashCommandItem) => {
     setSlashMenuOpen(false);
+
+    // 从输入文本中清理掉触发的 /command 字符串
+    const caret = textareaRef.current?.selectionStart || text.length;
+    const textBefore = text.slice(0, caret).replace(/(?:^|\s)\/[a-zA-Z0-9_-]*$/, '');
+    const textAfter = text.slice(caret);
+    const cleanedText = `${textBefore} ${textAfter}`.trim();
+    setText(cleanedText);
+
+    if (cmd.id === 'compact' || cmd.id === 'clear' || cmd.id === 'help') {
+      cmd.action(composerContext);
+      return;
+    }
+
+    // 将工具激活为专属工具标签
+    setActiveCommand(cmd);
     cmd.action(composerContext);
+    focusTextarea();
   };
 
   // 选中文件 Mention: 自动将文件解析挂载为附件上下文，并清除 @ 字符
@@ -544,10 +549,19 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       return;
     }
     const trimmed = text.trim();
-    if (!trimmed && attachments.length === 0) return;
-    onSend(trimmed, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
+    if (!trimmed && attachments.length === 0 && !activeCommand) return;
+
+    let messageToSend = trimmed;
+    if (activeCommand) {
+      messageToSend = trimmed 
+        ? `[${activeCommand.command}] ${trimmed}` 
+        : `[${activeCommand.command}] 请基于 ${activeCommand.name} 协助处理`;
+    }
+
+    onSend(messageToSend, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
     setText('');
     setAttachments([]);
+    setActiveCommand(null);
     setSlashMenuOpen(false);
     setMentionMenuOpen(false);
     if (textareaRef.current) {
@@ -759,9 +773,25 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         </div>
       )}
 
-      {/* 附件与引用实体胶囊 */}
-      {(attachments.length > 0 || entityRefs.length > 0) && (
-        <div className="flex flex-wrap gap-1.5 pb-1">
+      {/* 活跃工具胶囊、附件与引用实体 */}
+      {(activeCommand || attachments.length > 0 || entityRefs.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 pb-1">
+          {/* 选中的工具胶囊 (只显示工具，不填入冗余示例) */}
+          {activeCommand && (
+            <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-mono border border-purple-200 shadow-2xs animate-in fade-in duration-150">
+              <activeCommand.icon className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+              <span className="font-bold">{activeCommand.command}</span>
+              <span className="text-[11px] text-purple-600 font-sans font-medium">{activeCommand.badge || activeCommand.name}</span>
+              <button
+                type="button"
+                onClick={() => setActiveCommand(null)}
+                className="hover:text-rose-500 ml-1 cursor-pointer p-0.5 rounded"
+                title="取消此工具"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
           {attachments.map((att) => {
             const Icon = getFileIcon(att.name);
             return (
@@ -807,7 +837,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         value={text}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
-        placeholder={placeholder}
+        placeholder={activeCommand ? `已选中【${activeCommand.command} ${activeCommand.badge || activeCommand.name}】，请输入具体内容...` : placeholder}
         rows={1}
         className="w-full resize-none border-none focus:outline-none text-[13px] md:text-sm text-slate-800 placeholder-slate-400 bg-transparent leading-relaxed max-h-44"
       />
@@ -967,9 +997,9 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           ) : (
             <button
               onClick={handleSubmit}
-              disabled={!text.trim() && attachments.length === 0}
+              disabled={!text.trim() && attachments.length === 0 && !activeCommand}
               className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${
-                text.trim() || attachments.length > 0
+                text.trim() || attachments.length > 0 || activeCommand
                   ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-xs hover:scale-105'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
