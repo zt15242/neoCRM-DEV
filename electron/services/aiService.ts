@@ -952,14 +952,34 @@ ${dialogHistoryText}`;
         }
       }
 
-      if (config.settings.injectTenantContext && currentSession.isLoggedIn) {
-        systemParts.push(`【当前连接的销售易租户事实环境】
-- 租户名称: ${currentSession.tokenData?.userInfo?.tenantName || '未命名租户'}
-- 租户 ID: ${currentSession.tokenData?.tenant_id || '未知'}
-- 当前用户: ${currentSession.tokenData?.userInfo?.name || '未知用户'}
-- 环境名称: ${currentSession.environment?.name || '生产环境'}
-- 实例 BaseURL: ${currentSession.tokenData?.instance_uri || currentSession.environment?.neoBaseURL || ''}
-你可以根据以上真实环境为用户提供针对性建议。当开启工具调用时，请主动调用销售易工具查阅真实对象与字段。`);
+      if (config.settings.injectTenantContext && currentSession.isLoggedIn && currentSession.environment) {
+        const env = currentSession.environment;
+        const pType = env.productType || 'neocrm';
+        const token = currentSession.tokenData;
+
+        if (pType === 'salesforce') {
+          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - Salesforce】
+- 目标平台: Salesforce (Force.com / Core CRM)
+- 连接器名称: ${env.name} (${env.envType || '生产/沙盒'})
+- 实例 URL: ${token?.instance_uri || env.neoBaseURL}
+- 用户/组织: ${token?.userInfo?.name || '未知用户'} (Org ID: ${token?.tenant_id || '未知'})
+- 开发者指导: 当前环境为 Salesforce 组织，请优先依据 Salesforce 架构体系（SOQL/SOSL、标准对象如 Account/Opportunity、自定义对象 __c、Record-Triggered Flow、Apex 触发器等）为用户提供精准指导。`);
+        } else if (pType === 'fxiaoke') {
+          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 纷享销客】
+- 目标平台: 纷享销客 (FXIAOKE CRM)
+- 连接器名称: ${env.name}
+- 所在云网关: ${env.cloudDomain || 'open.fxiaoke.com'}
+- 自建应用: appId: ${env.clientId || '未配置'} · 企业账号 (ea): ${token?.userInfo?.ea || env.ea || '自建应用'}
+- 开发者指导: 当前环境为纷享销客开放平台，请遵循纷享销客 OpenAPI v2 规范与 sharecrm 规范（对象如 AccountObj, ContactObj, ContractObj 等，必须先 describe 探测，严格 LIMIT 50 分页）进行对接与数据分析。`);
+        } else {
+          systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 销售易】
+- 目标平台: 销售易 (NeoCRM PaaS)
+- 连接器名称: ${env.name} (${env.envType || '沙盒演练'})
+- 租户名称: ${token?.userInfo?.tenantName || '未命名租户'} (租户 ID: ${token?.tenant_id || '未知'})
+- 当前用户: ${token?.userInfo?.name || '未知用户'}
+- 实例 BaseURL: ${token?.instance_uri || env.neoBaseURL || ''}
+- 开发者指导: 当前环境为销售易租户，请遵循销售易 PaaS 规范（XOQL 严禁 SELECT *，Creek Flow 自动流程与审批流，打印模板引擎）。`);
+        }
       }
 
       if (config.settings.customSystemPrompt?.trim()) {

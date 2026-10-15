@@ -428,23 +428,74 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   },
   {
     id: 'harness-agent',
-    name: 'NeoCRM 全能架构师 (Harness Agent)',
-    description: '连接当前租户环境，支持自动调用元数据与数据工具查对象、查字段、执行 SQL 诊断',
+    name: '全能 CRM 架构师 (Universal CRM Agent)',
+    description: '全域多平台 CRM 核心智能体：动态感知当前连接的 CRM 平台与账号环境（销售易、Salesforce、纷享销客等），支持跨平台数据查询、自动化流与代码开发',
     iconName: 'Sparkles',
-    badge: '推荐',
+    badge: '全域推荐',
     enableCrmTools: true,
     recommendedModel: 'deepseek-chat',
-    systemPrompt: `你是一个专业的销售易 (NeoCRM) 资深架构师兼全栈开发者，运行在 NeoCRM 开发者桌面工作台环境内。
-你具备以下核心技能：
-1. 精通销售易 PaaS 平台元数据模型（实体对象、自定义对象、字段类型、关联关系等）。
-2. 精通销售易 SQL / XOQL 语法体系与查询优化。
-3. 当用户询问租户中的对象或字段结构时，若当前开启了 CRM 本地工具，可主动调用工具获取真实环境数据，绝不凭空臆造字段 API Key。
-4. 回答始终保持专业、严谨、条理清晰，使用标准 Markdown 格式排版；遇到代码或 SQL 均使用标准代码块标注语言类型。`,
+    systemPrompt: `你是一个具备多平台架构能力的全能 CRM 资深架构师兼全栈开发者（Universal CRM Agent），运行在开发者桌面工作台环境内。
+你可以连接并管理多个 CRM 平台的连接器账号（销售易 NeoCRM、Salesforce、纷享销客 FXIAOKE 等），并根据当前连接器自动切换专业架构视角：
+1. 销售易平台 (NeoCRM PaaS)：熟练掌握其 PaaS 元数据模型、XOQL 语法（严禁 SELECT * 与 JOIN，支持点号穿透）、Creek Flow 自动流程与审批流、打印模板引擎规范。
+2. Salesforce 平台 (Force.com / Core CRM)：熟练掌握标准与自定义对象 (__c)、SOQL/SOSL 查询语法、Record-Triggered Flow、Apex 触发器开发规范及严格的生产安全操作准则。
+3. 纷享销客平台 (FXIAOKE / sharecrm)：遵循其 OpenAPI v2 客户端凭据模式（appId + appSecret + permanentCode）与 sharecrm CLI 规范，掌握核心对象（AccountObj, ContactObj, ContractObj 等）与大批量分页对账规则。
+4. 始终以当前已连接的 CRM 平台事实为基线，当开启工具调用时主动调取真实元数据与数据，绝不凭空臆造字段 API Key。`,
     quickPrompts: [
-      '列出当前租户所有的自定义对象并分析结构',
-      '帮我查询客户(account)对象的核心字段并写一条查询最近10个客户的SQL',
-      '检查当前租户的环境信息与登录状态',
-      '我需要设计一个售后工单系统，请规划主子表与关联字段',
+      '检查当前已连接的 CRM 平台环境与连接器账号状态',
+      '帮我分析当前连接平台的主对象与核心字段结构',
+      '根据当前 CRM 平台特性，编写一条安全的数据检索查询',
+      '为当前平台设计一套标准业务对象与主子表关联模型',
+    ],
+  },
+  {
+    id: 'salesforce-architect',
+    name: 'Salesforce 架构与自动化专家 (Salesforce)',
+    description: 'Salesforce 全生态架构专家：精通 SOQL/SOSL 查询、标准与自定义对象 (__c)、Flow 自动化流、Apex 触发器与安全审计',
+    iconName: 'Cloud',
+    badge: 'Salesforce',
+    enableCrmTools: true,
+    recommendedModel: 'deepseek-chat',
+    systemPrompt: `你是一个具备 Salesforce 官方认证实力的资深架构师兼开发专家（由 Salesforce CLI 与架构规范驱动）。
+【Salesforce 核心技术规范】：
+1. 数据查询规范：熟练使用 SOQL/SOSL。跨对象查询标准关系（如 Contact.Account.Name）与自定义关系（如 Order__r.Name）；支持 GROUP BY、HAVING 与聚合函数。
+2. 对象与元数据：标准对象（Account, Contact, Opportunity, Lead, Case, Order 等）与自定义对象（CustomObject__c）、自定义字段（Field__c）。
+3. 自动化流转：优先采用 Salesforce Flow（Record-Triggered Flow, Screen Flow, Autolaunched Flow）实现业务自动化；复杂计算与逻辑采用 Apex 触发器框架。
+4. 生产安全防护模型：
+   - 任何涉及数据写入、批量修改或元数据部署（Deploy）的操作，必须提前向用户明确指出影响域并要求确认；
+   - 严禁在生产组织（login.salesforce.com）盲目执行未经测试的破坏性脚本。`,
+    quickPrompts: [
+      '用 SOQL 编写查询最近 10 个未完结的商机及其关联客户与阶段信息',
+      '如何配置一个在商机赢单时自动创建交付任务并发送通知的 Record-Triggered Flow？',
+      '设计一套自定义对象 Project__c 与 Milestone__c 的主子表结构与汇总字段 (Roll-Up Summary)',
+      '编写一个规范的 Apex 触发器 Handler 模板，包含防递归控制与批量化 (Bulkify) 最佳实践',
+    ],
+  },
+  {
+    id: 'fxiaoke-architect',
+    name: '纷享销客架构与对接专家 (FXIAOKE)',
+    description: '纷享销客开放平台专家：精通 OpenAPI v2 客户端凭据模式授权、自建应用对接、对象 API 调用与数据治理',
+    iconName: 'Flame',
+    badge: '纷享销客',
+    enableCrmTools: true,
+    recommendedModel: 'deepseek-chat',
+    systemPrompt: `你是一个精通纷享销客 (FXIAOKE / sharecrm) 开放平台架构与自建应用开发的资深专家。
+【纷享销客 OpenAPI v2 核心技术规范】：
+1. 授权认证体系：
+   - 客户端凭证模式（推荐）：由企业后台通过 appId + appSecret + permanentCode（企业永久授权码）向 /oauth2.0/token 换取 7200 秒有效期的 accessToken；
+   - 所在云域名规范：纷享云 open.fxiaoke.com，华为云 open-hwcloud.fxiaoke.com，阿里云 open-ale.fxiaoke.com 等。
+2. 对象模型体系：
+   - 核心业务对象：客户 AccountObj、联系人 ContactObj、合同 ContractObj、销售订单 SalesOrderObj、商机 NewOpportunityObj、回款 PaymentObj 等；
+   - 元数据探测：必须先通过 describe 获取真实字段 API 与状态选项，严禁臆造字段；
+3. 查询与分页对账：
+   - 纷享销客单页数据最大上限为 50 条，必须按 LIMIT 50 OFFSET n 逐页累加直至达到 .queryMeta.totalNumber；
+   - 结果集直接存放在 .recordResult 数组中。
+4. 接口安全与频次：
+   - Token 有效期内自动缓存复用，避免高频并发刷新（每分钟调用不超过 10 次）。`,
+    quickPrompts: [
+      '基于 OpenAPI v2 客户端凭证模式，说明如何通过 appId + appSecret + permanentCode 获取访问令牌',
+      '编写使用 sharecrm CLI 统计今年已签约合同 (ContractObj) 总金额的查询与汇总脚本',
+      '查询纷享销客客户 (AccountObj) 与联系人 (ContactObj) 的对象定义与字段列表',
+      '如何通过 OpenAPI 实现销售订单 (SalesOrderObj) 数据回写与状态流转？',
     ],
   },
   {
@@ -645,6 +696,24 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     category: "builtin",
     iconName: "Printer",
     triggerKeywords: ["打印模板", "打印", "Word模板", "Excel模板", "明细循环", "套打", "PDF导出"],
+    enabled: true,
+  },
+  {
+    id: "skill-salesforce-cli",
+    name: "Salesforce CLI (sf) 架构与安全操作规范",
+    description: "基于官方 sf v2 工具链，规范执行 SOQL/SOSL 查询、元数据检索与部署、数据导入导出、Apex 执行与生产安全分级。",
+    category: "builtin",
+    iconName: "Cloud",
+    triggerKeywords: ["Salesforce", "SOQL", "SOSL", "Apex", "Flow", "sf", "Force.com"],
+    enabled: true,
+  },
+  {
+    id: "skill-fxiaoke-crm-cli",
+    name: "纷享销客 (sharecrm) CLI 与 OpenAPI v2 规范",
+    description: "基于 sharecrm CLI 与 OpenAPI v2 规范，执行对象元数据 Describe 探测、SQL 分页查询、聚合指标统计与自建应用直连。",
+    category: "builtin",
+    iconName: "Flame",
+    triggerKeywords: ["纷享销客", "纷享", "sharecrm", "fxiaoke", "AccountObj", "ContractObj"],
     enabled: true,
   },
 ];

@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ArrowUp,
+  Cloud,
+  Flame,
+  Plug,
+  Layers,
   Square, 
   Box, 
   Wrench, 
@@ -99,6 +103,7 @@ interface AiInputComposerProps {
   onSelectModel?: (providerId: string, modelId: string) => void;
   currentPresetName?: string;
   tenantName?: string;
+  productType?: 'neocrm' | 'salesforce' | 'fxiaoke' | 'custom';
   activeProject?: WorkspaceProject;
   onClearSession?: () => void;
   onCompactSession?: () => void;
@@ -135,6 +140,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   onSelectModel,
   currentPresetName,
   tenantName = '沙盒环境',
+  productType = 'neocrm',
   activeProject,
   onClearSession,
   onCompactSession,
@@ -227,6 +233,32 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
 
   // ================= 4. 快捷指令清单 (Slash Commands - 仅选中工具，绝不填充冗余示例！) =================
   const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
+    {
+      id: 'sf',
+      command: '/sf',
+      name: 'Salesforce SOQL & 架构',
+      description: '编写 Salesforce SOQL/SOSL 查询、Flow 自动化流程或 Apex 触发器',
+      icon: Cloud,
+      iconColor: 'text-cyan-600 bg-cyan-50 border-cyan-200',
+      badge: 'Salesforce',
+      action: (ctx) => {
+        ctx.onSelectPreset?.('salesforce-architect');
+        ctx.focusTextarea();
+      },
+    },
+    {
+      id: 'fx',
+      command: '/fx',
+      name: '纷享销客 sharecrm & 接口',
+      description: '纷享销客 OpenAPI v2 客户端凭据授权、对象 API 探测与 sharecrm CLI 脚本',
+      icon: Flame,
+      iconColor: 'text-orange-600 bg-orange-50 border-orange-200',
+      badge: '纷享销客',
+      action: (ctx) => {
+        ctx.onSelectPreset?.('fxiaoke-architect');
+        ctx.focusTextarea();
+      },
+    },
     {
       id: 'sql',
       command: '/sql',
@@ -933,10 +965,18 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             )}
           </div>
 
-          {/* Full access / 沙盒权限胶囊 */}
+          {/* 账号与环境连接器身份胶囊 (动态感知多平台品牌与账号) */}
           <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-100/90 text-slate-700 text-xs font-medium border border-slate-200/80">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="truncate max-w-[120px]">{tenantName}</span>
+            {productType === 'salesforce' ? (
+              <Cloud className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
+            ) : productType === 'fxiaoke' ? (
+              <Flame className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+            ) : productType === 'custom' ? (
+              <Plug className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+            ) : (
+              <Layers className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+            )}
+            <span className="truncate max-w-[130px] font-semibold text-slate-800">{tenantName}</span>
           </div>
 
           {/* 角色标识徽标 */}

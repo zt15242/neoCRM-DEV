@@ -37,7 +37,7 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { Plus, ExternalLink, FolderPlus, Plug } from 'lucide-react';
+import { Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
 export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai';
@@ -128,6 +128,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const getPresetIcon = (iconName: string) => {
     switch (iconName) {
+      case 'Cloud':
+        return Cloud;
+      case 'Flame':
+        return Flame;
       case 'Printer':
         return Printer;
       case 'Workflow':
@@ -180,9 +184,24 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           <button
             onClick={() => setPresetDropdownOpen(!presetDropdownOpen)}
             className="flex items-center space-x-1.5 px-2 py-1 rounded-lg hover:bg-slate-200/60 transition-colors text-slate-800 text-sm font-bold cursor-pointer"
+            title="点击切换 AI 智能体预设角色"
           >
-            <span>NeoCRM</span>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+            {session.environment?.productType === 'salesforce' ? (
+              <span className="flex items-center space-x-1 text-cyan-700">
+                <Cloud className="w-4 h-4 text-cyan-600" />
+                <span>Salesforce</span>
+              </span>
+            ) : session.environment?.productType === 'fxiaoke' ? (
+              <span className="flex items-center space-x-1 text-orange-700">
+                <Flame className="w-4 h-4 text-orange-600" />
+                <span>纷享销客</span>
+              </span>
+            ) : (
+              <span className="flex items-center space-x-1 text-sky-800">
+                <span>NeoCRM</span>
+              </span>
+            )}
+            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
           </button>
 
           {/* 角色与预设切换菜单 */}
