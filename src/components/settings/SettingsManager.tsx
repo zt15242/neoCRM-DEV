@@ -1,3 +1,4 @@
+import { LogSettings } from './LogSettings';
 import React, { useState, useEffect } from 'react';
 import { 
   AiProviderConfig, 
@@ -24,10 +25,11 @@ import {
   Settings as SettingsIcon,
   Plug,
   Lightbulb,
-  X
+  X,
+  FileText
 } from 'lucide-react';
 
-export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general';
+export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general' | 'logs';
 
 interface SettingsManagerProps {
   isOpen: boolean;
@@ -302,6 +304,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   onCheckUpdate={onCheckUpdate}
                   showToast={showToast}
                 />
+              </div>
+            )}
+
+            {activeSubTab === 'logs' && (
+              <div className="p-6 max-w-5xl">
+                <LogSettings showToast={showToast} />
               </div>
             )}
           </div>

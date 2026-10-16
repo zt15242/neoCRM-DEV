@@ -24,6 +24,7 @@ import {
   Settings,
   History,
   HelpCircle,
+  FileText,
   Minus,
   Square,
   ShieldCheck,
@@ -65,6 +66,7 @@ interface AppSidebarProps {
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
   onOpenSettings?: () => void;
+  onOpenLogs?: () => void;
   projects?: WorkspaceProject[];
   activeProjectId?: string | null;
   onSelectProject?: (projectId: string) => void;
@@ -97,6 +99,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   workflowLicenseStatus,
   onOpenLicenseModal,
   onOpenSettings,
+  onOpenLogs,
   projects = [],
   activeProjectId,
   onSelectProject,
@@ -614,6 +617,15 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           >
             <span>v1.5.5</span>
             {hasUpdate && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />}
+          </button>
+
+          {/* 软件运行日志 */}
+          <button
+            onClick={onOpenLogs}
+            title="软件运行日志 (诊断排查、导出与系统输出)"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+          >
+            <FileText className="w-3.5 h-3.5" />
           </button>
 
           {/* 系统设置 (弹窗展示，含模型、插件扩展、技能库) */}

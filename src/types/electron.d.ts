@@ -217,6 +217,19 @@ declare global {
       printToggleStatus: (templatePrintId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;
       printDeleteTemplate: (templatePrintId: string | number) => Promise<{ success: boolean; error?: string }>;
       printRenderDocument: (params: { entityApiKey: string; recordId: string | number; templateId: string | number; exportType?: 1 | 2 | 3 }) => Promise<{ success: boolean; data?: any; error?: string }>;
+      // 软件运行日志管理
+      loggerGetLogs?: (options?: any) => Promise<{
+        total: number;
+        filteredCount: number;
+        logs: any[];
+        currentDate: string;
+        logFilePath: string;
+      }>;
+      loggerGetLogFiles?: () => Promise<any[]>;
+      loggerOpenLogDir?: () => Promise<boolean>;
+      loggerClearLogs?: () => Promise<boolean>;
+      loggerExportLog?: (date?: string) => Promise<{ success: boolean; filePath?: string; message?: string }>;
+      loggerLog?: (level: string, module: string, message: string, details?: any) => Promise<boolean>;
     };
   }
 }

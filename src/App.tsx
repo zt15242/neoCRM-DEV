@@ -497,6 +497,7 @@ export const App: React.FC = () => {
         workflowLicenseStatus={workflowLicenseStatus}
         onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
         onOpenSettings={() => handleOpenSettings('models')}
+        onOpenLogs={() => handleOpenSettings('logs')}
         projects={projects}
         activeProjectId={activeProjectId}
         onSelectProject={setActiveProjectId}

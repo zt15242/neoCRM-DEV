@@ -741,3 +741,34 @@ export interface WorkspaceArtifactItem {
   size: number;
   mtime: number;
 }
+
+// ================= 软件运行日志系统类型定义 =================
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: LogLevel;
+  module: string;
+  message: string;
+  details?: string;
+  raw: string;
+}
+
+export interface LogFileInfo {
+  fileName: string;
+  filePath: string;
+  dateStr: string;
+  sizeBytes: number;
+  sizeFormatted: string;
+  updatedAt: number;
+  isToday: boolean;
+}
+
+export interface GetLogsOptions {
+  date?: string;
+  level?: LogLevel | 'ALL';
+  module?: string;
+  keyword?: string;
+  limit?: number;
+}

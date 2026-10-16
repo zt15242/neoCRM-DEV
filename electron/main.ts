@@ -1,3 +1,5 @@
+import { LoggerService } from './services/loggerService';
+import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } from 'electron';
 import path from 'node:path';
@@ -33,6 +35,9 @@ const authService = new AuthService();
 const apiService = new ApiService();
 const metadataService = new MetadataService(authService);
 const dataService = new DataService(authService);
+const loggerService = new LoggerService();
+loggerService.interceptConsole();
+
 const updateService = new UpdateService();
 const imageService = new ImageService();
 
@@ -312,6 +317,17 @@ ipcMain.handle('app:openDesigner', async (_, type: 'web' | 'h5') => {
 ipcMain.handle('shell:openExternal', async (_, url: string) => shell.openExternal(url));
 ipcMain.handle('app:getPlatform', async () => process.platform);
 
+
+// ================= 软件运行日志管理 =================
+ipcMain.handle('logger:getLogs', async (_, options?: GetLogsOptions) => loggerService.getLogs(options));
+ipcMain.handle('logger:getLogFiles', async () => loggerService.getLogFiles());
+ipcMain.handle('logger:openLogDir', async () => loggerService.openLogDirectory());
+ipcMain.handle('logger:clearLogs', async () => loggerService.clearAllLogs());
+ipcMain.handle('logger:exportLog', async (_, date?: string) => loggerService.exportLogFile(win || undefined, date));
+ipcMain.handle('logger:log', async (_, level: LogLevel, module: string, message: string, details?: any) => {
+  loggerService.writeLog(level, module, message, details);
+  return true;
+});
 
 // ================= 自动更新管理 =================
 ipcMain.handle('updater:check', async () => {

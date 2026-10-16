@@ -140,7 +140,16 @@ export const neoApi = {
   printToggleStatus: (templatePrintId: string | number, enable: boolean) => ipcRenderer.invoke("print:toggleStatus", { templatePrintId, enable }),
   printDeleteTemplate: (templatePrintId: string | number) => ipcRenderer.invoke("print:deleteTemplate", { templatePrintId }),
   printRenderDocument: (params: any) => ipcRenderer.invoke("print:renderDocument", params),
-  onAiStreamEvent: (callback: (event: any) => void) => {
+  // 软件运行日志管理 (Logger)
+  loggerGetLogs: (options?: any) => ipcRenderer.invoke('logger:getLogs', options),
+  loggerGetLogFiles: () => ipcRenderer.invoke('logger:getLogFiles'),
+  loggerOpenLogDir: () => ipcRenderer.invoke('logger:openLogDir'),
+  loggerClearLogs: () => ipcRenderer.invoke('logger:clearLogs'),
+  loggerExportLog: (date?: string) => ipcRenderer.invoke('logger:exportLog', date),
+  loggerLog: (level: string, module: string, message: string, details?: any) =>
+    ipcRenderer.invoke('logger:log', level, module, message, details),
+
+    onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);
     return () => ipcRenderer.removeListener('ai:streamEvent', handler);
