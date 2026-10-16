@@ -1,24 +1,14 @@
-### 🚀 版本更新说明 (v1.6.0)
+### 🚀 版本更新说明 (v1.6.1)
 
-1. **全新接入系统与诊断运行日志系统 (Software Logger & Diagnostics Center)**：
-   - **主进程全链路日志持久化落盘**：实现 `LoggerService`，自动将主进程全量 `console.log` / `warn` / `error`、模块事件、底层调用、崩溃异常 (`uncaughtException` / `unhandledRejection`) 按日期写入本地存储目录（`app-YYYY-MM-DD.log`）；
-   - **自动留存与轮转**：本地日志文件自动留存最近 14 天，启动时自动清理更早的过期日志；
-   - **结构化日志排版**：包含毫秒级时间戳、日志级别药丸（`ERROR` / `WARN` / `INFO` / `DEBUG`）、业务模块标识（`[Auth]`、`[Salesforce]`、`[Fxiaoke]`、`[NeoCRM]`、`[AI]`、`[System]` 等）及异常详情/堆栈；
-   - **多端日志上报通道**：支持前端渲染进程将 UI 报错与异步异常直接通过 `loggerLog` 写入统一系统日志文件，实现前后端统一追踪。
+1. **全面对齐 DeepSeek Harness 官方 223 个内置插件架构 (Built-in Plugins)**：
+   - 彻底打破此前只展示“已安装插件 (9)”的局限，按官方 DSH Desktop 规范完整接入 **223 个内置插件**：
+     * **会话插件 (29 个，由 Agent 预设按会话组成)**：包含智能体执行循环（`dsh-agent-loop`）、指令注入（`dsh-agent-instructions`）、目标轮次驱动器（`dsh-goal-round-driver`）、文件原子读写驱动（`dsh-fs` / `dsh-tool-fs`）、代码高精编辑器（`dsh-tool-str-replace-editor`）、全文与正则检索（`dsh-tool-fs-search`）、终端进程执行驱动（`dsh-tool-bash`）、实时网络抓取（`dsh-tool-web`）、多 CRM 在线连接器驱动等；
+     * **全局插件 (194 个，系统与所有会话共用)**：涵盖多智能体子代理（`dsh-subagent`）、沙箱隔离策略（`dsh-sandbox`）、会话持久化投影（`dsh-session-persistence` / `dsh-session-projection`）、MCP 客户端网关（`dsh-mcp-client`）、技能库文件系统（`dsh-skill-filesystem`）、令牌溢出熔断（`dsh-token-meter` / `dsh-spill`）等全套系统级组件；
+   - **界面交互 1:1 还原 DSH 官方设计**：支持顶部操作栏（打开配置文件、导出诊断信息、打开终端）、搜索插件、预设模式切换（标准模式、专家模式、极简模式）及卡片运行状态监控。
 
-2. **可视化日志中心与诊断工作台 (`LogSettings`)**：
-   - 在【系统设置】中心新增「软件运行日志」专属面板，并在侧边栏底部提供一键直达入口；
-   - **多维实时过滤检索**：
-     * **日期切换**：支持查看当天及历史任意一天的日志文件，显示文件大小与修改时间；
-     * **级别过滤**：一键切换全部级别、仅看 `ERROR` 红色错误、仅看 `WARN` 黄色告警等；
-     * **常用模块胶囊**：一键快速筛选 Auth、Salesforce、Fxiaoke、NeoCRM、AI、Workflow 等模块；
-     * **关键字搜索**：实时搜索日志消息、参数或错误关键字；
-     * **实时监听模式**：开启「实时监听 (4s)」开关，系统自动每 4 秒轮询增量日志，方便边操作边排查。
-   - **便捷排查与导出操作**：
-     * **📁 打开日志目录**：一键在系统访达 (macOS) 或资源管理器 (Windows) 中直接打开日志文件所在文件夹，方便用户打包直接发给技术人员排查；
-     * **📥 导出日志文件**：一键将当前选定日期的日志文件另存导出为 `.log` 文件至桌面；
-     * **📋 一键复制日志**：支持一键复制整页日志或单条日志行，包含展开详细调用堆栈 (Stack / Context)；
-     * **🗑️ 清空历史日志**：提供一键清空本地所有旧日志文件的功能。
-
-3. **左侧边栏底栏增加快捷日志入口 (`AppSidebar`)**：
-   - 在底栏设置按钮旁新增专属「软件运行日志」图标，遇到任何报错（如登录失败、401、工具中断、拉取失败）时均可一键秒级调阅详细执行流与排查原因。
+2. **解决智能体“不知道做什么”的核心突破：植入 DSH 智能体自主行动协议 (Autonomous Agent Protocol)**：
+   - 在 AI 调度引擎 System Prompt 中深度植入 DeepSeek Harness 官方智能体行为准则，彻底告别被动呆板与推卸命令：
+     * **先调查后结论 (Investigate First)**：严禁空泛分析，遇到任务第一时间主动调用工具查清环境、目录与代码客观事实；
+     * **任务拆解与待办对账 (Todo State Machine)**：复杂工程任务自主调用 `todo_write` 维护结构化待办清单，实时跟踪进展；
+     * **代码与工程自主落地 (Execute Direct)**：编写代码自动调用 `write` / `edit` / `str_replace_editor` 落盘，执行命令自动调用 `bash` 运行到底，严禁把代码和命令贴在回复中让用户手动执行；
+     * **闭环验证与容错自愈 (Verify & Self-Heal)**：执行后自动核验 exitCode 与文件生成状态，遇错自主分析参数重试，直至任务彻底闭环！
