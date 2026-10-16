@@ -1085,18 +1085,57 @@ ${mcpInfoText}
         const lastUserMsg = [...recentMessages].reverse().find((m) => m.role === 'user');
         const userContent = lastUserMsg?.content || '';
 
+        // 1. 查询对象/实体意图
         const isAskingObjects =
           /(?:查询|获取|列出|查看|有哪些|显示).*(?:当前租户|租户|系统|环境|平台).*(?:对象|实体|元数据|model|entity|object)/i.test(userContent) ||
           /(?:查询|获取|列出|查看|有哪些|显示).*(?:对象|实体|元数据|表清单)/i.test(userContent) ||
           /\[\/(?:fx|sf|crm)\]\s*(?:查询|获取|列出|查看).*(?:对象|实体)/i.test(userContent);
 
+        // 2. 字段校准、是否存在字段检验意图 (用户指正“字段名称有问题、有的可能不是name是别的”)
         const isAskingFields =
-          /(?:查询|获取|列出|查看|describe).*(?:字段|属性|field|元数据)/i.test(userContent);
+          /(?:查询|获取|列出|查看|describe).*(?:字段|属性|field|元数据)/i.test(userContent) ||
+          /(?:是否存在字段|字段名称有问题|校准字段|核对字段|验证字段|真实字段|可能不是name|字段对不对|字段是什么)/i.test(userContent) ||
+          /(?:检查|核对|校准|确认).*(?:对象|实体).*(?:字段|属性)/i.test(userContent);
+
+        // 3. 模板设计与 Word (.docx) 文件生成意图
+        const isAskingTemplateOrWord =
+          /(?:生成|制作|设计|创建|导出|下载).*(?:模版|模板|word|docx)/i.test(userContent) ||
+          /(?:模版|模板).*(?:生成|制作|设计|创建|word|docx)/i.test(userContent) ||
+          userContent.includes('word文件') ||
+          userContent.includes('Word文件') ||
+          userContent.includes('打印模版') ||
+          userContent.includes('打印模板');
+
+        // 4. 脚本编写、真实执行与本地文件读写分析意图
+        const isAskingScriptOrFileIO =
+          /(?:生成脚本|写脚本|运行脚本|执行脚本|读取文件|分析文件|写文件|写入文件|检查文件|python脚本|bash脚本|自动化脚本)/i.test(userContent);
 
         if (isAskingObjects) {
-          systemParts.push(`【系统实时调度指令 (优先级最高)】：检测到用户正在查询已连接环境（${env.name} · ${pType}）的实时对象/实体清单。根据当前平台 Skill 规范，【你必须立即在首轮输出中自动调用 list_entities 工具向平台接口发起真实请求拉取数据】，严禁不调用工具直接静态回复！`);
+          systemParts.push(`【系统实时调度指令 (优先级最高)】：检测到用户正在查询已连接环境（${env.name} · ${pType}）的实时对象/实体清单。根据当前平台规范，【你必须立即在首轮输出中自动调用 list_entities 工具向平台接口发起真实请求拉取数据】，严禁不调用工具直接静态回复！`);
         } else if (isAskingFields) {
-          systemParts.push(`【系统实时调度指令 (优先级最高)】：检测到用户正在查询实体字段或元数据。根据当前平台 Skill 规范，【你必须立即在首轮输出中自动调用 get_entity_fields 工具拉取该对象的真实字段定义】，严禁凭空臆造！`);
+          systemParts.push(`【系统实时调度指令 (最高优先级 - 必须调用工具核对真实字段！)】：
+检测到用户正在质疑或要求核对业务对象的真实字段定义（如用户提示“字段名称有问题、可能不是 name 是别的”）。
+【核心铁律 - 绝不凭记忆猜字段】：
+1. 你必须立即在首轮输出中自动调用 get_entity_fields 或 get_print_template_fields 工具，向 CRM 平台发起真实接口请求获取对象的字段元数据！
+2. 严禁凭记忆臆造字段，必须根据工具返回的真实字段（如销售易客户主名称是 accountName 而非 name，合同主名称是 title 而非 name，商机是 opportunityName，订单是 po，订单产品是 productName 等）向用户进行逐个对象的精确字段校准和对照汇报！`);
+        }
+
+        if (isAskingTemplateOrWord) {
+          systemParts.push(`【系统实时调度指令 (最高执行优先级 - 必须先查字段再生成真实物理文件！)】：
+检测到用户要求生成打印模板或 Word 文档（当前工作区路径: ${projectPath || '未指定'}）。
+【核心执行铁律 - 绝不允许空谈 Markdown 文字！】：
+1. 【第一步·真实字段校准】：你必须先自动调用 get_print_template_fields 或 get_entity_fields 工具，获取目标对象（如 order 订单）及关联明细子对象（如 orderProduct 订单产品、orderPayment 订单支付）在当前租户真实存在的字段 API Key，绝对禁止瞎猜臆造（严禁将客户名称写成 name，必须是 accountName；严禁将合同名称写成 name，必须是 title；严禁臆造不存在的 poStatus、paymentBalance 等）！
+2. 【第二步·真实物理文件落盘】：校准字段后，你必须直接调用 generate_print_template 工具（传入 detailTables 包含全部产品明细与回款明细），在当前本地工作区生成符合销售易规范的真实 .docx 物理文件！
+3. 【反幻觉红线】：严禁在回答中空口声称“物理文件已通过 Python 脚本验证”、“已在本地生成物理文件：D:\\xxx.docx”等假动作！必须真实发起工具调用并在工具返回成功后，向用户汇报已落盘的文件名与绝对路径，生成的文件将实时出现在右侧项目文件与产物列表中供用户直接打开！`);
+        }
+
+        if (isAskingScriptOrFileIO) {
+          systemParts.push(`【系统实时调度指令 (最高优先级 - 必须调用工具真实读写并运行！)】：
+检测到用户要求生成脚本、运行脚本或读取文件进行分析。
+【核心铁律】：
+1. 若需分析本地文件，必须立即调用 read 工具读取真实文件内容，严禁空口假装读取！
+2. 若需生成脚本，必须立即调用 write 工具将代码写入当前工作区物理文件（如 scripts/xxx.js 或 .py）！
+3. 若需运行脚本或命令，必须立即调用 bash 工具真实执行该脚本，并基于捕获的真实 stdout/stderr 结果向用户汇报，严禁在正文中凭空虚构运行结果！`);
         }
 
         const isAskingPullCode =

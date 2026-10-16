@@ -543,6 +543,11 @@ export class PrintTemplateService {
       childObjectLabel?: string;
       columns: Array<{ apiKey: string; label: string }>;
     } | null;
+    detailTables?: Array<{
+      childObjectApiKey: string;
+      childObjectLabel?: string;
+      columns: Array<{ apiKey: string; label: string }>;
+    }> | null;
     includeSignatures?: boolean;
     workdir?: string;
   }): Promise<{
@@ -674,70 +679,103 @@ export class PrintTemplateService {
         })
       );
 
-      // 4. 二、明细子对象表格 (物理表格循环行 - 严格遵循起始 ##={begin:子对象_prt} 与结束 ##={end} 规范)
-      // 若未显式传入 detailTable，根据常见对象智能匹配默认明细子表
-      let effectiveDetailTable = params.detailTable;
-      if (!effectiveDetailTable || !effectiveDetailTable.columns || effectiveDetailTable.columns.length === 0) {
+      // 4. 二、明细子对象表格集合 (支持渲染多个相关对象明细，物理表格循环行 - 严格遵循起始 ##={begin:子对象_prt} 与结束 ##={end} 规范)
+      let effectiveTables: Array<{
+        childObjectApiKey: string;
+        childObjectLabel?: string;
+        columns: Array<{ apiKey: string; label: string }>;
+      }> = [];
+
+      if (params.detailTables && params.detailTables.length > 0) {
+        effectiveTables = params.detailTables.filter((t) => t && t.columns && t.columns.length > 0);
+      } else if (params.detailTable && params.detailTable.columns && params.detailTable.columns.length > 0) {
+        effectiveTables = [params.detailTable];
+      } else {
         const entKey = params.entityApiKey.toLowerCase();
-        if (entKey === 'account' || entKey === '客户') {
-          effectiveDetailTable = {
-            childObjectApiKey: 'contact',
-            childObjectLabel: '客户联系人明细',
-            columns: [
-              { label: '联系人姓名', apiKey: 'contactName' },
-              { label: '职务', apiKey: 'title' },
-              { label: '移动电话', apiKey: 'mobile' },
-              { label: '电子邮箱', apiKey: 'email' },
-            ],
-          };
+        if (entKey === 'order' || entKey === '订单') {
+          // 订单默认包含全部相关对象明细：1) 订购产品清单 2) 订单回款/支付明细
+          effectiveTables = [
+            {
+              childObjectApiKey: 'orderProduct',
+              childObjectLabel: '订购产品与商品清单',
+              columns: [
+                { label: '产品编码', apiKey: 'productCode' },
+                { label: '产品名称', apiKey: 'productName' },
+                { label: '销售单价', apiKey: 'price' },
+                { label: '数量', apiKey: 'quantity' },
+                { label: '单位', apiKey: 'unit' },
+                { label: '小计金额', apiKey: 'amount' },
+              ],
+            },
+            {
+              childObjectApiKey: 'orderPayment',
+              childObjectLabel: '订单回款与支付流水明细',
+              columns: [
+                { label: '支付流水号', apiKey: 'payNo' },
+                { label: '支付方式', apiKey: 'payType' },
+                { label: '支付金额', apiKey: 'payAmount' },
+                { label: '支付状态', apiKey: 'status' },
+                { label: '完成时间', apiKey: 'payTime' },
+              ],
+            },
+          ];
+        } else if (entKey === 'account' || entKey === '客户') {
+          effectiveTables = [
+            {
+              childObjectApiKey: 'contact',
+              childObjectLabel: '客户联系人明细',
+              columns: [
+                { label: '联系人姓名', apiKey: 'contactName' },
+                { label: '职务', apiKey: 'title' },
+                { label: '移动电话', apiKey: 'mobile' },
+                { label: '电子邮箱', apiKey: 'email' },
+              ],
+            },
+          ];
         } else if (entKey === 'contract' || entKey === '合同') {
-          effectiveDetailTable = {
-            childObjectApiKey: 'orderProduct',
-            childObjectLabel: '合同产品与服务清单',
-            columns: [
-              { label: '产品名称', apiKey: 'productName' },
-              { label: '数量', apiKey: 'quantity' },
-              { label: '销售单价', apiKey: 'price' },
-              { label: '小计金额', apiKey: 'amount' },
-            ],
-          };
-        } else if (entKey === 'order' || entKey === '订单') {
-          effectiveDetailTable = {
-            childObjectApiKey: 'orderProduct',
-            childObjectLabel: '订单商品明细',
-            columns: [
-              { label: '商品名称', apiKey: 'productName' },
-              { label: '订购数量', apiKey: 'quantity' },
-              { label: '单价', apiKey: 'price' },
-              { label: '小计金额', apiKey: 'amount' },
-            ],
-          };
+          effectiveTables = [
+            {
+              childObjectApiKey: 'orderProduct',
+              childObjectLabel: '合同产品与服务清单',
+              columns: [
+                { label: '产品名称', apiKey: 'productName' },
+                { label: '数量', apiKey: 'quantity' },
+                { label: '销售单价', apiKey: 'price' },
+                { label: '小计金额', apiKey: 'amount' },
+              ],
+            },
+          ];
         } else if (entKey.includes('maintenance') || entKey.includes('工单') || entKey === 'case') {
-          effectiveDetailTable = {
-            childObjectApiKey: 'caseComment',
-            childObjectLabel: '服务处理与流转明细',
-            columns: [
-              { label: '处理环节', apiKey: 'stepName' },
-              { label: '处理人员', apiKey: 'ownerId.name' },
-              { label: '处理时间', apiKey: 'createdAt' },
-              { label: '处理意见/说明', apiKey: 'comment' },
-            ],
-          };
+          effectiveTables = [
+            {
+              childObjectApiKey: 'caseComment',
+              childObjectLabel: '服务处理与流转明细',
+              columns: [
+                { label: '处理环节', apiKey: 'stepName' },
+                { label: '处理人员', apiKey: 'ownerId.name' },
+                { label: '处理时间', apiKey: 'createdAt' },
+                { label: '处理意见/说明', apiKey: 'comment' },
+              ],
+            },
+          ];
         }
       }
 
-      if (effectiveDetailTable && effectiveDetailTable.columns && effectiveDetailTable.columns.length > 0) {
-        const childLabel = effectiveDetailTable.childObjectLabel || '关联明细';
-        const childKey = effectiveDetailTable.childObjectApiKey || 'items';
-        const cols = effectiveDetailTable.columns;
+      // 循环渲染每一个明细表格
+      const sectionNumChinese = ['二', '三', '四', '五', '六'];
+      effectiveTables.forEach((tableItem, tIdx) => {
+        const childLabel = tableItem.childObjectLabel || `关联明细 ${tIdx + 1}`;
+        const childKey = tableItem.childObjectApiKey || 'items';
+        const cols = tableItem.columns;
         const colWidth = Math.floor(100 / cols.length);
+        const sectionHeader = sectionNumChinese[tIdx] || `${tIdx + 2}`;
 
         children.push(
           new Paragraph({
             spacing: { before: 300, after: 120 },
             children: [
               new TextRun({
-                text: `二、 【${childLabel}】列表 (物理表格循环)`,
+                text: `${sectionHeader}、 【${childLabel}】列表 (物理表格循环)`,
                 bold: true,
                 size: 22,
                 color: '1E293B',
@@ -746,7 +784,7 @@ export class PrintTemplateService {
           })
         );
 
-        // 第 0 行：循环起始参数行 ##={begin:子对象_prt} (销售易列表打印必须包含的起始参数)
+        // 第 0 行：循环起始参数行 ##={begin:子对象_prt}
         const startRow = new TableRow({
           children: cols.map(() =>
             new TableCell({
@@ -849,7 +887,7 @@ export class PrintTemplateService {
           ),
         });
 
-        // 第 5 行：循环结束参数行 ##={end} (销售易列表打印必须包含的结束参数)
+        // 第 5 行：循环结束参数行 ##={end}
         const endRow = new TableRow({
           children: cols.map(() =>
             new TableCell({
@@ -878,7 +916,50 @@ export class PrintTemplateService {
             rows: [startRow, headStartRow, thRow, headEndRow, loopRow, endRow],
           })
         );
-      }
+      });
+
+      // 追加审批历史记录专用循环表格
+      children.push(
+        new Paragraph({
+          spacing: { before: 300, after: 120 },
+          children: [
+            new TextRun({
+              text: '【系统审批流转历史记录】',
+              bold: true,
+              size: 22,
+              color: '1E293B',
+            }),
+          ],
+        }),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({
+                  shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+                  children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '##={begin:approvalHistories_prt}', size: 18, bold: true, color: '475569' })] })],
+                }),
+              ],
+            }),
+            new TableRow({
+              children: [
+                new TableCell({
+                  children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '##{prt}', size: 20, color: '0F172A' })] })],
+                }),
+              ],
+            }),
+            new TableRow({
+              children: [
+                new TableCell({
+                  shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
+                  children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '##={end}', size: 18, bold: true, color: '475569' })] })],
+                }),
+              ],
+            }),
+          ],
+        })
+      );
 
       // 5. 三、审核与业务签章区
       if (params.includeSignatures !== false) {
@@ -902,7 +983,7 @@ export class PrintTemplateService {
               new TableCell({
                 width: { size: 33, type: WidthType.PERCENTAGE },
                 shading: { fill: 'F8FAFC', type: ShadingType.CLEAR },
-                children: [new Paragraph({ children: [new TextRun({ text: '经办人签字', bold: true, size: 20 })] })],
+                children: [new Paragraph({ children: [new TextRun({ text: '需方（客户盖章）: ##{accountId.accountName}', bold: true, size: 20 })] })],
               }),
               new TableCell({
                 width: { size: 33, type: WidthType.PERCENTAGE },

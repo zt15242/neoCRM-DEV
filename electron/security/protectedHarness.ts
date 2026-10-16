@@ -406,10 +406,10 @@ export const CRM_HARNESS_TOOLS_SPEC = [
           },
           detailTable: {
             type: 'object',
-            description: '明细子对象表格循环配置（用于在 Word 物理表格行中循环渲染子记录）',
+            description: '单个明细子对象表格循环配置（用于在 Word 物理表格行中循环渲染子记录）',
             properties: {
-              childObjectApiKey: { type: 'string', description: '子对象 API Key，如 "contact"、"opportunity"、"order"' },
-              childObjectLabel: { type: 'string', description: '子对象中文名，如 "联系人明细"、"商机明细"' },
+              childObjectApiKey: { type: 'string', description: '子对象 API Key，如 "orderProduct"、"contact"、"opportunity"' },
+              childObjectLabel: { type: 'string', description: '子对象中文名，如 "订购产品明细"、"联系人明细"' },
               columns: {
                 type: 'array',
                 description: '明细表格各列定义',
@@ -424,6 +424,30 @@ export const CRM_HARNESS_TOOLS_SPEC = [
               },
             },
             required: ['childObjectApiKey', 'columns'],
+          },
+          detailTables: {
+            type: 'array',
+            description: '多个明细子对象表格循环配置列表（当模板包含多个相关子对象明细时使用，如订单商品明细 + 订单回款支付明细）',
+            items: {
+              type: 'object',
+              properties: {
+                childObjectApiKey: { type: 'string', description: '子对象 API Key，如 "orderProduct"、"orderPayment"、"contact"' },
+                childObjectLabel: { type: 'string', description: '子对象中文名，如 "订购产品明细"、"回款支付明细"' },
+                columns: {
+                  type: 'array',
+                  description: '明细表格各列定义',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      apiKey: { type: 'string', description: '子字段 API Key' },
+                      label: { type: 'string', description: '列头中文名' },
+                    },
+                    required: ['apiKey', 'label'],
+                  },
+                },
+              },
+              required: ['childObjectApiKey', 'columns'],
+            },
           },
           includeSignatures: {
             type: 'boolean',
