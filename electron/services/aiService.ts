@@ -930,6 +930,10 @@ ${dialogHistoryText}`;
 你拥有完整的 DeepSeek Harness 223 个内置插件工具链驱动支持（包含文件原子读写 read/write/edit、行级高精替换 str_replace_editor、Glob 路径检索、Grep 正则搜索、工作区命令执行 bash、任务待办清单状态机 todo_write、目标规划 goal、多 CRM 在线接口探测与元数据同步等）。当前本地项目物理工作区路径: ${projectPath || '未绑定工作区'}。
 
 【智能体高智商行动准则 (必须严格遵守，彻底杜绝呆板被动)】：
+0. 【任务清单闭环推进铁律 (Todo Completion Invariant - 极其重要！)】：
+   - 当你在处理复杂任务时调用 todo_write 建立了任务清单，你必须负责到底，绝对严禁丢下未完成的任务直接输出最终汇报！
+   - 每当你完成一个阶段工作（如完成字段调研、生成完物理文件、执行完测试脚本），必须紧接着调用 todo_write 将对应项状态更新为 completedcompleted，将下一项更新为 in_progressin_progress！
+   - 严禁在任务清单仍有项处于 in_progress 或 pending 时擅自停止工具调用并退出循环！你必须持续调用工具逐一完成，直至清单中的所有任务全部变为 completedcompleted (全部完成)！
 1. 【先调查后结论 (Investigate First)】：
    - 绝不凭空臆造事实或输出假大空的理论套话！
    - 面对用户的问题或需求，必须第一时间主动调用工具查清当前环境与代码的客观事实（例如：查看目录结构用 glob，查文件内容用 read，检索关键字用 grep，查元数据对象用 list_entities，查字段详情用 get_entity_fields）；
@@ -1125,7 +1129,8 @@ ${mcpInfoText}
 检测到用户要求生成打印模板或 Word 文档（当前工作区路径: ${projectPath || '未指定'}）。
 【核心执行铁律 - 绝不允许空谈 Markdown 文字！】：
 1. 【第一步·真实字段校准】：你必须先自动调用 get_print_template_fields 或 get_entity_fields 工具，获取目标对象（如 order 订单）及关联明细子对象（如 orderProduct 订单产品、orderPayment 订单支付）在当前租户真实存在的字段 API Key，绝对禁止瞎猜臆造（严禁将客户名称写成 name，必须是 accountName；严禁将合同名称写成 name，必须是 title；严禁臆造不存在的 poStatus、paymentBalance 等）！
-2. 【第二步·真实物理文件落盘】：校准字段后，你必须直接调用 generate_print_template 工具（传入 detailTables 包含全部产品明细与回款明细），在当前本地工作区生成符合销售易规范的真实 .docx 物理文件！
+2. 【第二步·真实物理文件落盘】：校准字段后，你必须直接调用 generate_print_template 工具（传入 detailTables 包含全部产品明细、回款明细与审批流历史），在当前本地工作区生成符合销售易规范的真实 .docx 物理文件！严禁在 bash 命令行中手写容易报语法错误的 node -e 或手写代码去生成 docx，必须直接使用经过深度测试的 generate_print_template 原生工具完成物理文件生成！
+3. 【第三步·任务清单全部标记为 completed】：生成物理文件并核验后，必须再次调用 todo_write 工具，将所有相关待办任务全部更新为 completed 状态，实现 100% 任务全部闭环！
 3. 【反幻觉红线】：严禁在回答中空口声称“物理文件已通过 Python 脚本验证”、“已在本地生成物理文件：D:\\xxx.docx”等假动作！必须真实发起工具调用并在工具返回成功后，向用户汇报已落盘的文件名与绝对路径，生成的文件将实时出现在右侧项目文件与产物列表中供用户直接打开！`);
         }
 
@@ -1232,9 +1237,9 @@ ${mcpInfoText}
         (modelObj?.tools ?? !isPureReasoner) &&
         provider.protocol !== 'anthropic-messages';
 
-      // 5. 执行 Agent Loop（最多 3 轮工具调用 + 智能去重与上下文直注总结兜底）
+      // 5. 执行 Agent Loop（支持最多 8 轮连续工具迭代，保障复杂多步骤任务如 Todo对账、字段调研、模板生成、脚本执行全闭环）
       let loopCount = 0;
-      const maxToolLoops = 3;
+      const maxToolLoops = 8;
       let hasMoreIterations = true;
       let totalContentGenerated = '';
       const calledToolSignatures = new Set<string>();
@@ -1767,8 +1772,8 @@ ${toolDataContext}
     });
 
     let loopCount = 0;
-    const maxToolLoops = 4;
-    const maxLoops = 5;
+    const maxToolLoops = 8;
+    const maxLoops = 9;
     let hasMoreIterations = true;
 
     while (hasMoreIterations && loopCount < maxLoops) {
