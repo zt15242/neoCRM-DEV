@@ -541,6 +541,7 @@ export interface TenantFlowItem {
 
 export interface WorkflowDeployResult {
   success: boolean;
+  hasWarning?: boolean;
   procId?: string | number;
   procdefId?: string | number;
   procdefApiKey?: string;

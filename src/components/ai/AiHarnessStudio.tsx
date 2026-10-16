@@ -1082,6 +1082,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
           onClose={() => setPendingWorkflowPlan(null)}
           onRefreshSession={loadData}
+          onSendDiagnosticToAi={(msg) => {
+            setPendingWorkflowPlan(null);
+            handleSendMessage(msg);
+          }}
           showToast={showToast}
         />
       )}
@@ -1095,6 +1099,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
           onClose={() => setPendingApprovalPlan(null)}
           onRefreshSession={loadData}
+          onSendDiagnosticToAi={(msg) => {
+            setPendingApprovalPlan(null);
+            handleSendMessage(msg);
+          }}
           showToast={showToast}
         />
       )}

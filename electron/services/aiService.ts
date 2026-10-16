@@ -1247,6 +1247,30 @@ ${mcpInfoText}
           systemParts.push(`【系统实时调度指令 (最高优先级)】：检测到用户正在请求【拉取代码 / 拉取后端前端代码 / 同步本地工程】。当前本地工作区路径为: ${projectPath || '未指定'}。根据当前平台规范，【你必须立即在首轮输出中自动调用 pull_crm_project_code 工具执行真实接口数据拉取，并在本地项目目录实际创建文件与目录落盘】，绝不可仅在回答中以 Markdown 文本虚构假报告！`);
         }
 
+        const isDeployErrorOrDiagnosis =
+          userContent.includes('部署失败') ||
+          userContent.includes('未能立即启用') ||
+          userContent.includes('服务端全流程调用日志') ||
+          userContent.includes('流程定义缺少') ||
+          userContent.includes('连线目标节点无效') ||
+          userContent.includes('无法找到用户') ||
+          userContent.includes('分析解决错误') ||
+          userContent.includes('诊断并修复') ||
+          userContent.includes('未能成功激活启用') ||
+          userContent.includes('部署日志') ||
+          userContent.includes('连线源节点无效');
+
+        if (isDeployErrorOrDiagnosis) {
+          systemParts.push(`【系统实时调度指令 (最高优先级 - 流程部署报错深度诊断与自愈修复)】：
+检测到用户正在反馈流程（审批流或自动流程）在服务端部署/启用时遇到的错误或警告日志。
+【你必须严格执行以下专业分析与闭环自愈】：
+1. 【深度穿透服务端报错根因】：
+   - 【拓扑缺失与连线无效】：若服务端报「流程定义缺少开始节点 / 结束节点」或「连线源/目标节点无效、必须有源连线」，是因为流程图模型中缺少合规的 StartNoneEvent 起点或 EndNoneEvent 终点，或者连线 (SequenceFlow) 未在底层服务端 businessConfig.edgesList 中完整闭环映射；
+   - 【找不到用户】：若服务端报「无法找到用户 【xxx】」，是因为在审批人配置中硬编码了具体人员 (assignmentType: 202)，而该人员在当前租户或审批流引擎中不存在、未分配审批权限或离职失效。指出在销售易审批流实施规范中，硬编码指定人员是高危单点故障，必须采用【提交人直属上级 (205)】或【指定角色 (401)】或【自选审批人 (201)】；
+2. 【结合当前上下文自愈修复】：
+   - 严禁只讲理论！你必须立刻根据当前租户已确认的真实对象、真实字段与业务逻辑，直接输出修复后的完整 \`\`\`json:approval-plan 或 \`\`\`json:workflow-plan 代码块，确保包含合规的开始/结束节点、闭环连线与稳健的审批人规则，让用户在界面上立即重新出现一键部署卡片并顺畅部署生效！`);
+        }
+
         const isExecutionRequested =
           /(?:执行|开始|确认|自动执行|帮我跑|跑一下|运行|部署|拉取|同步).*(?:方案|命令|代码|脚本|步骤|manifest|retrieve|pull)/i.test(userContent) ||
           /(?:不能自动执行|为什么不自动执行|我都确认了|我已经确认|按方案|方式一|方式二|方案A|方案B|执行方案)/i.test(userContent) ||

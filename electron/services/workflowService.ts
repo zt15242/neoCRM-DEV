@@ -922,6 +922,27 @@ export class WorkflowService {
         });
       }
 
+      // 提取开始节点与结束节点，若缺失则强制补全，确保拓扑严格闭环
+      let startNode = fullOrderedNodes.find((n) => n.nodeType === "StartNoneEvent");
+      if (!startNode) {
+        startNode = {
+          id: "StartEvent_1",
+          nodeType: "StartNoneEvent",
+          name: "开始",
+        };
+        fullOrderedNodes.unshift(startNode);
+      }
+
+      let endNode = fullOrderedNodes.find((n) => n.nodeType === "EndNoneEvent");
+      if (!endNode) {
+        endNode = {
+          id: "EndEvent_1",
+          nodeType: "EndNoneEvent",
+          name: "结束",
+        };
+        fullOrderedNodes.push(endNode);
+      }
+
       // 将连线 edges 中指向/发自原有提交节点 ID (如 SubmitTask_1) 的引用无缝重定向到 ___submitUserTaskDefKey___
       const edges = (plan.edges || []).map((e) => ({
         source: (originalSubmitId && e.source === originalSubmitId) ? submitNodeKey : e.source,
@@ -932,17 +953,24 @@ export class WorkflowService {
         conditionFormula: (e as any).conditionFormula,
       }));
 
-      if (edges.length === 0 && fullOrderedNodes.length > 1) {
-        const startNode = fullOrderedNodes.find((n) => n.nodeType === "StartNoneEvent") || fullOrderedNodes[0];
-        let prevNodeId = startNode.id;
-        if (!fullOrderedNodes.some((n) => n.id === submitNodeKey)) {
-          edges.push({ source: startNode.id, target: submitNodeKey });
-          prevNodeId = submitNodeKey;
-        }
-        for (const n of fullOrderedNodes) {
-          if (n.id === startNode.id || n.id === submitNodeKey) continue;
-          edges.push({ source: prevNodeId, target: n.id });
-          prevNodeId = n.id;
+      // 确保开始节点有出线指向提交申请节点
+      if (!edges.some((e) => e.source === startNode!.id)) {
+        edges.unshift({
+          source: startNode!.id,
+          target: submitNodeKey,
+          label: "开始申请",
+        });
+      }
+
+      // 确保末端业务节点均有出线闭环连接至结束节点
+      const outgoingSources = new Set(edges.map((e) => e.source));
+      for (const n of fullOrderedNodes) {
+        if (n.id !== endNode.id && !outgoingSources.has(n.id)) {
+          edges.push({
+            source: n.id,
+            target: endNode.id,
+            label: "流程归档",
+          });
         }
       }
 
@@ -1335,6 +1363,27 @@ export class WorkflowService {
         });
       }
 
+      const startNodesList = fullOrderedNodes
+        .filter((n) => n.nodeType === "StartNoneEvent")
+        .map((n) => ({
+          taskDefKey: n.id,
+          taskDefName: n.name || "开始",
+        }));
+
+      const endNodesList = fullOrderedNodes
+        .filter((n) => n.nodeType === "EndNoneEvent")
+        .map((n) => ({
+          taskDefKey: n.id,
+          taskDefName: n.name || "结束",
+        }));
+
+      const edgesList = edges.map((e, eIdx) => ({
+        sourceId: e.source,
+        targetId: e.target,
+        seqFlowId: `edge__${eIdx + 1}_${e.source}_${e.target}`,
+        seqFlowName: e.label || `连线_${eIdx + 1}`,
+      }));
+
       const flowJsonPayload = {
         nodeInfo,
         comboInfo: {},
@@ -1349,9 +1398,9 @@ export class WorkflowService {
           actions: [],
           resourceConfig: [],
           stage: [],
-          startNode: [],
-          edgesList: [],
-          endNode: [],
+          startNode: startNodesList,
+          edgesList: edgesList,
+          endNode: endNodesList,
           subProcParamsList: [],
           pools: [],
         },
@@ -1429,13 +1478,17 @@ export class WorkflowService {
         logStep("步骤 7: 流程状态确认", "skipped", "遵循实施规范保留为【设计态草稿】(status=3)，方便在设计器中可视化复核或稍后手动启用");
       }
 
+      const hasWarning = options?.autoEnable ? finalStatus !== 1 : false;
+
       return {
-        success: true,
+        success: !hasWarning,
+        hasWarning,
         procId,
         procdefId,
         procdefApiKey,
         status: finalStatus,
-        statusText: finalStatus === 1 ? "已启用" : "设计态草稿",
+        statusText: finalStatus === 1 ? "已启用" : hasWarning ? "设计态草稿 (启用未通过)" : "设计态草稿",
+        error: hasWarning ? "审批流设计态已落库保存，但激活启用版本校验未通过" : undefined,
         stepsLog,
       };
     } catch (err: any) {
@@ -2646,6 +2699,27 @@ export class WorkflowService {
         });
       }
 
+      const startNodesList = plan.nodes
+        .filter((n) => n.nodeType === "StartNoneEvent")
+        .map((n) => ({
+          taskDefKey: n.id,
+          taskDefName: n.name || "开始",
+        }));
+
+      const endNodesList = plan.nodes
+        .filter((n) => n.nodeType === "EndNoneEvent")
+        .map((n) => ({
+          taskDefKey: n.id,
+          taskDefName: n.name || "结束",
+        }));
+
+      const edgesList = edges.map((e, eIdx) => ({
+        sourceId: e.source,
+        targetId: e.target,
+        seqFlowId: `edge__${eIdx + 1}_${e.source}_${e.target}`,
+        seqFlowName: (e as any).label || (e as any).name || `连线_${eIdx + 1}`,
+      }));
+
       const flowJsonPayload = {
         nodeInfo,
         comboInfo: {},
@@ -2657,12 +2731,12 @@ export class WorkflowService {
           gateWays: gateWaysList,
           resourceConfig,
           stage: [],
-          startNode: [],
+          startNode: startNodesList,
           submittask: {},
           pools: [],
           actions: actionsConfigList,
-          edgesList: [],
-          endNode: [],
+          edgesList: edgesList,
+          endNode: endNodesList,
           subProcParamsList: [],
           usertasks: [],
         },
@@ -2721,13 +2795,17 @@ export class WorkflowService {
         logStep('步骤 8: 流程状态确认', 'skipped', '当前遵循规范保留为【设计态草稿】(status=3)，方便在设计器中可视化复核或稍后手动启用');
       }
 
+      const hasWarning = options?.autoEnable ? finalStatus !== 1 : false;
+
       return {
-        success: true,
+        success: !hasWarning,
+        hasWarning,
         procId,
         procdefId,
         procdefApiKey,
         status: finalStatus,
-        statusText: finalStatus === 1 ? '已启用' : '设计态草稿',
+        statusText: finalStatus === 1 ? '已启用' : hasWarning ? '设计态草稿 (启用未通过)' : '设计态草稿',
+        error: hasWarning ? '流程设计态已落库保存，但激活启用版本校验未通过' : undefined,
         stepsLog,
       };
     } catch (err: any) {

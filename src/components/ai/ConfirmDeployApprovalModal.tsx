@@ -25,7 +25,8 @@ import {
   SlidersHorizontal,
   CheckSquare,
   Square,
-  Info
+  Info,
+  Sparkles
 } from "lucide-react";
 
 interface ConfirmDeployApprovalModalProps {
@@ -35,6 +36,7 @@ interface ConfirmDeployApprovalModalProps {
   onOpenLicenseModal?: () => void;
   onClose: () => void;
   onRefreshSession: () => void;
+  onSendDiagnosticToAi?: (diagnosticMessage: string) => void;
   showToast: (type: "success" | "error" | "info", text: string) => void;
 }
 
@@ -45,6 +47,7 @@ export const ConfirmDeployApprovalModal: React.FC<ConfirmDeployApprovalModalProp
   onOpenLicenseModal,
   onClose,
   onRefreshSession,
+  onSendDiagnosticToAi,
   showToast,
 }) => {
   // 当前向导步骤: 1 凭证核验, 2 对象与类型, 3 审批人与编辑字段, 4 撤回通知与部署
@@ -159,6 +162,38 @@ export const ConfirmDeployApprovalModal: React.FC<ConfirmDeployApprovalModalProp
     } finally {
       setIsCapturingCookie(false);
     }
+  };
+
+  const hasIssues = Boolean(
+    deployResult &&
+    (!deployResult.success ||
+     deployResult.hasWarning ||
+     deployResult.stepsLog?.some((s) => s.status === "warn" || s.status === "error"))
+  );
+
+  const handleSendDiagnosticsToAi = () => {
+    if (!onSendDiagnosticToAi || !deployResult) return;
+
+    const logLines = (deployResult.stepsLog || [])
+      .map((s) => `[${s.status.toUpperCase()}] ${s.step}: ${s.message}${s.timeMs ? ` (${s.timeMs}ms)` : ""}`)
+      .join("\n");
+
+    const failedStep = deployResult.stepsLog?.find((s) => s.status === "warn" || s.status === "error");
+
+    const prompt = `我刚才在部署审批流【${processName}】时服务端返回了报错，导致流程未能成功激活启用。请结合当前会话的上下文与此前的审批流设计方案，深度分析为什么会报以下错误，并重新生成完全合规的修复方案代码块（\`\`\`json:approval-plan）供我重新一键部署：
+
+【服务端全流程调用日志】：
+\`\`\`text
+${logLines}
+\`\`\`
+
+【关键报错排查诉求】：
+1. 为什么服务端会提示：${failedStep?.message || "连线无效或找不到审批人"}？
+2. 请核查并修复流程拓扑（必须包含开始节点 StartNoneEvent、提交节点 ___submitUserTaskDefKey___、结束节点 EndNoneEvent，且每条 SequenceFlow 的连线源与目标必须完全闭环有效，服务端 edgesList 必须完整）；
+3. 请核查并修复审批人配置（若指定用户存在异常，请按照销售易最佳实施规范纠正为提交人直属上级 205、指定角色 401 或自选审批人 201）；
+4. 修复后，直接输出完整的 \`\`\`json:approval-plan 代码块，以便我立即重新一键部署生效！`;
+
+    onSendDiagnosticToAi(prompt);
   };
 
   // 保存手动输入的 Cookie
@@ -910,9 +945,13 @@ export const ConfirmDeployApprovalModal: React.FC<ConfirmDeployApprovalModalProp
                       <span>服务端全流程调用日志 ({deployResult.stepsLog?.length || 0} 个阶段)</span>
                     </h4>
                     <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
-                      deployResult.success ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+                      !hasIssues
+                        ? "bg-emerald-100 text-emerald-800"
+                        : deployResult.success
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-rose-100 text-rose-800"
                     }`}>
-                      {deployResult.success ? "DEPLOY SUCCESS" : "DEPLOY FAILED"}
+                      {!hasIssues ? "DEPLOY SUCCESS" : deployResult.success ? "DEPLOY WITH WARNINGS" : "DEPLOY FAILED"}
                     </span>
                   </div>
 
@@ -938,6 +977,31 @@ export const ConfirmDeployApprovalModal: React.FC<ConfirmDeployApprovalModalProp
                       </div>
                     ))}
                   </div>
+
+                  {/* 智能体诊断与自愈修复条带 */}
+                  {hasIssues && (
+                    <div className="p-3.5 bg-gradient-to-r from-amber-50 to-indigo-50 rounded-2xl border border-amber-200 flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center space-x-2.5 text-amber-950">
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                        <div>
+                          <div className="font-bold">服务端反馈拓扑或审批人警告/异常</div>
+                          <div className="text-[11px] text-amber-800">
+                            流程未能成功激活启用（已作为设计态草稿保存）。可一键发送给 AI 结合上下文自动分析报错原因并修复方案。
+                          </div>
+                        </div>
+                      </div>
+                      {onSendDiagnosticToAi && (
+                        <button
+                          type="button"
+                          onClick={handleSendDiagnosticsToAi}
+                          className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-xs shadow-xs flex items-center space-x-1.5 shrink-0 cursor-pointer transition-all hover:scale-102"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>🤖 发送给 AI 诊断并修复</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -995,6 +1059,18 @@ export const ConfirmDeployApprovalModal: React.FC<ConfirmDeployApprovalModalProp
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-all cursor-pointer"
               >
                 <span>确认策略无误，下一步 ➔</span>
+              </button>
+            )}
+
+            {/* 发送给 AI 诊断错误按钮 */}
+            {currentStep === 4 && hasIssues && onSendDiagnosticToAi && (
+              <button
+                type="button"
+                onClick={handleSendDiagnosticsToAi}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-indigo-600 hover:from-amber-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-xs flex items-center space-x-1.5 transition-all cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>🤖 发送给 AI 诊断并修复错误</span>
               </button>
             )}
 

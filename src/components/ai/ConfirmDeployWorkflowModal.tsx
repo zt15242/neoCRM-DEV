@@ -37,6 +37,7 @@ interface ConfirmDeployWorkflowModalProps {
   onOpenLicenseModal?: () => void;
   onClose: () => void;
   onRefreshSession: () => void;
+  onSendDiagnosticToAi?: (diagnosticMessage: string) => void;
   showToast: (type: "success" | "error" | "info", text: string) => void;
 }
 
@@ -47,6 +48,7 @@ export const ConfirmDeployWorkflowModal: React.FC<ConfirmDeployWorkflowModalProp
   onOpenLicenseModal,
   onClose,
   onRefreshSession,
+  onSendDiagnosticToAi,
   showToast,
 }) => {
   // 当前向导步骤: 1 凭证核验, 2 对象与入口, 3 分支与回写, 4 部署与执行
@@ -167,6 +169,37 @@ export const ConfirmDeployWorkflowModal: React.FC<ConfirmDeployWorkflowModalProp
     } finally {
       setIsCapturingCookie(false);
     }
+  };
+
+  const hasIssues = Boolean(
+    deployResult &&
+    (!deployResult.success ||
+     deployResult.hasWarning ||
+     deployResult.stepsLog?.some((s) => s.status === "warn" || s.status === "error"))
+  );
+
+  const handleSendDiagnosticsToAi = () => {
+    if (!onSendDiagnosticToAi || !deployResult) return;
+
+    const logLines = (deployResult.stepsLog || [])
+      .map((s) => `[${s.status.toUpperCase()}] ${s.step}: ${s.message}${s.timeMs ? ` (${s.timeMs}ms)` : ""}`)
+      .join("\n");
+
+    const failedStep = deployResult.stepsLog?.find((s) => s.status === "warn" || s.status === "error");
+
+    const prompt = `我刚才在部署自动流程【${processName}】时服务端返回了报错，导致流程未能成功激活启用。请结合当前会话的上下文与此前的流程设计方案，深度分析为什么会报以下错误，并重新生成完全合规的修复方案代码块（\`\`\`json:workflow-plan）供我重新一键部署：
+
+【服务端全流程调用日志】：
+\`\`\`text
+${logLines}
+\`\`\`
+
+【关键报错排查诉求】：
+1. 深度穿透分析报错根因：${failedStep?.message || "流程校验未通过"}；
+2. 修复流程拓扑结构与节点属性（确保开始节点、网关分支条件、动作绑定、结束节点均合规闭环）；
+3. 修复后，直接输出完整的 \`\`\`json:workflow-plan 代码块，以便我立即重新一键部署生效！`;
+
+    onSendDiagnosticToAi(prompt);
   };
 
   // 保存手动输入的 Cookie
@@ -836,6 +869,31 @@ export const ConfirmDeployWorkflowModal: React.FC<ConfirmDeployWorkflowModalProp
                       </span>
                     ))}
                   </div>
+
+                  {/* 智能体诊断与自愈修复条带 */}
+                  {hasIssues && (
+                    <div className="p-3.5 bg-gradient-to-r from-amber-50 to-teal-50 rounded-2xl border border-amber-200 flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center space-x-2.5 text-amber-950">
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                        <div>
+                          <div className="font-bold">服务端反馈流程拓扑或规则警告/异常</div>
+                          <div className="text-[11px] text-amber-800">
+                            未能立即激活启用流程版本（已保存为设计态草稿）。可一键发送给 AI 结合当前上下文自动分析报错根因并修复方案。
+                          </div>
+                        </div>
+                      </div>
+                      {onSendDiagnosticToAi && (
+                        <button
+                          type="button"
+                          onClick={handleSendDiagnosticsToAi}
+                          className="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-semibold text-xs shadow-xs flex items-center space-x-1.5 shrink-0 cursor-pointer transition-all hover:scale-102"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>🤖 发送给 AI 诊断并修复</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -953,9 +1011,13 @@ export const ConfirmDeployWorkflowModal: React.FC<ConfirmDeployWorkflowModalProp
                       <span>服务端全流程调用日志 ({deployResult.stepsLog?.length || 0} 个阶段)</span>
                     </h4>
                     <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
-                      deployResult.success ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+                      !hasIssues
+                        ? "bg-emerald-100 text-emerald-800"
+                        : deployResult.success
+                        ? "bg-amber-100 text-amber-800"
+                        : "bg-rose-100 text-rose-800"
                     }`}>
-                      {deployResult.success ? "DEPLOY SUCCESS" : "DEPLOY FAILED"}
+                      {!hasIssues ? "DEPLOY SUCCESS" : deployResult.success ? "DEPLOY WITH WARNINGS" : "DEPLOY FAILED"}
                     </span>
                   </div>
 
@@ -981,6 +1043,31 @@ export const ConfirmDeployWorkflowModal: React.FC<ConfirmDeployWorkflowModalProp
                       </div>
                     ))}
                   </div>
+
+                  {/* 智能体诊断与自愈修复条带 */}
+                  {hasIssues && (
+                    <div className="p-3.5 bg-gradient-to-r from-amber-50 to-teal-50 rounded-2xl border border-amber-200 flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center space-x-2.5 text-amber-950">
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                        <div>
+                          <div className="font-bold">服务端反馈流程拓扑或规则警告/异常</div>
+                          <div className="text-[11px] text-amber-800">
+                            未能立即激活启用流程版本（已保存为设计态草稿）。可一键发送给 AI 结合当前上下文自动分析报错根因并修复方案。
+                          </div>
+                        </div>
+                      </div>
+                      {onSendDiagnosticToAi && (
+                        <button
+                          type="button"
+                          onClick={handleSendDiagnosticsToAi}
+                          className="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-semibold text-xs shadow-xs flex items-center space-x-1.5 shrink-0 cursor-pointer transition-all hover:scale-102"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>🤖 发送给 AI 诊断并修复</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1038,6 +1125,18 @@ export const ConfirmDeployWorkflowModal: React.FC<ConfirmDeployWorkflowModalProp
                 className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-all cursor-pointer"
               >
                 <span>确认规则无误，下一步 ➔</span>
+              </button>
+            )}
+
+            {/* 发送给 AI 诊断错误按钮 */}
+            {currentStep === 4 && hasIssues && onSendDiagnosticToAi && (
+              <button
+                type="button"
+                onClick={handleSendDiagnosticsToAi}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-teal-600 hover:from-amber-500 hover:to-teal-500 text-white text-xs font-semibold shadow-xs flex items-center space-x-1.5 transition-all cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>🤖 发送给 AI 诊断并修复错误</span>
               </button>
             )}
 
