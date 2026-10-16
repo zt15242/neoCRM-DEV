@@ -200,9 +200,12 @@ export class SessionStore {
       }
 
       try {
-        execSync(`sf org login sfdx-url -f "${tmpFile}" --alias ${alias} --set-default`, {
+        const cmd = process.platform === 'win32' ? 'sf.cmd' : 'sf';
+        execSync(`"${cmd}" org login sfdx-url -f "${tmpFile}" --alias ${alias} --set-default`, {
           encoding: 'utf-8',
           stdio: 'ignore',
+          windowsHide: true,
+          shell: true,
         });
       } catch (err: any) {
         console.warn('sf org login sfdx-url 同步提示:', err.message);

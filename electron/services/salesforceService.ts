@@ -19,9 +19,12 @@ export class SalesforceService {
    */
   private getLatestTokenFromCli(): string | null {
     try {
-      const stdout = execSync('sf org auth show-access-token -o aliNewStageFull --json', {
+      const cmd = process.platform === 'win32' ? 'sf.cmd' : 'sf';
+      const stdout = execSync(`"${cmd}" org auth show-access-token -o aliNewStageFull --json`, {
         encoding: 'utf-8',
         timeout: 8000,
+        windowsHide: true,
+        shell: true,
       });
       const data = JSON.parse(stdout);
       return data.result?.accessToken || null;

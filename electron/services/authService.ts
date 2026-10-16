@@ -17,17 +17,13 @@ export class AuthService {
     return new Promise((resolve) => {
       const server = net.createServer();
       server.once('error', (err: any) => {
-        if (err.code === 'EADDRINUSE') {
-          resolve(true);
-        } else {
-          resolve(false);
-        }
+        resolve(err.code === 'EADDRINUSE');
       });
       server.once('listening', () => {
-        server.once('close', () => resolve(false));
-        server.close();
+        server.close(() => resolve(false));
       });
-      server.listen(port);
+      // 明确绑定 127.0.0.1，避开 Windows 平台禁用 IPv6 时的 EADDRNOTAVAIL 报错及防火墙弹窗
+      server.listen(port, '127.0.0.1');
     });
   }
 
@@ -402,10 +398,20 @@ export class AuthService {
               : `${tokenData.tenant_id || "未返回"}`;
             const instanceUri = tokenData.instance_uri || env.neoBaseURL;
 
-            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-            res.end(this.getAuthSuccessHtml(tenantDesc, instanceUri, env));
-            server.close();
-            this.activeServer = null;
+            res.writeHead(200, {
+              "Content-Type": "text/html; charset=utf-8",
+              "Connection": "close",
+            });
+            res.end(this.getAuthSuccessHtml(tenantDesc, instanceUri, env), () => {
+              // 关键修复：必须等待 HTML 响应在 Windows TCP 栈中完全 flush 完毕后再关闭监听，防止浏览器报 ERR_CONNECTION_RESET
+              setTimeout(() => {
+                try {
+                  (server as any).closeAllConnections?.();
+                  server.close();
+                } catch {}
+                this.activeServer = null;
+              }, 1200);
+            });
             return resolve(tokenData);
           } catch (fetchErr: any) {
             res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
@@ -427,14 +433,28 @@ export class AuthService {
         }
       });
 
-      server.listen(port, () => {
+      const startBrowser = () => {
         this.activeServer = server;
         shell.openExternal(authUrl).catch((openErr) => {
-          server.close();
+          if (process.platform === 'win32') {
+            try {
+              const { exec } = require('node:child_process');
+              exec(`start "" "${authUrl}"`);
+              return;
+            } catch {}
+          }
+          try { server.close(); } catch {}
           this.activeServer = null;
           reject(new Error(`无法唤起默认浏览器: ${openErr.message}`));
         });
-      });
+      };
+
+      // Windows 优先绑定 0.0.0.0 (支持 localhost 与 127.0.0.1 双向访问)，若受限则降级绑定 127.0.0.1
+      try {
+        server.listen(port, '0.0.0.0', startBrowser);
+      } catch {
+        server.listen(port, '127.0.0.1', startBrowser);
+      }
 
       // 5分钟超时
       setTimeout(() => {
@@ -484,12 +504,13 @@ export class AuthService {
       }).catch(() => {});
 
       const authWin = new BrowserWindow({
-        width: 820,
-        height: 740,
+        width: 860,
+        height: 750,
         parent: parentWindow,
         modal: true,
         title: `${env.productType === "salesforce" ? "Salesforce" : env.productType === "fxiaoke" ? "纷享销客" : "销售易"}登录 - ${env.name}`,
         autoHideMenuBar: true,
+        backgroundColor: '#ffffff',
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
@@ -510,8 +531,10 @@ export class AuthService {
 
             if (error) {
               isSettled = true;
-              authWin.close();
-              this.embeddedAuthWindow = null;
+              setTimeout(() => {
+                try { if (!authWin.isDestroyed()) authWin.close(); } catch {}
+                this.embeddedAuthWindow = null;
+              }, 100);
               return reject(new Error(`授权被拒绝或出错: ${error}`));
             }
 
@@ -534,8 +557,12 @@ export class AuthService {
                 console.warn("提取内嵌浏览器 Cookies 异常:", cookieErr);
               }
 
-              authWin.close();
-              this.embeddedAuthWindow = null;
+              // 关键修复：延迟在下一个事件循环关闭窗口，防止 Windows 下 Chromium 网络回调期发生窗口对象被销毁异常
+              setTimeout(() => {
+                try { if (!authWin.isDestroyed()) authWin.close(); } catch {}
+                this.embeddedAuthWindow = null;
+              }, 150);
+
               try {
                 const token = await this.fetchTokenByCode(env, code, redirectUri, codeVerifier);
                 if (cookieString) {
@@ -561,8 +588,28 @@ export class AuthService {
       });
 
       authWin.webContents.session.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
+        let isRedirectMatched = false;
+        try {
+          const u = new URL(details.url);
+          if (
+            details.url.startsWith(redirectUri) ||
+            u.hostname === 'localhost' ||
+            u.hostname === '127.0.0.1' ||
+            u.pathname.includes('/services/oauth2/success') ||
+            (u.searchParams.has('code') && (details.url.includes('salesforce') || details.url.includes('sfcrmproducts')))
+          ) {
+            isRedirectMatched = true;
+          }
+        } catch {}
+
         checkUrl(details.url);
-        callback({});
+
+        if (isRedirectMatched) {
+          // 关键修复：取消对 localhost 的真实网络连接，防止 Windows 下未监听端口展示 ERR_CONNECTION_REFUSED 错误页
+          callback({ cancel: true });
+        } else {
+          callback({});
+        }
       });
 
       authWin.on("closed", () => {
@@ -717,6 +764,7 @@ export class AuthService {
   public cancelActiveAuth() {
     if (this.activeServer) {
       try {
+        (this.activeServer as any).closeAllConnections?.();
         this.activeServer.close();
       } catch {}
       this.activeServer = null;
