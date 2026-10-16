@@ -255,6 +255,7 @@ export const ConnectorDetailView: React.FC<ConnectorDetailViewProps> = ({
             <SessionDashboard
               session={session}
               onRefresh={onRefresh}
+              onReLogin={onLoginEmbedded || onLoginBrowser}
               onLogout={onLogout}
               onOpenDesigner={onOpenDesigner}
               onTestApi={onTestApi}

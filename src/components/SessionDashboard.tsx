@@ -24,6 +24,7 @@ import { SessionState } from '../../shared/types';
 interface SessionDashboardProps {
   session: SessionState;
   onRefresh: () => void | Promise<void>;
+  onReLogin?: () => void;
   onLogout: () => void;
   onOpenDesigner: (type: 'web' | 'h5') => void;
   onTestApi: () => Promise<{ success: boolean; data?: any; error?: string }>;
@@ -34,6 +35,7 @@ interface SessionDashboardProps {
 export const SessionDashboard: React.FC<SessionDashboardProps> = ({
   session,
   onRefresh,
+  onReLogin,
   onLogout,
   onOpenDesigner,
   onTestApi,
@@ -217,14 +219,26 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
                 <span>自动续期</span>
               </span>
             </div>
-            <button
-              onClick={onRefresh}
-              className="text-[11px] text-sky-600 hover:text-sky-700 font-medium flex items-center space-x-1 transition-colors"
-              title="立即刷新凭据"
-            >
-              <RefreshCw className="w-3 h-3" />
-              <span>手动续期</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={onRefresh}
+                className="text-[11px] text-sky-600 hover:text-sky-700 font-medium flex items-center space-x-1 transition-colors cursor-pointer"
+                title="使用 Refresh Token 静默续期换取新令牌"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>手动续期</span>
+              </button>
+              {onReLogin && (
+                <button
+                  onClick={onReLogin}
+                  className="text-[11px] text-amber-600 hover:text-amber-700 font-medium flex items-center space-x-1 transition-colors cursor-pointer border-l border-slate-200 pl-2"
+                  title="当刷新令牌失效时，点击重新唤起认证窗口换取全新令牌"
+                >
+                  <KeyRound className="w-3 h-3" />
+                  <span>重新登录</span>
+                </button>
+              )}
+            </div>
           </div>
           <div>
             <div className="flex items-center space-x-2">

@@ -718,16 +718,106 @@ export class AuthService {
         return await this.loginWithFxiaoKeClientCredentials(env);
       }
     }
+
+    // ================= Salesforce 专属 OAuth2 令牌续期实现 =================
+    if (env.productType === 'salesforce') {
+      const tokenUrl = env.tokenURL || (env.neoBaseURL ? `${env.neoBaseURL.replace(/\/+$/, '')}/services/oauth2/token` : 'https://login.salesforce.com/services/oauth2/token');
+      const params = new URLSearchParams();
+      params.append('grant_type', 'refresh_token');
+      params.append('client_id', env.clientId || '');
+      if (env.clientSecret) {
+        params.append('client_secret', env.clientSecret);
+      }
+      params.append('refresh_token', refreshTokenStr.trim());
+
+      let res: any;
+      try {
+        res = await axios.post(tokenUrl, params.toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 15000,
+        });
+      } catch (err: any) {
+        const respData = err.response?.data;
+        const errMsg = respData?.error_description || respData?.error || err.message;
+        if (errMsg && (errMsg.includes('expired access/refresh token') || errMsg.includes('invalid_grant'))) {
+          throw new Error('Salesforce 云端 Refresh Token 已失效 (invalid_grant)，请点击「重新登录」重新授权');
+        }
+        throw new Error(`Salesforce 令牌续期失败: ${errMsg}`);
+      }
+
+      const data = res.data;
+      if (!data || !data.access_token) {
+        throw new Error(`Salesforce 刷新未返回有效 access_token: ${JSON.stringify(data)}`);
+      }
+
+      const instanceUrl = data.instance_url || env.neoBaseURL;
+      const rawOrgId = data.access_token ? data.access_token.split('!')[0] : 'salesforce_org';
+      let userInfo: UserInfo = {
+        userId: rawOrgId,
+        name: 'Salesforce 用户',
+        tenant_id: rawOrgId,
+        tenantName: `Salesforce 组织 (${rawOrgId})`,
+      };
+
+      try {
+        const userinfoEndpoint = `${instanceUrl.replace(/\/+$/, '')}/services/oauth2/userinfo`;
+        const uRes = await axios.get(userinfoEndpoint, {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+          timeout: 10000,
+        });
+        if (uRes.data) {
+          const uData = uRes.data;
+          const orgId = uData.organization_id || rawOrgId;
+          const uname = uData.preferred_username || uData.name || 'Salesforce 用户';
+          let orgName = `Salesforce (${orgId})`;
+          if (uData.preferred_username && uData.preferred_username.includes('@')) {
+            const domainPart = uData.preferred_username.split('@')[1];
+            const companyName = domainPart.split('.')[0].toUpperCase();
+            orgName = `${companyName} (${orgId})`;
+          }
+          userInfo = {
+            userId: uData.user_id || rawOrgId,
+            name: `${uData.name || '用户'} (${uname})`,
+            tenant_id: orgId,
+            tenantName: orgName,
+            email: uData.email,
+          };
+        }
+      } catch (err: any) {
+        console.warn('获取 Salesforce userinfo 异常:', err.message);
+      }
+
+      const expiresIn = Number(data.expires_in || 7200);
+      return {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token || refreshTokenStr,
+        expires_in: expiresIn,
+        instance_uri: instanceUrl,
+        tenant_id: userInfo.tenant_id,
+        userInfo,
+        savedAt: Date.now(),
+        expiresAt: Date.now() + expiresIn * 1000,
+      };
+    }
+
+    // ================= 销售易专属 OAuth2 令牌续期实现 =================
     const params = new URLSearchParams();
     params.append('grant_type', 'refresh_token');
     params.append('client_id', env.clientId || '04c8b45c4dbe36426a660bf70d3fe3e7');
     params.append('client_secret', env.clientSecret || '370817d1336a3737f95c671eea39a23b');
     params.append('refresh_token', refreshTokenStr);
 
-    const res = await axios.post(env.tokenURL, params.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 15000,
-    });
+    let res: any;
+    try {
+      res = await axios.post(env.tokenURL, params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 15000,
+      });
+    } catch (err: any) {
+      const respData = err.response?.data;
+      const errMsg = respData?.error_description || respData?.error || respData?.msg || err.message;
+      throw new Error(`销售易令牌续期失败: ${errMsg}`);
+    }
 
     const data = res.data;
     if (!data || !data.access_token) {
