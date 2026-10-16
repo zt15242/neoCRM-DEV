@@ -1,5 +1,5 @@
 import { CodeSyncService } from './services/codeSyncService';
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EnvService } from './services/envService';
@@ -58,15 +58,21 @@ const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
 
 function createWindow() {
+  // 移除 Windows / Linux 下默认的原生 File Edit View 菜单栏
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+  }
+
   win = new BrowserWindow({
     width: 1200,
     height: 840,
     minWidth: 1000,
     minHeight: 700,
-    title: 'NeoCRM 开发者工作台',
+    title: 'NeoCRM 开发者客户端',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 18 },
     backgroundColor: '#f8fafc',
+    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       preload: path.join(currentDir, 'preload.js'),

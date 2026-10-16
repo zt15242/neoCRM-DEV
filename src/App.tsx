@@ -18,7 +18,7 @@ import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
 import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
-import { ShieldAlert, LogIn, Minus, Square, X } from 'lucide-react';
+import { ShieldAlert, LogIn } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [platform, setPlatform] = useState<string>('darwin');
@@ -514,32 +514,6 @@ export const App: React.FC = () => {
 
       {/* 右侧无缝主工作区 */}
       <main className="flex-1 h-full min-h-0 overflow-hidden flex flex-col min-w-0 bg-white relative">
-        {/* Windows / Linux 最小化、最大化、关闭窗口控制 */}
-        {platform !== 'darwin' && (
-          <div className="h-7 bg-slate-50/80 border-b border-slate-200 flex items-center justify-end px-2 space-x-1 window-drag shrink-0 select-none">
-            <button
-              onClick={() => window.neoApi.minimizeWindow()}
-              title="最小化"
-              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded transition-colors window-no-drag"
-            >
-              <Minus className="w-3 h-3" />
-            </button>
-            <button
-              onClick={() => window.neoApi.maximizeWindow()}
-              title="最大化 / 还原"
-              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 rounded transition-colors window-no-drag"
-            >
-              <Square className="w-3 h-3" />
-            </button>
-            <button
-              onClick={() => window.neoApi.closeWindow()}
-              title="关闭"
-              className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors window-no-drag"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-        )}
         {/* Tab 1: CRM 连接器中心 与 连接器详情页 */}
         {activeTab === 'dashboard' && (
           <div className="flex-1 h-full overflow-y-auto p-4 md:p-6 max-w-[1400px] w-full mx-auto space-y-6">
