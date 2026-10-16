@@ -1,1 +1,1 @@
-fix(metadata): 增强元数据中心会话失效(Session expired)容错与一键重新认证流程，彻底避免报错白屏
+fix(windows): 移除Windows下多余的原生菜单栏(File/Edit)与网页内部重复窗口控制条，消除双重窗口按钮与留白
