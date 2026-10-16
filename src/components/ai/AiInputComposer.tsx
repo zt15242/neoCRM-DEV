@@ -556,8 +556,16 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     try {
       if (window.neoApi?.fileParseLocalPath) {
         const parsed = await window.neoApi.fileParseLocalPath(file.fullPath);
-        setAttachments((prev) => [...prev, parsed]);
-        showToast?.('success', `已自动挂载文件上下文: ${file.name}`);
+        const enrichedAttachment = {
+          ...parsed,
+          fullPath: file.fullPath,
+          relativePath: file.relativePath || file.name,
+        };
+        setAttachments((prev) => {
+          if (prev.some((a) => a.fullPath === file.fullPath || a.name === file.name)) return prev;
+          return [...prev, enrichedAttachment];
+        });
+        showToast?.('success', `已挂载物理文件引用: @${file.name} (可直接分析与编辑)`);
       }
     } catch (e: any) {
       showToast?.('error', `读取文件失败: ${e.message}`);

@@ -492,6 +492,10 @@ export const App: React.FC = () => {
         activeSessionId={activeSessionId}
         onSelectSession={(id) => {
           setActiveSessionId(id);
+          const targetSess = sessions.find((s) => s.id === id);
+          if (targetSess?.projectId) {
+            setActiveProjectId(targetSess.projectId);
+          }
           setActiveTab('ai');
         }}
         onNewChatDraft={() => {
@@ -512,7 +516,17 @@ export const App: React.FC = () => {
         onOpenLogs={() => handleOpenSettings('logs')}
         projects={projects}
         activeProjectId={activeProjectId}
-        onSelectProject={setActiveProjectId}
+        onSelectProject={(projId) => {
+          setActiveProjectId(projId);
+          // 严格按项目隔离会话上下文：自动切换至该项目下的最近对话，或开启该项目专属新会话
+          const projSessions = sessions.filter((s) => s.projectId === projId);
+          if (projSessions.length > 0) {
+            setActiveSessionId(projSessions[0].id);
+          } else {
+            setActiveSessionId(null);
+          }
+          setActiveTab('ai');
+        }}
         onOpenCreateProject={() => {
           setEditingProject(null);
           setIsCreateProjectOpen(true);

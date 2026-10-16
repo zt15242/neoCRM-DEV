@@ -73,6 +73,7 @@ export class FileService {
         return {
           id: fileId,
           name: fileName,
+          fullPath: filePath,
           size: fileSize,
           mimeType: ext === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           parsedContent,
@@ -82,6 +83,7 @@ export class FileService {
         return {
           id: fileId,
           name: fileName,
+          fullPath: filePath,
           size: fileSize,
           mimeType: 'application/octet-stream',
           parsedContent: `【文件: ${fileName} 解析异常】: ${e.message}`,
@@ -104,6 +106,7 @@ export class FileService {
       return {
         id: fileId,
         name: fileName,
+        fullPath: filePath,
         size: fileSize,
         mimeType: 'text/plain',
         parsedContent,
@@ -113,6 +116,7 @@ export class FileService {
       return {
         id: fileId,
         name: fileName,
+        fullPath: filePath,
         size: fileSize,
         mimeType: 'application/octet-stream',
         parsedContent: `【文件: ${fileName} 读取异常】: ${e.message}`,

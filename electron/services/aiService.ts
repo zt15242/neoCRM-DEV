@@ -473,12 +473,41 @@ export class AiService {
       .map((m) => `${m.role === 'user' ? '用户' : 'AI助手'}: ${m.content.slice(0, 500)}`)
       .join('\n\n');
 
-    const prompt = `请为以下较早的 CRM 对话历史生成一份精炼的结构化记忆摘要（150~250字）。
-必须包含：
-1. 涉及的关键业务对象与 API Key；
-2. 用户核心诉求与关键参数；
-3. 已达成的结论或已创建的元数据信息。
-对话内容如下：
+    const priorSummary = session.compactionSummary?.summary ? `Prior Checkpoint Summary:\n${session.compactionSummary.summary}\n\n` : '';
+    const prompt = `${priorSummary}You are acting as a compaction engine for this AI engineering workspace assistant (DeepSeek Harness standard). Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.
+
+Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section.
+
+## Primary Request and Intent
+- [the user's original and evolving goals; quote verbatim where the exact wording matters]
+
+## Key Technical Concepts & CRM Objects
+- [CRM platform (NeoCRM/Salesforce/Fxiaoke), business objects (e.g. AccountObj, order, contract), fields, API Keys, and architecture conventions in play]
+
+## Files, Code & Artifacts
+- [exact absolute/relative paths: why it matters, generated .docx templates, scripts, code snippets, or configurations]
+
+## Errors and Fixes
+- [errors encountered: root cause, how it was resolved, plus any user corrections/feedback]
+
+## Pending Jobs
+- [explicitly requested work not yet completed or pending confirmation]
+
+## Current Work & Progress
+- [precisely what was completed or in progress at this checkpoint]
+
+## Next Step
+- [the single next action, directly in line with the most recent request, or "(none)"]
+
+## Critical Context & User Preferences
+- [key decisions, constraints, user preferences, live credentials, data needed to continue]
+
+Rules:
+- Write concise engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.
+- Capture user feedback and explicit instructions faithfully, especially corrections.
+- Output ONLY the checkpoint text: do not call any tool or output fluff prose.
+
+Conversation to condense:
 ${dialogHistoryText}`;
 
     let summaryText = '历史对话要点已压缩保留。';
@@ -490,7 +519,7 @@ ${dialogHistoryText}`;
           model: modelId,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.2,
-          max_tokens: 500,
+          max_tokens: 1500,
         },
         {
           headers: {
@@ -825,6 +854,32 @@ ${dialogHistoryText}`;
     const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath } = params;
 
     const config = this.getAiConfig();
+
+    // ================= DeepSeek Harness 官方自动上下文压缩引擎 (Auto-Compaction) =================
+    // 当会话消息数达到 8 条以上，或历史字符估算达到上下文承载阈值时，自动静默压缩前半部分历史为结构化 Checkpoint
+    let currentCompactionSummary = compactionSummary;
+    let effectiveMessages = messages;
+
+    try {
+      const totalChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
+      const shouldAutoCompact = messages.length >= 8 || totalChars > 35000;
+
+      if (shouldAutoCompact && sessionId) {
+        const foundSession = this.getSession(sessionId);
+        if (foundSession && foundSession.messages.length >= 6) {
+          console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${foundSession.messages.length} 轮 (${totalChars} 字符)，正在后台自动执行结构化记忆压缩...`);
+          const compacted = await this.compactSession(sessionId);
+          if (compacted?.compactionSummary) {
+            currentCompactionSummary = compacted.compactionSummary;
+            effectiveMessages = compacted.messages;
+            console.log(`[DSH Auto-Compaction] 自动压缩完成！成功浓缩为 8 节结构化 Checkpoint，保留最近 ${compacted.messages.length} 条对话`);
+          }
+        }
+      }
+    } catch (compactErr: any) {
+      console.warn('[DSH Auto-Compaction] 自动压缩过程提示:', compactErr.message);
+    }
+
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
     if (!provider) {
       sendEvent({
@@ -1074,13 +1129,13 @@ ${mcpInfoText}
       }
 
       // 注入历史对话压缩记忆
-      if (compactionSummary?.summary) {
-        systemParts.push(`【前期历史对话精简记忆摘要】\n${compactionSummary.summary}`);
+      if (currentCompactionSummary?.summary) {
+        systemParts.push(`【DeepSeek Harness 前序历史结构化工程记忆 Checkpoint (Compact Summary)】\n${currentCompactionSummary.summary}`);
       }
 
       // 2. 截取最近上下文消息
       const contextLimit = config.settings.contextLimit || 20;
-      const recentMessages = messages.slice(-contextLimit);
+      const recentMessages = effectiveMessages.slice(-contextLimit);
 
       // 实时意图强引导：当已连接租户且用户请求查询对象、实体或字段时，注入最高优先级调具执行指令
       if (currentSession.isLoggedIn && currentSession.environment && config.settings.enableCrmTools !== false) {
@@ -1197,7 +1252,7 @@ ${mcpInfoText}
         return;
       }
 
-      // 3. 构建 OpenAI 兼容对话上下文列表
+      // 3. 构建 OpenAI 兼容对话上下文列表 (完全对齐 DSH：完整保留前序历史的 tool_calls 与工具结果)
       const conversationHistory: any[] = [];
       if (systemMessage) {
         conversationHistory.push(systemMessage);
@@ -1205,21 +1260,51 @@ ${mcpInfoText}
 
       for (const msg of recentMessages) {
         if (msg.role === 'user') {
-          let text = msg.content;
-          // 注入文件附件内容 (如 Excel 解析表格、代码文件等)
+          let text = msg.content || '';
+          // 参照 DSH 规范结构化注入挂载/引用的文件信息，带绝对路径与相对路径，赋予大模型分析与精准编辑能力
           if (msg.attachments && msg.attachments.length > 0) {
-            const attachText = msg.attachments.map((a) => a.parsedContent).join('\n\n');
-            text = `${attachText}\n\n${text}`;
+            const fileDescriptions = msg.attachments.map((a) => {
+              const fullP = a.fullPath || (projectPath ? path.join(projectPath, a.name) : a.name);
+              const relP = a.relativePath || a.name;
+              return `[用户引用/挂载的工作区物理文件]:\n- 文件名: ${a.name}\n- 物理绝对路径: ${fullP}\n- 工作区相对路径: ${relP}\n- 文件大小: ${(a.size / 1024).toFixed(1)} KB\n- 初始内容/摘要:\n${a.parsedContent || '(可直接调用 read 工具读取该文件完整内容)'}\n[编辑操作指引]: 若需修改该文件，请直接调用 edit 或 str_replace_editor 工具传入上述物理绝对路径进行高保真替换！`;
+            }).join('\n\n');
+            text = `${fileDescriptions}\n\n${text}`;
           }
+
           if (msg.entityRefs && msg.entityRefs.length > 0) {
             const refDesc = msg.entityRefs
               .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
               .join(', ');
             text = `${refDesc}\n\n${text}`;
           }
+
           conversationHistory.push({ role: 'user', content: text });
         } else if (msg.role === 'assistant') {
-          conversationHistory.push({ role: 'assistant', content: msg.content });
+          // 关键修复：如果前序轮次调用过工具，必须完整恢复 tool_calls 和 tool 结果，否则下一轮模型前文彻底丢失断层！
+          if (msg.toolCalls && msg.toolCalls.length > 0) {
+            conversationHistory.push({
+              role: 'assistant',
+              content: msg.content || null,
+              tool_calls: msg.toolCalls.map((tc, idx) => ({
+                id: tc.id || `call_${idx}`,
+                type: 'function',
+                function: {
+                  name: tc.name,
+                  arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments || {}),
+                },
+              })),
+            });
+
+            for (const tc of msg.toolCalls) {
+              conversationHistory.push({
+                role: 'tool',
+                tool_call_id: tc.id || `call_0`,
+                content: this.formatSafeToolResultString(tc.resultData || tc.resultSummary || '{}', 20000),
+              });
+            }
+          } else {
+            conversationHistory.push({ role: 'assistant', content: msg.content || '' });
+          }
         }
       }
 
@@ -1743,24 +1828,51 @@ ${toolDataContext}
 
     for (const msg of recentMessages) {
       if (msg.role === 'user') {
-        let text = msg.content;
+        let text = msg.content || '';
+        if (msg.attachments && msg.attachments.length > 0) {
+          const fileDescriptions = msg.attachments.map((a) => {
+            const fullP = a.fullPath || (projectPath ? path.join(projectPath, a.name) : a.name);
+            const relP = a.relativePath || a.name;
+            return `[用户引用/挂载的工作区物理文件]:\n- 文件名: ${a.name}\n- 物理绝对路径: ${fullP}\n- 工作区相对路径: ${relP}\n- 初始内容/摘要:\n${a.parsedContent || '(可调用 read 工具读取该文件完整内容)'}\n[编辑指引]: 若需修改该文件，请调用 edit 或 str_replace_editor 工具传入上述绝对路径！`;
+          }).join('\n\n');
+          text = `${fileDescriptions}\n\n${text}`;
+        }
+
         if (msg.entityRefs && msg.entityRefs.length > 0) {
           const refDesc = msg.entityRefs
             .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
             .join(', ');
           text = `${refDesc}\n\n${text}`;
         }
-        const prev = geminiContents[geminiContents.length - 1];
-        if (prev && prev.role === 'user') {
-          prev.parts.push({ text });
-        } else {
-          geminiContents.push({ role: 'user', parts: [{ text }] });
-        }
-      } else if (msg.role === 'assistant' && msg.content) {
-        const prev = geminiContents[geminiContents.length - 1];
-        if (prev && prev.role === 'model') {
-          prev.parts.push({ text: msg.content });
-        } else {
+
+        geminiContents.push({ role: 'user', parts: [{ text }] });
+      } else if (msg.role === 'assistant') {
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          const modelParts: any[] = [];
+          if (msg.content) modelParts.push({ text: msg.content });
+          for (const tc of msg.toolCalls) {
+            modelParts.push({
+              functionCall: {
+                name: tc.name,
+                args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments || '{}') : (tc.arguments || {}),
+              },
+            });
+          }
+          geminiContents.push({ role: 'model', parts: modelParts });
+
+          const responseParts: any[] = [];
+          for (const tc of msg.toolCalls) {
+            responseParts.push({
+              functionResponse: {
+                name: tc.name,
+                response: {
+                  result: this.formatSafeToolResultObject(tc.resultData || tc.resultSummary || {}),
+                },
+              },
+            });
+          }
+          geminiContents.push({ role: 'user', parts: responseParts });
+        } else if (msg.content) {
           geminiContents.push({ role: 'model', parts: [{ text: msg.content }] });
         }
       }

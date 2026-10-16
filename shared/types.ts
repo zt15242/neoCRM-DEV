@@ -274,6 +274,8 @@ export interface AiFileAttachment {
   mimeType: string;
   parsedContent: string; // 解析出的文本或表格数据
   summaryText?: string; // 简要说明，例如 "Excel工作表: 3个Sheet, 150行"
+  fullPath?: string; // 本地物理绝对路径 (供 read/edit/write/str_replace_editor 工具操作)
+  relativePath?: string; // 相对工作区的相对路径
 }
 
 export interface McpToolItem {
