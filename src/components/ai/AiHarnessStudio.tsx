@@ -501,7 +501,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     skillIds?: string[],
     mcpIds?: string[]
   ) => {
-    let targetSession = activeSession;
+    let targetSession = sessionsRef.current.find((s) => s.id === activeSessionId) || activeSession;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
 
     // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
@@ -561,7 +561,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       createdAt: Date.now() + 1,
     };
 
-    const updatedMessages = [...targetSession.messages, userMsg, assistantMsg];
+    // 严格过滤掉由于网络中断或流式中止残留在历史中的空白 assistant 消息，保证前文绝对干净
+    const cleanHistory = (targetSession.messages || []).filter(
+      (m) => m.role === 'user' || (m.role === 'assistant' && ((m.content && m.content.trim()) || (m.toolCalls && m.toolCalls.length > 0)))
+    );
+
+    const updatedMessages = [...cleanHistory, userMsg, assistantMsg];
     const updatedSession: AiChatSession = {
       ...targetSession,
       providerId: currentProviderId,
@@ -588,7 +593,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       providerId: currentProvider?.id || currentProviderId,
       modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
       presetPrompt: preset.systemPrompt,
-      messages: [...targetSession.messages, userMsg],
+      messages: [...cleanHistory, userMsg],
       enableTools,
       activeSkillIds: skillIds || activeSkillIds,
       activeMcpServerIds: effectiveMcpIds,

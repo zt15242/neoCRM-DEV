@@ -872,7 +872,7 @@ ${dialogHistoryText}`;
       const shouldAutoCompact = messages.length >= 8 || totalChars > 35000;
 
       if (shouldAutoCompact && sessionId) {
-        const foundSession = this.getSession(sessionId);
+        const foundSession = this.getSessions().find((s) => s.id === sessionId);
         if (foundSession && foundSession.messages.length >= 6) {
           console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${foundSession.messages.length} 轮 (${totalChars} 字符)，正在后台自动执行结构化记忆压缩...`);
           const compacted = await this.compactSession(sessionId);
@@ -1348,11 +1348,12 @@ ${mcpInfoText}
 
           conversationHistory.push({ role: 'user', content: text });
         } else if (msg.role === 'assistant') {
-          // 关键修复：如果前序轮次调用过工具，必须完整恢复 tool_calls 和 tool 结果，否则下一轮模型前文彻底丢失断层！
+          // 关键修复：如果前序轮次调用过工具，严格按照标准时序复原：assistant(tool_calls) -> tool(result) -> assistant(content)！
+          // 若缺少 tool 之后的最终 assistant 回答，大模型在下一轮看到历史在 tool 结果处截止，会误以为前序工具调用尚未作答，导致在新提问时重复回答上一轮的问题！
           if (msg.toolCalls && msg.toolCalls.length > 0) {
             conversationHistory.push({
               role: 'assistant',
-              content: msg.content || null,
+              content: null,
               tool_calls: msg.toolCalls.map((tc, idx) => ({
                 id: tc.id || `call_${idx}`,
                 type: 'function',
@@ -1370,8 +1371,17 @@ ${mcpInfoText}
                 content: this.formatSafeToolResultString(tc.resultData || tc.resultSummary || '{}', 20000),
               });
             }
+
+            if (msg.content && msg.content.trim()) {
+              conversationHistory.push({
+                role: 'assistant',
+                content: msg.content,
+              });
+            }
           } else {
-            conversationHistory.push({ role: 'assistant', content: msg.content || '' });
+            if (msg.content && msg.content.trim()) {
+              conversationHistory.push({ role: 'assistant', content: msg.content });
+            }
           }
         }
       }
@@ -1942,17 +1952,19 @@ ${toolDataContext}
         geminiContents.push({ role: 'user', parts: [{ text }] });
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
-          const modelParts: any[] = [];
-          if (msg.content) modelParts.push({ text: msg.content });
+          // Gemini 协议严格时序：model(functionCall) -> user(functionResponse) -> model(final text answer)
+          // 绝对不能把 msg.content 塞进第一阶段的 functionCall 里，更不能在 functionResponse 后留空直接接下一个 user 消息！
+          // 否则 Gemini 认为上一次工具调用的回答尚未产出，在用户发新问题时会首先重复回答上一轮的问题！
+          const modelCallParts: any[] = [];
           for (const tc of msg.toolCalls) {
-            modelParts.push({
+            modelCallParts.push({
               functionCall: {
                 name: tc.name,
                 args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments || '{}') : (tc.arguments || {}),
               },
             });
           }
-          geminiContents.push({ role: 'model', parts: modelParts });
+          geminiContents.push({ role: 'model', parts: modelCallParts });
 
           const responseParts: any[] = [];
           for (const tc of msg.toolCalls) {
@@ -1966,7 +1978,11 @@ ${toolDataContext}
             });
           }
           geminiContents.push({ role: 'user', parts: responseParts });
-        } else if (msg.content) {
+
+          if (msg.content && msg.content.trim()) {
+            geminiContents.push({ role: 'model', parts: [{ text: msg.content }] });
+          }
+        } else if (msg.content && msg.content.trim()) {
           geminiContents.push({ role: 'model', parts: [{ text: msg.content }] });
         }
       }
