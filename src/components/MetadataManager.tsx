@@ -44,9 +44,31 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
   const [isCreateEntityOpen, setIsCreateEntityOpen] = useState(false);
   const [isCreateFieldOpen, setIsCreateFieldOpen] = useState(false);
   const [isBatchFieldImportOpen, setIsBatchFieldImportOpen] = useState(false);
+  const [sessionExpiredError, setSessionExpiredError] = useState<string | null>(null);
+  const [isReLoggingIn, setIsReLoggingIn] = useState(false);
+
+  const handleReLogin = async () => {
+    if (!session?.environment?.id || isReLoggingIn) return;
+    setIsReLoggingIn(true);
+    try {
+      if (session.environment.productType === 'salesforce') {
+        await window.neoApi.loginWithEmbeddedWindow(session.environment.id);
+      } else {
+        await window.neoApi.loginWithBrowser(session.environment.id);
+      }
+      showToast('success', '认证成功，正在重新加载对象元数据...');
+      setSessionExpiredError(null);
+      await loadEntities();
+    } catch (err: any) {
+      showToast('error', `重新认证失败: ${err.message}`);
+    } finally {
+      setIsReLoggingIn(false);
+    }
+  };
 
   const loadEntities = async () => {
     setLoadingEntities(true);
+    setSessionExpiredError(null);
     try {
       const list = await window.neoApi.getEntities();
       setEntities(list);
@@ -54,6 +76,10 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
         setSelectedEntity(list[0]);
       }
     } catch (e: any) {
+      const isExpired = e.message?.includes('Session expired') || e.message?.includes('401') || e.message?.includes('INVALID_SESSION_ID') || e.message?.includes('expired access/refresh token');
+      if (isExpired) {
+        setSessionExpiredError(e.message || '当前组织认证会话已失效 (Session expired or invalid)');
+      }
       showToast('error', `加载实体列表失败: ${e.message}`);
     } finally {
       setLoadingEntities(false);
@@ -118,6 +144,30 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
 
   return (
     <div className="flex flex-col flex-1 h-full w-full bg-white overflow-hidden">
+      {/* 会话过期智能唤醒与重新登录横幅 */}
+      {sessionExpiredError && (
+        <div className="m-3 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="p-2 rounded-xl bg-amber-100 text-amber-700 shrink-0">
+              <Box className="w-5 h-5" />
+            </div>
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-xs font-bold text-amber-950">当前认证会话已失效 (Session expired or invalid)</p>
+              <p className="text-[11px] text-amber-800 leading-relaxed truncate">
+                云端访问令牌已过期，请点击右侧按钮重新唤起认证窗口以恢复元数据对象与数据中心访问。
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleReLogin}
+            disabled={isReLoggingIn}
+            className="px-4 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-xl text-xs font-semibold shrink-0 shadow-xs flex items-center space-x-1.5 cursor-pointer transition-all disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isReLoggingIn ? 'animate-spin' : ''}`} />
+            <span>{isReLoggingIn ? '正在重新认证...' : '立即重新登录'}</span>
+          </button>
+        </div>
+      )}
       {/* 顶部操作工具栏 */}
       <div className="h-13 px-5 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center space-x-3">
