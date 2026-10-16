@@ -1,1 +1,1 @@
-fix(fxiaoke): 彻底修复纷享销客自建应用客户端凭据直连报 404 Not Found 缺陷，强制规范端点为 /oauth2.0/token 并自动清洗纠偏已保存的环境配置
+fix(metadata): 增强元数据中心会话失效(Session expired)容错与一键重新认证流程，彻底避免报错白屏
