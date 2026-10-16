@@ -1237,16 +1237,19 @@ ${mcpInfoText}
         (modelObj?.tools ?? !isPureReasoner) &&
         provider.protocol !== 'anthropic-messages';
 
-      // 5. 执行 Agent Loop（支持最多 8 轮连续工具迭代，保障复杂多步骤任务如 Todo对账、字段调研、模板生成、脚本执行全闭环）
-      let loopCount = 0;
-      const maxToolLoops = 8;
+      // 5. 执行 DeepSeek Harness 官方原版自主智能体推进循环 (DSH Autonomous Agent Loop)
+      // 彻底废除 3 轮 / 8 轮的死板硬编码限制！完全对齐 DSH：只要大模型在发出 tool_calls，就自主无限循环执行到底，直到模型自主认为任务完成 (toolCalls.length === 0)！
+      let stepCount = 0;
+      const maxSafetySteps = 60; // 仅作为防止极端程序死循环的安全熔断上限
       let hasMoreIterations = true;
-      let totalContentGenerated = '';
+      let finalContentGenerated = '';
+      let consecutiveDuplicates = 0;
       const calledToolSignatures = new Set<string>();
       const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
 
-      while (hasMoreIterations && loopCount < maxToolLoops) {
-        loopCount++;
+      while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
+        stepCount++;
+        const isSafetyFuseTurn = stepCount >= maxSafetySteps; // 仅在达到60步安全熔断时强制收敛
 
         const requestBody: any = {
           model: modelId,
@@ -1256,7 +1259,7 @@ ${mcpInfoText}
           stream: true,
         };
 
-        if (canUseTools) {
+        if (canUseTools && !isSafetyFuseTurn) {
           requestBody.tools = activeToolsSpec;
           requestBody.tool_choice = 'auto';
         }
@@ -1422,14 +1425,18 @@ ${mcpInfoText}
           }
         }
 
-        if (assistantContent) {
-          totalContentGenerated += assistantContent;
-        }
-
         const toolCallsList = Object.values(toolCallsMap);
 
+        // 如果本步没有发起任何工具调用，说明大模型已经执行完所有前置动作，本步输出的是最终答复！
+        if (toolCallsList.length === 0) {
+          finalContentGenerated += assistantContent;
+          hasMoreIterations = false;
+          break; // DSH 核心语义：任务自然完成，退出循环
+        }
+
+        // 如果发起了工具调用：
         if (toolCallsList.length > 0) {
-          // 检查是否全都是已经调用过的完全相同工具（说明中转网关可能丢弃了 role:tool 历史导致模型死循环）
+          // 防死循环保护：检测是否连续多次以完全相同的参数调用相同工具
           const allDuplicates = toolCallsList.every((tc) => {
             let parsedArgs = {};
             try {
@@ -1438,10 +1445,15 @@ ${mcpInfoText}
             return calledToolSignatures.has(`${tc.name}:${JSON.stringify(parsedArgs)}`);
           });
 
-          if (allDuplicates && executedToolsLog.length > 0) {
-            // 检测到重复调用同一工具，跳出工具循环，直接进入下方的无工具总结轮
-            hasMoreIterations = false;
-            break;
+          if (allDuplicates) {
+            consecutiveDuplicates++;
+            if (consecutiveDuplicates >= 2 && executedToolsLog.length > 0) {
+              console.warn('[DSH Agent Loop] 检测到工具死循环重复调用，自主打破循环进入最终总结');
+              hasMoreIterations = false;
+              break;
+            }
+          } else {
+            consecutiveDuplicates = 0;
           }
 
           conversationHistory.push({
@@ -1530,8 +1542,8 @@ ${mcpInfoText}
         }
       }
 
-      // 6. 兜底总结收敛轮：如果调用了工具但尚未输出最终正文（例如达到工具轮上限，或网关未正确透传 tool 消息）
-      if (!totalContentGenerated.trim() && executedToolsLog.length > 0) {
+      // 6. 兜底总结收敛轮：如果执行了工具但尚未输出最终回复正文（例如触达安全熔断，或网关未透传下一步思考）
+      if (!finalContentGenerated.trim() && executedToolsLog.length > 0) {
         const cleanSynthesisHistory: any[] = [];
         if (systemMessage) {
           cleanSynthesisHistory.push(systemMessage);
@@ -1771,14 +1783,13 @@ ${toolDataContext}
       };
     });
 
-    let loopCount = 0;
-    const maxToolLoops = 8;
-    const maxLoops = 9;
+    let stepCount = 0;
+    const maxSafetySteps = 60; // DSH 标准无限制迭代，60步安全熔断底线
     let hasMoreIterations = true;
 
-    while (hasMoreIterations && loopCount < maxLoops) {
-      loopCount++;
-      const isFinalSummaryTurn = loopCount > maxToolLoops;
+    while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
+      stepCount++;
+      const isFinalSummaryTurn = stepCount >= maxSafetySteps;
 
       const requestBody: any = {
         contents: geminiContents,

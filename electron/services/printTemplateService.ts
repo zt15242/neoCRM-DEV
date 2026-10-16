@@ -720,15 +720,39 @@ export class PrintTemplateService {
             },
           ];
         } else if (entKey === 'account' || entKey === '客户') {
+          // 客户全景档案默认包含三大核心相关对象明细列表：1) 关键联系人明细 2) 商机推进全景 3) 历史成交订单
           effectiveTables = [
             {
               childObjectApiKey: 'contact',
-              childObjectLabel: '客户联系人明细',
+              childObjectLabel: '关键联系人列表',
               columns: [
-                { label: '联系人姓名', apiKey: 'contactName' },
+                { label: '联系人姓名', apiKey: 'name' },
                 { label: '职务', apiKey: 'title' },
                 { label: '移动电话', apiKey: 'mobile' },
                 { label: '电子邮箱', apiKey: 'email' },
+                { label: '部门', apiKey: 'department' },
+              ],
+            },
+            {
+              childObjectApiKey: 'opportunity',
+              childObjectLabel: '商机推进全景列表',
+              columns: [
+                { label: '商机名称', apiKey: 'opportunityName' },
+                { label: '预计金额', apiKey: 'money' },
+                { label: '当前阶段', apiKey: 'saleStageId' },
+                { label: '预计结单日', apiKey: 'closeDate' },
+                { label: '负责人', apiKey: 'ownerId.name' },
+              ],
+            },
+            {
+              childObjectApiKey: 'order',
+              childObjectLabel: '历史成交订单列表',
+              columns: [
+                { label: '订单编号', apiKey: 'orderNo' },
+                { label: '订单金额', apiKey: 'totalAmount' },
+                { label: '签约日期', apiKey: 'orderDate' },
+                { label: '订单状态', apiKey: 'status' },
+                { label: '负责人', apiKey: 'ownerId.name' },
               ],
             },
           ];
