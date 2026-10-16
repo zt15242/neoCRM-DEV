@@ -583,13 +583,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'bash',
-      description: '在当前工作区环境中执行 bash 命令行指令并返回 stdout/stderr。支持指定运行目录与超时时间。',
+      description: '在当前项目工作区根目录下执行 Bash 命令行指令并返回结果（受物理沙箱严格约束，仅限当前项目目录内，严禁检索整机设备或执行跨盘越界扫描）。',
       parameters: {
         type: 'object',
         properties: {
           command: {
             type: 'string',
-            description: '待执行的 Bash Shell 命令行指令',
+            description: '待执行的 Bash Shell 命令行指令（禁止执行整盘扫描命令）',
           },
           description: {
             type: 'string',
@@ -597,7 +597,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
           },
           workdir: {
             type: 'string',
-            description: '可选的执行目录，默认为当前项目根目录',
+            description: '可选的执行目录，必须为当前项目根目录或其子目录',
           },
           background: {
             type: 'boolean',
@@ -616,13 +616,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'read',
-      description: '读取本地 UTF-8 文本或代码文件内容，带标准 1-based 行号，支持从指定行偏移并限制最大返回行数。',
+      description: '读取当前项目工作区内的文件内容（严格受物理安全沙箱约束，只能读取当前项目内的文件，禁止跨出项目访问设备其他目录）。',
       parameters: {
         type: 'object',
         properties: {
           file_path: {
             type: 'string',
-            description: '待读取文件的绝对路径或相对工作区的相对路径',
+            description: '待读取文件的相对路径或当前项目内的绝对路径（只能读取项目内的文件，严禁跨出项目）',
           },
           offset: {
             type: 'number',
@@ -641,13 +641,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'write',
-      description: '创建新文件或完全覆盖现有 UTF-8 文件内容。如目录不存在将自动递归创建。',
+      description: '在当前项目工作区内创建新文件或覆写文件（只能在当前项目目录内操作，严禁跨出项目）。',
       parameters: {
         type: 'object',
         properties: {
           file_path: {
             type: 'string',
-            description: '待写入的目标文件路径',
+            description: '待写入的目标文件路径（必须位于当前项目工作区内）',
           },
           content: {
             type: 'string',
@@ -662,13 +662,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'edit',
-      description: '通过精确的字面量文本替换编辑现有文件（要求 old_string 在文件中存在）。',
+      description: '通过精确字面量文本替换编辑当前项目工作区内的现有文件（只能修改当前项目内的文件，严禁跨出项目）。',
       parameters: {
         type: 'object',
         properties: {
           file_path: {
             type: 'string',
-            description: '待编辑文件的路径',
+            description: '待编辑文件的路径（必须位于当前项目工作区内）',
           },
           old_string: {
             type: 'string',
@@ -691,7 +691,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'str_replace_editor',
-      description: '高精度的行级代码与文本编辑器。支持 4 种模式：view 查看内容、create 创建文件、str_replace 精确字符串替换、insert 在指定行后插入新内容。',
+      description: '高精度的行级代码与文本编辑器（严格限制在当前项目工作区内操作，严禁跨出项目）。支持 4 种模式：view 查看内容、create 创建文件、str_replace 精确字符串替换、insert 在指定行后插入新内容。',
       parameters: {
         type: 'object',
         properties: {
@@ -702,7 +702,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
           },
           path: {
             type: 'string',
-            description: '文件或目录路径',
+            description: '文件或目录路径（必须位于当前项目工作区内）',
           },
           file_text: {
             type: 'string',
@@ -734,13 +734,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'read_image',
-      description: '查看或检查本地图片资源文件（PNG/JPEG/WebP/GIF），返回存在性与元数据。',
+      description: '查看或检查当前项目工作区内的本地图片资源文件（必须位于当前项目工作区内）。',
       parameters: {
         type: 'object',
         properties: {
           file_path: {
             type: 'string',
-            description: '本地图片文件路径',
+            description: '本地图片文件路径（必须位于当前项目工作区内）',
           },
         },
         required: ['file_path'],
@@ -751,17 +751,17 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'glob',
-      description: '通过 Glob 通配符模式匹配工作区中的文件路径（如 "**/*.ts"、"src/**/test*"）。',
+      description: '通过 Glob 通配符模式匹配当前项目工作区内的文件路径（仅限检索当前项目内部，严禁越界或检索整台设备）。',
       parameters: {
         type: 'object',
         properties: {
           pattern: {
             type: 'string',
-            description: 'Glob 通配符匹配规则',
+            description: 'Glob 通配符匹配规则（如 "**/*.ts"、"src/**/*.json"，禁止包含 ..）',
           },
           path: {
             type: 'string',
-            description: '可选的起始检索目录，默认为工作区根目录',
+            description: '可选的起始检索目录，必须为当前项目根目录或其子目录，严禁指定项目外部路径或设备根目录',
           },
         },
         required: ['pattern'],
@@ -772,7 +772,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'grep',
-      description: '基于正则表达式或关键词对工作区文本文件内容进行全文检索，返回匹配行及行号。',
+      description: '对当前项目工作区内的代码或文本文件进行全文检索（只能检索当前项目内的文件，严禁检索整台设备）。',
       parameters: {
         type: 'object',
         properties: {
@@ -782,7 +782,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
           },
           path: {
             type: 'string',
-            description: '可选检索目录或文件路径',
+            description: '可选检索目录或文件路径，必须位于当前项目工作区内，严禁指定项目外部路径或设备根目录',
           },
           glob: {
             type: 'string',

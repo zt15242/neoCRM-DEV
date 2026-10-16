@@ -35,11 +35,101 @@ export class DshToolService {
   private currentTodos: DshTodoItem[] = [];
   private backgroundJobs = new Map<string, DshJobProcess>();
 
-  private resolveWorkspaceDir(customWorkdir?: string): string {
-    if (customWorkdir && fs.existsSync(customWorkdir)) {
-      return customWorkdir;
+  public resolveWorkspaceDir(customWorkdir?: string): string {
+    if (customWorkdir && typeof customWorkdir === 'string' && fs.existsSync(customWorkdir)) {
+      return path.resolve(customWorkdir);
     }
-    return process.cwd();
+    return path.resolve(process.cwd());
+  }
+
+  /**
+   * 项目工作区物理安全沙箱 (Project Workspace Sandbox Guard)
+   * 严格保障：智能体只能读取和操作当前项目目录内的内容，绝对禁止跨出项目，严禁检索整台设备
+   */
+  public assertPathWithinProject(
+    rawPath: string,
+    projectRoot?: string,
+    allowExactFiles?: string[]
+  ): string {
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot));
+
+    if (!rawPath || typeof rawPath !== 'string' || !rawPath.trim()) {
+      return root;
+    }
+
+    const trimmed = rawPath.trim();
+
+    // 1. 检查是否在显式放行的单文件白名单中（例如用户本轮会话主动拖拽/上传的文件）
+    if (allowExactFiles && allowExactFiles.length > 0) {
+      const normalizedTarget = path.isAbsolute(trimmed)
+        ? path.normalize(trimmed)
+        : path.resolve(root, trimmed);
+      for (const allowed of allowExactFiles) {
+        if (allowed && path.resolve(allowed) === normalizedTarget) {
+          return normalizedTarget;
+        }
+      }
+    }
+
+    // 2. 严禁根目录、全盘路径、系统关键路径
+    const lower = trimmed.toLowerCase();
+    if (
+      trimmed === '/' ||
+      trimmed === '\\' ||
+      /^[a-zA-Z]:[/\\]?$/.test(trimmed) ||
+      lower.startsWith('/etc') ||
+      lower.startsWith('/var') ||
+      lower.startsWith('/usr') ||
+      lower.startsWith('/bin') ||
+      lower.startsWith('/sbin') ||
+      lower.startsWith('/sys') ||
+      lower.startsWith('/proc') ||
+      lower.startsWith('/system') ||
+      lower.startsWith('/library') ||
+      lower.startsWith('c:\\windows') ||
+      lower.startsWith('c:\\program')
+    ) {
+      throw new Error(
+        `【安全沙箱拦截】越界访问被拒绝！禁止访问设备系统目录: "${rawPath}"。\n` +
+        `【工程安全铁律】：智能体严格受限于当前项目目录 [${root}]，严禁跨出项目或检索整台设备！`
+      );
+    }
+
+    // 3. 计算相对路径进行严格边界判定
+    const resolved = path.isAbsolute(trimmed)
+      ? path.normalize(trimmed)
+      : path.resolve(root, trimmed);
+
+    const rel = path.relative(root, resolved);
+    const isOutside = rel.startsWith('..') || path.isAbsolute(rel);
+
+    if (isOutside) {
+      throw new Error(
+        `【安全沙箱拦截】越界访问被拒绝！路径 "${rawPath}" 超出当前项目工作区边界。\n` +
+        `- 允许操作的项目目录: "${root}"\n` +
+        `- 尝试访问的目标路径: "${resolved}"\n` +
+        `【工程安全铁律】：智能体严格受限于当前项目工作区，严禁跨出项目边界或检索整台设备！`
+      );
+    }
+
+    // 4. 防软链接逃逸校验 (Symlink Jail Check)
+    if (fs.existsSync(resolved)) {
+      try {
+        const real = fs.realpathSync(resolved);
+        const realRel = path.relative(root, real);
+        if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+          throw new Error(
+            `【安全沙箱拦截】软链接越界穿透被拒绝！目标链接实际指向了项目外部路径: "${real}"`
+          );
+        }
+      } catch (e: any) {
+        if (e.message && e.message.includes('安全沙箱拦截')) {
+          throw e;
+        }
+      }
+    }
+
+    return resolved;
   }
 
   /**
@@ -87,14 +177,36 @@ export class DshToolService {
   }
 
   // ================= 1. bash 工具 (命令执行，支持前台与后台异步长任务) =================
-  public async executeBash(params: {
-    command: string;
-    description?: string;
-    timeoutMs?: number;
-    workdir?: string;
-    background?: boolean;
-  }): Promise<{ stdout: string; stderr: string; exitCode: number; jobId?: string; isBackground?: boolean }> {
-    const cwd = this.resolveWorkspaceDir(params.workdir);
+  public async executeBash(
+    params: {
+      command: string;
+      description?: string;
+      timeoutMs?: number;
+      workdir?: string;
+      background?: boolean;
+    },
+    projectRoot?: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number; jobId?: string; isBackground?: boolean }> {
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot));
+    const cwd = params.workdir
+      ? this.assertPathWithinProject(params.workdir, root)
+      : root;
+
+    // 检查是否包含危险的全盘扫描或越界读取命令
+    const cmd = (params.command || '').trim();
+    const forbiddenPatterns = [
+      /\bfind\s+(?:\/|~|\/Users|\/System|\/Library|C:\\|D:\\)/i,
+      /\bgrep\s+-[rRn]\s+.*?\s+(?:\/|~|\/Users|\/System|\/Library|C:\\|D:\\)/i,
+      /\bls\s+-(?:la?|al?)\s+(?:\/|~|\/Users|\/System|\/Library|C:\\|D:\\)/i,
+    ];
+    for (const pat of forbiddenPatterns) {
+      if (pat.test(cmd)) {
+        throw new Error(
+          `【安全沙箱拦截】禁止在终端中执行整机全盘检索命令: "${cmd}"！\n` +
+          `智能体只能在当前项目目录 [${cwd}] 范围内进行命令操作与文件检索。`
+        );
+      }
+    }
 
     // 如果指定了 background: true，在后台启动长进程并立即返回 jobId
     if (params.background) {
@@ -191,16 +303,21 @@ export class DshToolService {
   }
 
   // ================= 2. read 文件读取工具 =================
-  public readFile(params: { file_path: string; offset?: number; limit?: number }): {
+  public readFile(
+    params: { file_path: string; offset?: number; limit?: number },
+    projectRoot?: string,
+    allowExactFiles?: string[]
+  ): {
     path: string;
     content: string;
     totalLines: number;
     offset: number;
     limit: number;
   } {
-    const resolvedPath = path.isAbsolute(params.file_path)
-      ? params.file_path
-      : path.resolve(process.cwd(), params.file_path);
+    if (!params.file_path) {
+      throw new Error('readFile 参数缺少 file_path');
+    }
+    const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot, allowExactFiles);
 
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`文件不存在: ${resolvedPath}`);
@@ -228,14 +345,18 @@ export class DshToolService {
   }
 
   // ================= 3. write 文件覆写/创建工具 =================
-  public writeFile(params: { file_path: string; content: string }): {
+  public writeFile(
+    params: { file_path: string; content: string },
+    projectRoot?: string
+  ): {
     path: string;
     bytesWritten: number;
     linesCount: number;
   } {
-    const resolvedPath = path.isAbsolute(params.file_path)
-      ? params.file_path
-      : path.resolve(process.cwd(), params.file_path);
+    if (!params.file_path) {
+      throw new Error('writeFile 参数缺少 file_path');
+    }
+    const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot);
 
     const dir = path.dirname(resolvedPath);
     if (!fs.existsSync(dir)) {
@@ -253,15 +374,19 @@ export class DshToolService {
   }
 
   // ================= 4. edit 文件字面量替换工具 =================
-  public editFile(params: {
-    file_path: string;
-    old_string: string;
-    new_string: string;
-    replace_all?: boolean;
-  }): { path: string; replacedOccurrences: number } {
-    const resolvedPath = path.isAbsolute(params.file_path)
-      ? params.file_path
-      : path.resolve(process.cwd(), params.file_path);
+  public editFile(
+    params: {
+      file_path: string;
+      old_string: string;
+      new_string: string;
+      replace_all?: boolean;
+    },
+    projectRoot?: string
+  ): { path: string; replacedOccurrences: number } {
+    if (!params.file_path) {
+      throw new Error('editFile 参数缺少 file_path');
+    }
+    const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot);
 
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`目标文件不存在: ${resolvedPath}`);
@@ -290,18 +415,22 @@ export class DshToolService {
   }
 
   // ================= 5. str_replace_editor 工具 =================
-  public strReplaceEditor(params: {
-    command: 'view' | 'create' | 'str_replace' | 'insert';
-    path: string;
-    file_text?: string;
-    old_str?: string;
-    new_str?: string;
-    insert_line?: number;
-    view_range?: [number, number];
-  }): any {
-    const resolvedPath = path.isAbsolute(params.path)
-      ? params.path
-      : path.resolve(process.cwd(), params.path);
+  public strReplaceEditor(
+    params: {
+      command: 'view' | 'create' | 'str_replace' | 'insert';
+      path: string;
+      file_text?: string;
+      old_str?: string;
+      new_str?: string;
+      insert_line?: number;
+      view_range?: [number, number];
+    },
+    projectRoot?: string
+  ): any {
+    if (!params.path) {
+      throw new Error('strReplaceEditor 参数缺少 path');
+    }
+    const resolvedPath = this.assertPathWithinProject(params.path, projectRoot);
 
     if (params.command === 'create') {
       const dir = path.dirname(resolvedPath);
@@ -360,15 +489,20 @@ export class DshToolService {
   }
 
   // ================= 6. read_image 本地图片检查 =================
-  public readImage(params: { file_path: string }): {
+  public readImage(
+    params: { file_path: string },
+    projectRoot?: string,
+    allowExactFiles?: string[]
+  ): {
     path: string;
     exists: boolean;
     sizeBytes?: number;
     mimeType?: string;
   } {
-    const resolvedPath = path.isAbsolute(params.file_path)
-      ? params.file_path
-      : path.resolve(process.cwd(), params.file_path);
+    if (!params.file_path) {
+      throw new Error('readImage 参数缺少 file_path');
+    }
+    const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot, allowExactFiles);
 
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`图片文件不存在: ${resolvedPath}`);
@@ -387,21 +521,44 @@ export class DshToolService {
   }
 
   // ================= 7. glob 路径匹配工具 =================
-  public globSearch(params: { pattern: string; path?: string }): { matches: string[]; count: number } {
-    const baseDir = this.resolveWorkspaceDir(params.path);
+  public globSearch(
+    params: { pattern: string; path?: string },
+    projectRoot?: string
+  ): { matches: string[]; count: number } {
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot));
+    const baseDir = params.path
+      ? this.assertPathWithinProject(params.path, root)
+      : root;
+
+    // 模式防逃逸拦截
+    if (
+      params.pattern.includes('..') ||
+      params.pattern.startsWith('/') ||
+      /^[a-zA-Z]:/.test(params.pattern) ||
+      params.pattern.startsWith('~')
+    ) {
+      throw new Error(
+        `【安全沙箱拦截】Glob 检索规则禁止包含跨目录符 ".." 或根路径前缀，仅允许在当前项目目录 [${root}] 内检索文件！`
+      );
+    }
+
     const matches: string[] = [];
+    const ignoreDirs = new Set(['node_modules', '.git', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
 
     const walk = (dir: string, depth = 0) => {
-      if (depth > 6 || matches.length >= 100) return;
+      if (depth > 8 || matches.length >= 100) return;
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name.startsWith('.')) continue;
+          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
           const full = path.join(dir, entry.name);
           const rel = path.relative(baseDir, full);
 
+          // 物理防逃逸
+          const rootRel = path.relative(root, full);
+          if (rootRel.startsWith('..')) continue;
+
           if (entry.isFile()) {
-            // 简单通配符匹配 (如 *.ts, *test*)
             const p = params.pattern.replace(/\./g, '\\.').replace(/\*/g, '.*');
             const regex = new RegExp(p, 'i');
             if (regex.test(entry.name) || regex.test(rel)) {
@@ -419,11 +576,17 @@ export class DshToolService {
   }
 
   // ================= 8. grep 内容检索工具 =================
-  public grepSearch(params: { pattern: string; path?: string; glob?: string; case_sensitive?: boolean }): {
+  public grepSearch(
+    params: { pattern: string; path?: string; glob?: string; case_sensitive?: boolean },
+    projectRoot?: string
+  ): {
     matches: Array<{ file: string; line: number; text: string }>;
     totalMatches: number;
   } {
-    const baseDir = this.resolveWorkspaceDir(params.path);
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot));
+    const baseDir = params.path
+      ? this.assertPathWithinProject(params.path, root)
+      : root;
     const matches: Array<{ file: string; line: number; text: string }> = [];
     const flags = params.case_sensitive ? '' : 'i';
     let regex: RegExp;
@@ -709,8 +872,8 @@ export class DshToolService {
   }
 
   // ================= 16. workspace_changes / getFileDiff (工作区变更与 Git 差异) =================
-  public getWorkspaceChanges(customWorkdir?: string): WorkspaceGitChangesSummary {
-    const cwd = this.resolveWorkspaceDir(customWorkdir);
+  public getWorkspaceChanges(customWorkdir?: string, projectRoot?: string): WorkspaceGitChangesSummary {
+    const cwd = this.assertPathWithinProject(customWorkdir || projectRoot || '', projectRoot);
     try {
       const isGit = fs.existsSync(path.join(cwd, '.git'));
       if (!isGit) {
@@ -756,8 +919,9 @@ export class DshToolService {
     }
   }
 
-  public getFileDiff(filePath: string, customWorkdir?: string): { success: boolean; diff: string; error?: string } {
-    const cwd = this.resolveWorkspaceDir(customWorkdir);
+  public getFileDiff(filePath: string, customWorkdir?: string, projectRoot?: string): { success: boolean; diff: string; error?: string } {
+    const cwd = this.assertPathWithinProject(customWorkdir || projectRoot || '', projectRoot);
+    const safeFilePath = this.assertPathWithinProject(filePath, cwd);
     try {
       const diff = execSync(`git diff HEAD -- "${filePath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
       return { success: true, diff: diff || '(该文件为纯新增文件或暂无行级差异)' };
@@ -766,8 +930,9 @@ export class DshToolService {
     }
   }
 
-  public discardFileChanges(filePath: string, customWorkdir?: string): { success: boolean; message: string } {
-    const cwd = this.resolveWorkspaceDir(customWorkdir);
+  public discardFileChanges(filePath: string, customWorkdir?: string, projectRoot?: string): { success: boolean; message: string } {
+    const cwd = this.assertPathWithinProject(customWorkdir || projectRoot || '', projectRoot);
+    const safeFilePath = this.assertPathWithinProject(filePath, cwd);
     try {
       execSync(`git checkout HEAD -- "${filePath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
       return { success: true, message: `已撤销文件 [${filePath}] 的所有本地修改` };

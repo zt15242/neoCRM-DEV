@@ -854,6 +854,12 @@ ${dialogHistoryText}`;
   ): Promise<void> {
     const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
 
+    // 提取本轮会话中用户显式上传/引用的文件路径白名单（单文件安全豁免）
+    const sessionAllowedFiles = (messages || [])
+      .flatMap((m) => m.attachments || [])
+      .map((a) => a.fullPath)
+      .filter(Boolean) as string[];
+
     const config = this.getAiConfig();
 
     // ================= DeepSeek Harness 官方自动上下文压缩引擎 (Auto-Compaction) =================
@@ -1004,6 +1010,13 @@ ${dialogHistoryText}`;
 - neo-frontend-dev: 销售易前端自定义组件开发 (React 16 + TypeScript)。
 </available_skills>
 若当前任务属于上述专业领域，你可以在采取行动前调用 skill({ name: "..." }) 工具获取该领域的专业实战指导规范。`);
+
+      systemParts.push(`【项目工作区物理安全沙箱与设备访问边界红线 (最高安全约束 - 只能操作项目内内容，严禁检索整台设备)】
+- 【当前绑定项目工作区绝对路径】：${projectPath || '未绑定工作区'}
+- 【沙箱访问铁律】：
+  1. 【只能读取、修改和检索当前项目内的内容】：你所有调用的读写工具（read, write, edit, str_replace_editor, read_image 等）均被底层物理沙箱严格限定在上述项目目录内！任何试图访问项目外部文件、跨越到父级目录 (..) 或访问设备系统路径（如 /、/etc、/Users、~、C:\\ 等）的操作都将被底层内核直接拦截报错！
+  2. 【绝对禁止在整台设备上检索内容】：调用 glob、grep 或 bash 时，只能在当前项目目录范围内进行搜索与定位！绝对严禁对全盘设备发起扫描！
+  3. 【路径规范】：所有文件路径请优先使用当前项目的工作区相对路径（如 "src/index.ts", "package.json"）或当前项目目录下的绝对路径。`);
 
       systemParts.push(`【DeepSeek Harness 智能体自主行动与工程落地协议 (DSH Autonomous Agent Protocol)】
 - 【后台长任务管理 (dsh-tool-jobs)】：耗时超过 15 秒的长命令（如大型元数据拉取、npm install、全量编译、压测）推荐调用 bash({ command: "...", background: true }) 转入后台运行，返回 jobId。使用 job_output 查询输出或等待，使用 job_list 查看任务，使用 job_kill 终止无意义任务。
@@ -1277,6 +1290,8 @@ ${mcpInfoText}
           currentSession,
           controller,
           sendEvent,
+          projectPath,
+          sessionAllowedFiles,
         });
         return;
       }
@@ -1615,7 +1630,7 @@ ${mcpInfoText}
             let isError = false;
 
             try {
-              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath);
+              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath, sessionAllowedFiles);
               toolResult = res.data;
               resultSummary = res.summary;
               executedToolsLog.push({
@@ -1852,6 +1867,8 @@ ${toolDataContext}
     currentSession: any;
     controller: AbortController;
     sendEvent: (event: AiStreamEvent) => void;
+    projectPath?: string;
+    sessionAllowedFiles?: string[];
   }): Promise<void> {
     const {
       requestId,
@@ -1868,6 +1885,8 @@ ${toolDataContext}
       currentSession,
       controller,
       sendEvent,
+      projectPath,
+      sessionAllowedFiles,
     } = opts;
 
     const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
@@ -2100,7 +2119,9 @@ ${toolDataContext}
               fc.args,
               activeCustomMcp,
               currentSession.environment,
-              currentSession.tokenData
+              currentSession.tokenData,
+              projectPath,
+              sessionAllowedFiles
             );
             toolResult = res.data;
             resultSummary = res.summary;
@@ -2201,12 +2222,13 @@ ${toolDataContext}
     activeMcpServers: McpServerConfig[],
     env?: NeoEnvironment,
     tokenData?: TokenData,
-    projectPath?: string
+    projectPath?: string,
+    sessionAllowedFiles?: string[]
   ): Promise<{ data: any; summary: string }> {
     // 1. 判断是否为销售易本地 Harness 工具
     const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
     if (isCrmTool) {
-      return await this.executeCrmTool(name, args, env, tokenData, projectPath);
+      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles);
     }
 
     // 2. 匹配外部 MCP 服务
@@ -2284,14 +2306,18 @@ ${toolDataContext}
     args: any,
     env?: NeoEnvironment,
     tokenData?: TokenData,
-    projectPath?: string
+    projectPath?: string,
+    sessionAllowedFiles?: string[]
   ): Promise<{ data: any; summary: string }> {
     // ================= DeepSeek Harness 原生工具分发 (无需 CRM 登录) =================
     if (name === "bash") {
-      const res = await this.dshToolService.executeBash({
-        ...args,
-        workdir: args.workdir || projectPath,
-      });
+      const res = await this.dshToolService.executeBash(
+        {
+          ...args,
+          workdir: args.workdir || projectPath,
+        },
+        projectPath
+      );
       return {
         data: res,
         summary: `执行 Bash: ${args.command.slice(0, 45)}${args.command.length > 45 ? "..." : ""} (Exit: ${res.exitCode})`,
@@ -2299,7 +2325,7 @@ ${toolDataContext}
     }
 
     if (name === "read") {
-      const res = this.dshToolService.readFile(args);
+      const res = this.dshToolService.readFile(args, projectPath, sessionAllowedFiles);
       return {
         data: res,
         summary: `读取文件 [${path.basename(res.path)}]: 返回 ${res.content.split('\n').length} 行`,
@@ -2307,7 +2333,7 @@ ${toolDataContext}
     }
 
     if (name === "write") {
-      const res = this.dshToolService.writeFile(args);
+      const res = this.dshToolService.writeFile(args, projectPath);
       return {
         data: res,
         summary: `写入文件 [${path.basename(res.path)}]: ${res.bytesWritten} 字节, ${res.linesCount} 行`,
@@ -2315,7 +2341,7 @@ ${toolDataContext}
     }
 
     if (name === "edit") {
-      const res = this.dshToolService.editFile(args);
+      const res = this.dshToolService.editFile(args, projectPath);
       return {
         data: res,
         summary: `编辑文件 [${path.basename(res.path)}]: 替换 ${res.replacedOccurrences} 处文本`,
@@ -2323,7 +2349,7 @@ ${toolDataContext}
     }
 
     if (name === "str_replace_editor") {
-      const res = this.dshToolService.strReplaceEditor(args);
+      const res = this.dshToolService.strReplaceEditor(args, projectPath);
       return {
         data: res,
         summary: `行级编辑器 [${args.command}]: ${path.basename(args.path)}`,
@@ -2331,7 +2357,7 @@ ${toolDataContext}
     }
 
     if (name === "read_image") {
-      const res = this.dshToolService.readImage(args);
+      const res = this.dshToolService.readImage(args, projectPath, sessionAllowedFiles);
       return {
         data: res,
         summary: `检查图片 [${path.basename(res.path)}]: ${res.sizeBytes} 字节 (${res.mimeType})`,
@@ -2339,7 +2365,7 @@ ${toolDataContext}
     }
 
     if (name === "glob") {
-      const res = this.dshToolService.globSearch(args);
+      const res = this.dshToolService.globSearch(args, projectPath);
       return {
         data: res,
         summary: `Glob 检索【${args.pattern}】: 命中 ${res.count} 个文件`,
@@ -2347,7 +2373,7 @@ ${toolDataContext}
     }
 
     if (name === "grep") {
-      const res = this.dshToolService.grepSearch(args);
+      const res = this.dshToolService.grepSearch(args, projectPath);
       return {
         data: res,
         summary: `Grep 检索【${args.pattern}】: 命中 ${res.totalMatches} 处`,
@@ -2563,10 +2589,11 @@ ${toolDataContext}
     }
 
     if (name === "pull_crm_project_code") {
-      const targetDir = args.targetDir || projectPath;
-      if (!targetDir) {
+      const rawTarget = args.targetDir || projectPath;
+      if (!rawTarget) {
         throw new Error("请先在右侧打开或指定一个本地项目工作区目录，以便将拉取的代码与元数据写入本地");
       }
+      const targetDir = this.dshToolService.assertPathWithinProject(rawTarget, projectPath);
       const res = await this.codeSyncService.pullProjectCode(env, tokenData, {
         targetDir,
         pullType: args.pullType || 'all',
@@ -2771,9 +2798,10 @@ ${toolDataContext}
     }
 
     if (name === "generate_print_template") {
+      const targetWorkdir = this.dshToolService.assertPathWithinProject(args.workdir || projectPath || '', projectPath);
       const res = await this.printTemplateService.generatePrintTemplate({
         ...args,
-        workdir: args.workdir || projectPath,
+        workdir: targetWorkdir,
       });
       if (!res.success) throw new Error(res.error || res.message || "生成打印模板失败");
       return {

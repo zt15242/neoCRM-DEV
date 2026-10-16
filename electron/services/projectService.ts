@@ -96,6 +96,33 @@ export class ProjectService {
     return true;
   }
 
+  private validateProjectFolder(folderPath?: string): string {
+    if (!folderPath || !folderPath.trim()) {
+      return path.resolve(process.cwd());
+    }
+    const resolved = path.resolve(folderPath.trim());
+    if (resolved === '/' || resolved === '\\' || /^[a-zA-Z]:[/\\]?$/.test(resolved)) {
+      throw new Error(`【安全沙箱拦截】禁止读取系统根目录: ${folderPath}`);
+    }
+    const lower = resolved.toLowerCase();
+    if (
+      lower.startsWith('/etc') ||
+      lower.startsWith('/var') ||
+      lower.startsWith('/usr') ||
+      lower.startsWith('/bin') ||
+      lower.startsWith('/sbin') ||
+      lower.startsWith('/system') ||
+      lower.startsWith('/library') ||
+      lower.startsWith('c:\\windows') ||
+      lower.startsWith('c:\\program')
+    ) {
+      throw new Error(`【安全沙箱拦截】禁止读取系统目录: ${folderPath}`);
+    }
+    if (!fs.existsSync(resolved)) {
+      return path.resolve(process.cwd());
+    }
+    return resolved;
+  }
   public listFiles(params?: { folderPath?: string; query?: string; maxFiles?: number }): Array<{
     name: string;
     relativePath: string;
@@ -103,9 +130,7 @@ export class ProjectService {
     ext: string;
     size: number;
   }> {
-    const baseDir = params?.folderPath && fs.existsSync(params.folderPath)
-      ? params.folderPath
-      : process.cwd();
+    const baseDir = this.validateProjectFolder(params?.folderPath);
 
     const maxFiles = params?.maxFiles || 200;
     const query = (params?.query || '').trim().toLowerCase();
@@ -154,7 +179,7 @@ export class ProjectService {
     size?: number;
     children?: any[];
   }> {
-    const baseDir = folderPath && fs.existsSync(folderPath) ? folderPath : process.cwd();
+    const baseDir = this.validateProjectFolder(folderPath);
     const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
 
     const scan = (dir: string, depth: number): any[] => {
@@ -211,7 +236,7 @@ export class ProjectService {
     size: number;
     mtime: number;
   }> {
-    const baseDir = folderPath && fs.existsSync(folderPath) ? folderPath : process.cwd();
+    const baseDir = this.validateProjectFolder(folderPath);
     const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
     const list: Array<{ name: string; relativePath: string; fullPath: string; ext: string; size: number; mtime: number }> = [];
 

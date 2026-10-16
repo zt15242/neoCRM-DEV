@@ -1418,7 +1418,7 @@ export class WorkflowService {
       let finalStatus = 3;
       if (options?.autoEnable) {
         const startT7 = Date.now();
-        const enableRes = await this.toggleFlowStatus(env, tokenData, procdefId, true, procType);
+        const enableRes = await this.toggleFlowStatus(env, tokenData, procdefId, true, 2);
         if (enableRes.success) {
           finalStatus = 1;
           logStep("步骤 7: 启用流程", "success", "🎉 审批流版本已成功启用 (status=1)！", Date.now() - startT7);
