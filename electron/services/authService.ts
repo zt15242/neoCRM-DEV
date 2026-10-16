@@ -266,7 +266,12 @@ export class AuthService {
 
   public async loginWithFxiaoKeClientCredentials(env: NeoEnvironment): Promise<TokenData> {
     const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
-    const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
+    // 强制纠偏：纷享销客 OpenAPI v2 唯一合法令牌端点是 /oauth2.0/token (必须包含 .0)
+    // 彻底防止历史旧配置误存了 /cgi/... 或 /auc/... 或 /oauth2/token 导致 404 错误
+    let tokenUrl = env.tokenURL?.trim();
+    if (!tokenUrl || tokenUrl.includes('/cgi/') || tokenUrl.includes('/auc/') || tokenUrl.endsWith('/oauth2/token') || !tokenUrl.includes('/oauth2.0/token')) {
+      tokenUrl = `https://${cloudDomain}/oauth2.0/token`;
+    }
     const thirdTraceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     if (!env.clientId || !env.clientSecret) {
@@ -820,7 +825,10 @@ export class AuthService {
   private async fetchTokenByCode(env: NeoEnvironment, code: string, redirectUri: string, codeVerifier?: string): Promise<TokenData> {
     if (env.productType === 'fxiaoke') {
       const cloudDomain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
-      const tokenUrl = env.tokenURL || `https://${cloudDomain}/oauth2.0/token`;
+      let tokenUrl = env.tokenURL?.trim();
+      if (!tokenUrl || tokenUrl.includes('/cgi/') || tokenUrl.includes('/auc/') || tokenUrl.endsWith('/oauth2/token') || !tokenUrl.includes('/oauth2.0/token')) {
+        tokenUrl = `https://${cloudDomain}/oauth2.0/token`;
+      }
       const thirdTraceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const payload = {
         grantType: 'authorization_code',

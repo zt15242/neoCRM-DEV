@@ -196,7 +196,23 @@ export class EnvService {
     }
     try {
       const data = fs.readFileSync(filePath, 'utf-8');
-      return JSON.parse(data);
+      const list: NeoEnvironment[] = JSON.parse(data);
+      let changed = false;
+      for (const item of list) {
+        if (item.productType === 'fxiaoke') {
+          const domain = item.cloudDomain?.trim() || 'open.fxiaoke.com';
+          const validTokenUrl = `https://${domain}/oauth2.0/token`;
+          if (item.tokenURL !== validTokenUrl) {
+            item.tokenURL = validTokenUrl;
+            item.loginURL = `https://${domain}/oauth2.0/authorize`;
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+      }
+      return list;
     } catch (e) {
       console.error('读取自定义环境失败:', e);
       return [];
@@ -226,7 +242,15 @@ export class EnvService {
     let loginURL = env.loginURL;
     let tokenURL = env.tokenURL;
 
-    if (!loginURL || !tokenURL) {
+    if (env.productType === 'fxiaoke') {
+      const domain = env.cloudDomain?.trim() || (env.neoBaseURL ? new URL(env.neoBaseURL).host : 'open.fxiaoke.com');
+      loginURL = `https://${domain}/oauth2.0/authorize`;
+      tokenURL = `https://${domain}/oauth2.0/token`;
+    } else if (env.productType === 'salesforce') {
+      const host = env.neoBaseURL ? new URL(env.neoBaseURL).host : 'login.salesforce.com';
+      if (!loginURL) loginURL = `https://${host}/services/oauth2/authorize`;
+      if (!tokenURL) tokenURL = `https://${host}/services/oauth2/token`;
+    } else if (!loginURL || !tokenURL) {
       try {
         const u = new URL(env.neoBaseURL);
         const hostParts = u.hostname.split('.');

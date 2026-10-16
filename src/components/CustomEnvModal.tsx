@@ -187,8 +187,9 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
     }
 
     if (productType === 'fxiaoke') {
-      setLoginURL('https://open.fxiaoke.com/oauth2/authorize');
-      setTokenURL('https://open.fxiaoke.com/cgi/corpAccessToken/get/V2');
+      const domain = cloudDomain || 'open.fxiaoke.com';
+      setLoginURL(`https://${domain}/oauth2.0/authorize`);
+      setTokenURL(`https://${domain}/oauth2.0/token`);
       return;
     }
 
