@@ -10,12 +10,14 @@ import { extractWorkflowPlanFromText } from './workflowPlanHelper';
 import { WorkflowPlanCard } from "./WorkflowPlanCard";
 import { InlineDecisionCard } from "./InlineDecisionCard";
 import { MessageArtifactsCard } from "./MessageArtifactsCard";
-import { extractDecisionsFromText, DecisionRequestPayload } from "./decisionHelper";
+import { extractDecisionsFromText, extractDecisionsFromToolCalls, DecisionRequestPayload } from "./decisionHelper";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { Copy, Check, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
   isStreamingCurrent?: boolean;
+  isLastMessage?: boolean;
   projectPath?: string;
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
@@ -28,6 +30,7 @@ interface AiMessageItemProps {
 export const AiMessageItem: React.FC<AiMessageItemProps> = ({
   message,
   isStreamingCurrent = false,
+  isLastMessage = false,
   projectPath,
   onOpenCreateSchema,
   onOpenDeployWorkflow,
@@ -113,9 +116,15 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
     );
   }
 
-  // 检测是否包含待决策确认项 (Codex / Cursor 交互决策)
-  const detectedDecisions = !isStreamingCurrent && message.content ? extractDecisionsFromText(message.content) : null;
+  // 检测是否包含待决策确认项 (优先从 toolCalls 中提取 ask_user_question，其次从 content 启发式提取)
+  const toolCallDecisions = !isStreamingCurrent ? extractDecisionsFromToolCalls(message.toolCalls) : null;
+  const textDecisions = !isStreamingCurrent && message.content ? extractDecisionsFromText(message.content) : null;
+  const detectedDecisions = toolCallDecisions || textDecisions;
   const hasPendingDecisions = Boolean(detectedDecisions && detectedDecisions.items.length > 0);
+
+  // 检测是否包含 exit_plan_mode 呈交的实施方案
+  const exitPlanCall = !isStreamingCurrent ? message.toolCalls?.find((tc) => tc.name === 'exit_plan_mode') : null;
+  const planMarkdown = (exitPlanCall?.arguments?.plan as string) || null;
 
   // 检测是否包含可执行的数据建模方案
   const detectedPlan = !isStreamingCurrent && message.content ? extractSchemaPlanFromText(message.content) : null;
@@ -192,10 +201,21 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
                 suppressDeploymentCards={hasPendingDecisions}
               />
 
+              {/* DSH 实施方案规划评审卡片 (exit_plan_mode) */}
+              {planMarkdown && (
+                <PlanReviewCard
+                  plan={planMarkdown}
+                  isAnswered={!isLastMessage}
+                  onApprove={() => onSendMessage?.('我已审核并批准该方案，请严格按照上述实施方案开始自动执行并部署！')}
+                  onReject={(feedback) => onSendMessage?.(feedback ? `我对方案有修改意见：${feedback}` : '我对方案有修改要求，请根据我的最新意图调整规划')}
+                />
+              )}
+
               {/* 当存在待决策确认项时，直接内联渲染交互式选项卡片（完全非弹窗式），并在确认前严格抑制部署卡片 */}
               {hasPendingDecisions && detectedDecisions && (
                 <InlineDecisionCard
                   decisionData={detectedDecisions}
+                  isAnswered={!isLastMessage}
                   onSubmit={(confirmedText) => {
                     if (onSendMessage) {
                       onSendMessage(confirmedText);

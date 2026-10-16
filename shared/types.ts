@@ -364,6 +364,8 @@ export interface AiChatMessage {
   modelId?: string;
   createdAt: number;
   error?: string;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  durationMs?: number;
 }
 
 export interface AiChatSession {
@@ -377,6 +379,7 @@ export interface AiChatSession {
   entityRefs?: AiContextEntityRef[];
   activeSkillIds?: string[]; // 当前会话挂载的技能 ID
   compactionSummary?: AiCompactedSummary; // 上下文压缩摘要
+  mode?: 'default' | 'plan'; // 运行模式: 'default' (默认直接执行) | 'plan' (计划模式)
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;
@@ -387,6 +390,8 @@ export interface AiStreamEvent {
   sessionId: string;
   messageId: string;
   type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error';
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  durationMs?: number;
   delta?: string;
   toolCall?: AiToolCallRecord;
   error?: string;
@@ -773,4 +778,35 @@ export interface GetLogsOptions {
   module?: string;
   keyword?: string;
   limit?: number;
+}
+
+
+// ================= DeepSeek Harness 后台任务 (Jobs) 类型 =================
+export interface DshBackgroundJob {
+  id: string;
+  command: string;
+  workdir: string;
+  status: 'running' | 'completed' | 'killed' | 'error';
+  startTime: number;
+  endTime?: number;
+  exitCode?: number;
+  outputBuffer: string;
+  unreadOutput: string;
+}
+
+// ================= DeepSeek Harness 工作区代码变更类型 =================
+export interface WorkspaceGitChangeItem {
+  file: string;
+  status: 'M' | 'A' | 'D' | '??' | 'R';
+  staged: boolean;
+  additions?: number;
+  deletions?: number;
+}
+
+export interface WorkspaceGitChangesSummary {
+  isGit: boolean;
+  branch: string;
+  clean: boolean;
+  changes: WorkspaceGitChangeItem[];
+  diffSummary?: string;
 }

@@ -297,3 +297,59 @@ export function extractDecisionsFromText(content: string): DecisionRequestPayloa
     items,
   };
 }
+
+/**
+ * 从智能体工具调用轨迹中提取 ask_user_question 决策项 (DSH 官方交互提问规范)
+ */
+export function extractDecisionsFromToolCalls(toolCalls?: any[]): DecisionRequestPayload | null {
+  if (!toolCalls || toolCalls.length === 0) return null;
+  const askCall = toolCalls.find((tc) => tc.name === "ask_user_question");
+  if (!askCall || !askCall.arguments) return null;
+
+  let args = askCall.arguments;
+  if (typeof args === "string") {
+    try {
+      args = JSON.parse(args);
+    } catch {
+      return null;
+    }
+  }
+
+  // 1. DSH 官方规范: { questions: [ { id, header, question, options: [...] } ] }
+  if (Array.isArray(args.questions) && args.questions.length > 0) {
+    return {
+      title: args.header || "方案核对与关键业务决策",
+      items: args.questions.map((q: any, idx: number) => ({
+        id: q.id || `q_${idx + 1}`,
+        title: q.header || `确认事项 ${idx + 1}`,
+        question: q.question || "",
+        options: (q.options || []).map((opt: any) => ({
+          label: typeof opt === "string" ? opt : (opt.label || opt.name || opt.value),
+          value: typeof opt === "string" ? opt : (opt.value || opt.label),
+          description: typeof opt === "object" ? opt.description : undefined,
+        })),
+      })),
+    };
+  }
+
+  // 2. 兼容单个 question 和 options 格式: { question, options, header }
+  if (args.question && Array.isArray(args.options) && args.options.length > 0) {
+    return {
+      title: args.header || "方案核对与关键业务决策",
+      items: [
+        {
+          id: args.id || "decision_1",
+          title: args.header || "请确认执行方案",
+          question: args.question,
+          options: args.options.map((opt: any) => ({
+            label: typeof opt === "string" ? opt : (opt.label || opt.name || opt.value),
+            value: typeof opt === "string" ? opt : (opt.value || opt.label),
+            description: typeof opt === "object" ? opt.description : undefined,
+          })),
+        },
+      ],
+    };
+  }
+
+  return null;
+}

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec, execSync } from 'node:child_process';
+import { exec, execSync, spawn, ChildProcess } from 'node:child_process';
+import { WorkspaceGitChangesSummary, WorkspaceGitChangeItem } from '../../shared/types';
 import axios from 'axios';
 
 export interface DshTodoItem {
@@ -16,9 +17,23 @@ export interface DshGoalItem {
   updatedAt: number;
 }
 
+interface DshJobProcess {
+  id: string;
+  command: string;
+  workdir: string;
+  status: 'running' | 'completed' | 'killed' | 'error';
+  startTime: number;
+  endTime?: number;
+  exitCode?: number;
+  outputBuffer: string;
+  unreadOutput: string;
+  process?: ChildProcess;
+}
+
 export class DshToolService {
   private currentGoal: DshGoalItem | null = null;
   private currentTodos: DshTodoItem[] = [];
+  private backgroundJobs = new Map<string, DshJobProcess>();
 
   private resolveWorkspaceDir(customWorkdir?: string): string {
     if (customWorkdir && fs.existsSync(customWorkdir)) {
@@ -71,14 +86,76 @@ export class DshToolService {
     return clean;
   }
 
-  // ================= 1. bash 工具 (命令执行) =================
+  // ================= 1. bash 工具 (命令执行，支持前台与后台异步长任务) =================
   public async executeBash(params: {
     command: string;
     description?: string;
     timeoutMs?: number;
     workdir?: string;
-  }): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    background?: boolean;
+  }): Promise<{ stdout: string; stderr: string; exitCode: number; jobId?: string; isBackground?: boolean }> {
     const cwd = this.resolveWorkspaceDir(params.workdir);
+
+    // 如果指定了 background: true，在后台启动长进程并立即返回 jobId
+    if (params.background) {
+      const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const isWin = process.platform === 'win32';
+      const child = spawn(params.command, {
+        cwd,
+        shell: isWin ? 'cmd.exe' : '/bin/bash',
+        env: {
+          ...process.env,
+          CI: 'true',
+          SF_USE_PROGRESS_BAR: 'false',
+          FORCE_COLOR: '0',
+        },
+      });
+
+      const job: DshJobProcess = {
+        id: jobId,
+        command: params.command,
+        workdir: cwd,
+        status: 'running',
+        startTime: Date.now(),
+        outputBuffer: '',
+        unreadOutput: '',
+        process: child,
+      };
+      this.backgroundJobs.set(jobId, job);
+
+      child.stdout?.on('data', (chunk) => {
+        const text = chunk.toString();
+        job.outputBuffer = (job.outputBuffer + text).slice(-100000);
+        job.unreadOutput = (job.unreadOutput + text).slice(-50000);
+      });
+
+      child.stderr?.on('data', (chunk) => {
+        const text = chunk.toString();
+        job.outputBuffer = (job.outputBuffer + text).slice(-100000);
+        job.unreadOutput = (job.unreadOutput + text).slice(-50000);
+      });
+
+      child.on('close', (code) => {
+        job.status = code === 0 ? 'completed' : 'error';
+        job.exitCode = code || 0;
+        job.endTime = Date.now();
+      });
+
+      child.on('error', (err) => {
+        job.status = 'error';
+        job.outputBuffer += `\n[Process Error]: ${err.message}`;
+        job.endTime = Date.now();
+      });
+
+      return {
+        stdout: `后台长任务已启动 (Job ID: ${jobId})。\n进程在工作区后台异步运行中，你可以继续其他操作，通过 job_output({ job_id: "${jobId}" }) 查看输出或等待其完成。`,
+        stderr: '',
+        exitCode: 0,
+        jobId,
+        isBackground: true,
+      };
+    }
+
     const timeout = Math.min(params.timeoutMs || 30000, 180000); // 允许最长3分钟
 
     return new Promise((resolve) => {
@@ -542,4 +619,170 @@ export class DshToolService {
       status: 'presented_to_user',
     };
   }
+
+  // ================= 14. job_list / job_output / job_kill (DSH 官方后台任务系统) =================
+  public listJobs(): { total: number; jobs: Array<{ id: string; command: string; status: string; durationMs: number; exitCode?: number; hasUnread: boolean }> } {
+    const jobs = Array.from(this.backgroundJobs.values()).map((j) => ({
+      id: j.id,
+      command: j.command,
+      status: j.status,
+      durationMs: (j.endTime || Date.now()) - j.startTime,
+      exitCode: j.exitCode,
+      hasUnread: j.unreadOutput.length > 0,
+    }));
+    return {
+      total: jobs.length,
+      jobs,
+    };
+  }
+
+  public async getJobOutput(params: { job_id: string; wait?: boolean; timeout_ms?: number }): Promise<{
+    job_id: string;
+    status: string;
+    exitCode?: number;
+    output: string;
+    isFinished: boolean;
+  }> {
+    const job = this.backgroundJobs.get(params.job_id);
+    if (!job) {
+      throw new Error(`未找到 ID 为 ${params.job_id} 的后台长任务`);
+    }
+
+    if (params.wait && job.status === 'running') {
+      const timeout = Math.min(params.timeout_ms || 30000, 300000);
+      const start = Date.now();
+      while (job.status === 'running' && Date.now() - start < timeout) {
+        await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+
+    const unread = job.unreadOutput;
+    job.unreadOutput = ''; // 标记为已读
+
+    const rawDisplay = unread || job.outputBuffer.slice(-8000) || '(暂无新输出)';
+    const clean = this.cleanAndTruncateTerminalOutput(rawDisplay, 15000);
+
+    return {
+      job_id: job.id,
+      status: job.status,
+      exitCode: job.exitCode,
+      output: clean,
+      isFinished: job.status !== 'running',
+    };
+  }
+
+  public killJob(params: { job_id: string; reason?: string }): { success: boolean; job_id: string; status: string } {
+    const job = this.backgroundJobs.get(params.job_id);
+    if (!job) {
+      throw new Error(`未找到 ID 为 ${params.job_id} 的后台任务`);
+    }
+    if (job.status === 'running' && job.process) {
+      job.process.kill('SIGTERM');
+      job.status = 'killed';
+      job.endTime = Date.now();
+      return { success: true, job_id: job.id, status: 'killed' };
+    }
+    return { success: true, job_id: job.id, status: job.status };
+  }
+
+  // ================= 15. load_workspace_dependencies (运行时依赖探测) =================
+  public loadWorkspaceDependencies(): Record<string, any> {
+    const check = (cmd: string): string | null => {
+      try {
+        return execSync(cmd, { encoding: 'utf-8', timeout: 3500, windowsHide: true }).trim();
+      } catch {
+        return null;
+      }
+    };
+
+    return {
+      node: check('node -v'),
+      npm: check('npm -v'),
+      pnpm: check('pnpm -v'),
+      python: check('python3 --version') || check('python --version'),
+      java: check('javac -version') || check('java -version'),
+      git: check('git --version'),
+      salesforceCli: check('sf --version'),
+      platform: process.platform,
+      arch: process.arch,
+    };
+  }
+
+  // ================= 16. workspace_changes / getFileDiff (工作区变更与 Git 差异) =================
+  public getWorkspaceChanges(customWorkdir?: string): WorkspaceGitChangesSummary {
+    const cwd = this.resolveWorkspaceDir(customWorkdir);
+    try {
+      const isGit = fs.existsSync(path.join(cwd, '.git'));
+      if (!isGit) {
+        return { isGit: false, branch: '', clean: true, changes: [], diffSummary: '非 Git 仓库' };
+      }
+
+      let branch = 'main';
+      try {
+        branch = execSync('git branch --show-current', { cwd, encoding: 'utf-8', timeout: 3000 }).trim() || 'HEAD';
+      } catch {}
+
+      const statusOutput = execSync('git status --porcelain -u', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+      const diffStatOutput = execSync('git diff --stat HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+
+      if (!statusOutput) {
+        return { isGit: true, branch, clean: true, changes: [], diffSummary: '工作区干净，所有文件已是最新状态' };
+      }
+
+      const lines = statusOutput.split('\n');
+      const changes: WorkspaceGitChangeItem[] = [];
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const statusCode = line.slice(0, 2).trim();
+        const filePath = line.slice(3).trim();
+
+        changes.push({
+          file: filePath,
+          status: (statusCode === '??' ? '??' : statusCode.includes('M') ? 'M' : statusCode.includes('D') ? 'D' : 'A') as any,
+          staged: !line.startsWith(' ') && !line.startsWith('?'),
+        });
+      }
+
+      return {
+        isGit: true,
+        branch,
+        clean: false,
+        changes,
+        diffSummary: diffStatOutput,
+      };
+    } catch (e: any) {
+      return { isGit: false, branch: '', clean: true, changes: [], diffSummary: e.message };
+    }
+  }
+
+  public getFileDiff(filePath: string, customWorkdir?: string): { success: boolean; diff: string; error?: string } {
+    const cwd = this.resolveWorkspaceDir(customWorkdir);
+    try {
+      const diff = execSync(`git diff HEAD -- "${filePath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
+      return { success: true, diff: diff || '(该文件为纯新增文件或暂无行级差异)' };
+    } catch (e: any) {
+      return { success: false, diff: '', error: e.message };
+    }
+  }
+
+  public discardFileChanges(filePath: string, customWorkdir?: string): { success: boolean; message: string } {
+    const cwd = this.resolveWorkspaceDir(customWorkdir);
+    try {
+      execSync(`git checkout HEAD -- "${filePath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
+      return { success: true, message: `已撤销文件 [${filePath}] 的所有本地修改` };
+    } catch (e: any) {
+      return { success: false, message: `撤销修改失败: ${e.message}` };
+    }
+  }
+
+  // ================= 17. exit_plan_mode (计划模式完成呈交) =================
+  public exitPlanMode(params: { plan: string }): { plan: string; status: string; approved: boolean } {
+    return {
+      plan: params.plan,
+      status: 'plan_presented_for_approval',
+      approved: true,
+    };
+  }
+
 }

@@ -120,13 +120,40 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
   if (instructionCache.has(skillId)) {
     return instructionCache.get(skillId) || null;
   }
-  if (skillId === "preset-print-template-architect" || skillId === "skill-print-template-engineer-perspective") {
+  if (
+    skillId === "preset-print-template-architect" ||
+    skillId === "skill-print-template-engineer-perspective" ||
+    skillId === "salesy-print-template-engineer-perspective"
+  ) {
     return PRINT_TEMPLATE_SKILL_INSTRUCTION;
   }
-  if (skillId === "preset-fxiaoke-architect" || skillId === "skill-fxiaoke-crm-cli") {
+  if (
+    skillId === "preset-workflow-architect" ||
+    skillId === "preset-approval-architect" ||
+    skillId === "skill-process-implementation-perspective" ||
+    skillId === "salesyi-process-implementation-perspective"
+  ) {
+    const raw = OBFUSCATED_BUILTIN_SKILLS["preset-approval-architect"] || OBFUSCATED_BUILTIN_SKILLS["preset-workflow-architect"];
+    if (raw) {
+      const decoded = deobfuscate(raw);
+      if (decoded) {
+        instructionCache.set(skillId, decoded);
+        return decoded;
+      }
+    }
+  }
+  if (
+    skillId === "preset-fxiaoke-architect" ||
+    skillId === "skill-fxiaoke-crm-cli" ||
+    skillId === "fxiaoke-crm-cli"
+  ) {
     return FXIAOKE_SKILL_INSTRUCTION;
   }
-  if (skillId === "preset-salesforce-architect" || skillId === "skill-salesforce-cli") {
+  if (
+    skillId === "preset-salesforce-architect" ||
+    skillId === "skill-salesforce-cli" ||
+    skillId === "salesforce-cli"
+  ) {
     return SALESFORCE_SKILL_INSTRUCTION;
   }
   const raw = OBFUSCATED_BUILTIN_SKILLS[skillId];
@@ -147,10 +174,17 @@ export function isProtectedBuiltinSkill(skillId: string): boolean {
     Boolean(OBFUSCATED_BUILTIN_SKILLS[skillId]) ||
     skillId === "preset-print-template-architect" ||
     skillId === "skill-print-template-engineer-perspective" ||
+    skillId === "salesy-print-template-engineer-perspective" ||
+    skillId === "preset-workflow-architect" ||
+    skillId === "preset-approval-architect" ||
+    skillId === "skill-process-implementation-perspective" ||
+    skillId === "salesyi-process-implementation-perspective" ||
     skillId === "preset-fxiaoke-architect" ||
     skillId === "skill-fxiaoke-crm-cli" ||
+    skillId === "fxiaoke-crm-cli" ||
     skillId === "preset-salesforce-architect" ||
-    skillId === "skill-salesforce-cli"
+    skillId === "skill-salesforce-cli" ||
+    skillId === "salesforce-cli"
   );
 }
 
@@ -565,6 +599,10 @@ export const CRM_HARNESS_TOOLS_SPEC = [
             type: 'string',
             description: '可选的执行目录，默认为当前项目根目录',
           },
+          background: {
+            type: 'boolean',
+            description: '是否在后台运行长时命令（非阻塞，立即返回 jobId，可通过 job_output 查看输出或等待其完成）',
+          },
           timeoutMs: {
             type: 'number',
             description: '超时时间（毫秒），默认为 30000ms',
@@ -869,29 +907,172 @@ export const CRM_HARNESS_TOOLS_SPEC = [
       },
     },
   },
+  // ================= DeepSeek Harness 官方后台任务系统 (dsh-tool-jobs) =================
+  {
+    type: 'function',
+    function: {
+      name: 'job_list',
+      description: '列出当前工作区所有的后台长时任务（编译、拉取、包安装等）及其状态 (running, completed, killed, error)。',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'job_output',
+      description: '读取后台任务的运行输出流。支持等待模式 (wait: true) 最多等待到超时并获取最终结果与状态。',
+      parameters: {
+        type: 'object',
+        properties: {
+          job_id: {
+            type: 'string',
+            description: '后台任务的唯一标识 ID (如 job_xxx)',
+          },
+          wait: {
+            type: 'boolean',
+            description: '是否阻塞等待该任务执行结束，默认 false 仅读取当前增量输出',
+          },
+          timeout_ms: {
+            type: 'number',
+            description: 'wait 模式下的最长等待毫秒数，默认 30000ms',
+          },
+        },
+        required: ['job_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'job_kill',
+      description: '终止并取消正在后台运行的任务进程。',
+      parameters: {
+        type: 'object',
+        properties: {
+          job_id: {
+            type: 'string',
+            description: '待终止的后台任务 ID',
+          },
+          reason: {
+            type: 'string',
+            description: '终止原因说明',
+          },
+        },
+        required: ['job_id'],
+      },
+    },
+  },
+
+  // ================= DeepSeek Harness 动态技能加载工具 (dsh-tool-skill) =================
+  {
+    type: 'function',
+    function: {
+      name: 'skill',
+      description: '按需加载特定技能的完整执行指令与专业知识规范。当用户的任务明确匹配可用技能列表 (<available_skills>) 时，请在采取行动前调用此工具。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: '技能的准确 API 名称标识 (如 skill-process-implementation-perspective, skill-salesforce-cli, skill-fxiaoke-crm-cli 等)',
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+
+  // ================= DeepSeek Harness 工作区代码变更检查 (dsh-workspace-changes) =================
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_changes',
+      description: '检查当前本地工作区物理项目的文件变更状态与 Git 差异 (包含新增、修改、删除文件列表及行数增减统计)。在提交或向用户汇报前调用以核对真实落盘情况。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: '可选指定子路径',
+          },
+        },
+      },
+    },
+  },
+
+  // ================= DeepSeek Harness 本地开发运行时依赖探测 (dsh-tool-workspace-dependencies) =================
+  {
+    type: 'function',
+    function: {
+      name: 'load_workspace_dependencies',
+      description: '探测当前宿主操作系统上安装的开发工具链与依赖运行时环境（Node.js, npm, pnpm, Python, Java/JDK, Git, Salesforce CLI sf 等版本与路径）。',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+
+  // ================= DeepSeek Harness 计划模式评审退出 (dsh-plan-mode) =================
+  {
+    type: 'function',
+    function: {
+      name: 'exit_plan_mode',
+      description: '当在计划模式 (Plan Mode) 下完成探索、设计与方案构想后，调用此工具向用户呈交完整的结构化方案供评审批准，获批后退出计划模式进入执行阶段。',
+      parameters: {
+        type: 'object',
+        properties: {
+          plan: {
+            type: 'string',
+            description: '完整的结构化实施方案（Markdown 格式，包含背景、技术调研、待修改文件清单与分步执行计划）',
+          },
+        },
+        required: ['plan'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
       name: 'ask_user_question',
-      description: '向用户发起带结构化选项的选择确认（与内联交互决策卡片无缝联动），支持点选或自定义输入。',
+      description: `向用户发起带结构化选项的选择确认（与内联交互决策卡片无缝联动），支持点选、多选或自定义输入。当涉及架构决策、主对象选择、审批人选型或生产部署确认时调用此工具。调用后智能体循环将自动挂起等待用户完成确认。\n- 规范 A (推荐): { questions: [{ id, header, question, options: [{ label, description }] }] }\n- 规范 B: { question, options: [\"...\"] }`,
       parameters: {
         type: 'object',
         properties: {
-          question: {
-            type: 'string',
-            description: '提示用户的明确问题',
-          },
-          options: {
+          questions: {
             type: 'array',
-            items: { type: 'string' },
-            description: '供用户点选的候选选项数组',
+            description: 'DeepSeek Harness 标准问题列表',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: '问题唯一标识 ID' },
+                header: { type: 'string', description: '短标题，如“审批角色”、“业务类型”' },
+                question: { type: 'string', description: '向用户提出的具体问题或决策点' },
+                options: {
+                  type: 'array',
+                  description: '候选选项列表',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', description: '用户可见选项标签（首个推荐项请追加 (推荐)）' },
+                      description: { type: 'string', description: '一句话简述业务影响或权衡' },
+                    },
+                    required: ['label'],
+                  },
+                },
+                multi_select: { type: 'boolean', description: '是否多选，默认 false' },
+              },
+              required: ['id', 'question'],
+            },
           },
-          allow_custom: {
-            type: 'boolean',
-            description: '是否允许用户在输入框中自由填写其他答案，默认 true',
-          },
+          header: { type: 'string', description: '卡片主标题' },
+          question: { type: 'string', description: '单问题模式下的具体问题' },
+          options: { type: 'array', items: { type: 'string' }, description: '单问题模式下的选项数组' },
+          allow_custom: { type: 'boolean', description: '是否允许在输入框中自由填写其他答案，默认 true' },
         },
-        required: ['question', 'options'],
       },
     },
   },

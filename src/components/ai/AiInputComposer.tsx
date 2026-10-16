@@ -32,7 +32,9 @@ import {
   FolderOpen,
   Code2,
   Lock,
-  Unlock
+  Unlock,
+  Activity,
+  GitCommit
 } from 'lucide-react';
 import { 
   AiContextEntityRef, 
@@ -69,6 +71,9 @@ interface ComposerContext {
   externalAttachmentToAdd?: AiFileAttachment | null;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
+  mode?: 'default' | 'plan';
+  onToggleMode?: (mode: 'default' | 'plan') => void;
+  onSwitchPanelTab?: (tab: 'files' | 'changes' | 'jobs' | 'artifacts' | 'terminal' | 'tools') => void;
 }
 
 interface AiInputComposerProps {
@@ -113,6 +118,9 @@ interface AiInputComposerProps {
   externalAttachmentToAdd?: AiFileAttachment | null;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
+  mode?: 'default' | 'plan';
+  onToggleMode?: (mode: 'default' | 'plan') => void;
+  onSwitchPanelTab?: (tab: 'files' | 'changes' | 'jobs' | 'artifacts' | 'terminal' | 'tools') => void;
 }
 
 export const AiInputComposer: React.FC<AiInputComposerProps> = ({
@@ -150,6 +158,9 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   externalAttachmentToAdd,
   workflowLicenseStatus,
   onOpenLicenseModal,
+  mode = 'default',
+  onToggleMode,
+  onSwitchPanelTab,
 }) => {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AiFileAttachment[]>([]);
@@ -185,6 +196,9 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     onSelectPreset,
     onOpenFlowManager,
     onOpenPrintManager,
+    mode,
+    onToggleMode,
+    onSwitchPanelTab,
   };
 
   // 1. 初始化预热加载实体字典
@@ -396,6 +410,56 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       badge: '会话清空',
       action: (ctx) => {
         ctx.onClearSession?.();
+      },
+    },
+    {
+      id: 'plan_on',
+      command: '/plan on',
+      name: '开启方案规划模式 (Plan Mode)',
+      description: '深入调研与构思架构方案，经您评审确认后再执行',
+      icon: Layers,
+      iconColor: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+      badge: '模式切换',
+      action: (ctx) => {
+        ctx.onToggleMode?.('plan');
+        ctx.showToast?.('info', '已开启方案规划模式 (Plan Mode)');
+      },
+    },
+    {
+      id: 'plan_off',
+      command: '/plan off',
+      name: '开启直接执行模式 (Default Mode)',
+      description: '自主行动闭环执行到底，直接调用工具完成落地',
+      icon: Sparkles,
+      iconColor: 'text-amber-600 bg-amber-50 border-amber-200',
+      badge: '模式切换',
+      action: (ctx) => {
+        ctx.onToggleMode?.('default');
+        ctx.showToast?.('info', '已开启直接执行模式 (Default Mode)');
+      },
+    },
+    {
+      id: 'changes',
+      command: '/changes',
+      name: '工作区代码变更 (Git Diff)',
+      description: '查看本地工作区文件行级差异与变更对账',
+      icon: GitCommit,
+      iconColor: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+      badge: '工作区',
+      action: (ctx) => {
+        ctx.onSwitchPanelTab?.('changes');
+      },
+    },
+    {
+      id: 'jobs',
+      command: '/jobs',
+      name: '后台长任务 (Background Jobs)',
+      description: '列出工作区后台运行的长命令与查看实时输出',
+      icon: Activity,
+      iconColor: 'text-amber-600 bg-amber-50 border-amber-200',
+      badge: '后台任务',
+      action: (ctx) => {
+        ctx.onSwitchPanelTab?.('jobs');
       },
     },
     {
@@ -986,6 +1050,39 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             )}
             <span className="truncate max-w-[130px] font-semibold text-slate-800">{tenantName}</span>
           </div>
+
+          {/* DSH 运行模式切换器 (Default Mode vs Plan Mode) */}
+          <button
+            type="button"
+            onClick={() => {
+              const nextMode = mode === 'plan' ? 'default' : 'plan';
+              onToggleMode?.(nextMode);
+              showToast?.(
+                'info',
+                nextMode === 'plan'
+                  ? '已切换为「方案规划模式 (Plan Mode)」：AI将先调研设计，获批后执行'
+                  : '已切换为「直接执行模式 (Default Mode)」：AI将自主行动闭环执行到底'
+              );
+            }}
+            className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs cursor-pointer transition-all border ${
+              mode === 'plan'
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-2xs font-semibold'
+                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900 font-medium'
+            }`}
+            title={mode === 'plan' ? '当前处于方案规划模式：点击切换为直接执行' : '当前处于直接执行模式：点击切换为方案规划'}
+          >
+            {mode === 'plan' ? (
+              <>
+                <Layers className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span>📋 方案规划</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>⚡️ 直接执行</span>
+              </>
+            )}
+          </button>
 
           {/* 角色标识徽标 */}
           {currentPresetName && (

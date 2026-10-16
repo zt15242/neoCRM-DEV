@@ -26,7 +26,12 @@ import {
   ListTodo,
   Target,
   HelpCircle,
-  Image
+  Image,
+  Activity,
+  StopCircle,
+  ClipboardCheck,
+  GitCommit,
+  Sparkles
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -192,10 +197,59 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
         };
       case 'ask_user_question':
         return {
-          title: `向用户发起确认: ${toolCall.arguments?.question || ''}`,
+          title: '向用户发起方案核对与决策确认',
           icon: HelpCircle,
           badge: '决策交互',
           color: 'text-orange-600 bg-orange-50 border-orange-200',
+        };
+      case 'exit_plan_mode':
+        return {
+          title: '呈交实施方案规划供用户评审',
+          icon: ClipboardCheck,
+          badge: '方案评审',
+          color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+        };
+      case 'job_list':
+        return {
+          title: '检索工作区后台长任务列表',
+          icon: Activity,
+          badge: '后台任务',
+          color: 'text-amber-600 bg-amber-50 border-amber-200',
+        };
+      case 'job_output':
+        return {
+          title: `读取后台任务 [${toolCall.arguments?.job_id || ''}] 输出`,
+          icon: Terminal,
+          badge: '任务输出',
+          color: 'text-amber-600 bg-amber-50 border-amber-200',
+        };
+      case 'job_kill':
+        return {
+          title: `终止后台任务 [${toolCall.arguments?.job_id || ''}]`,
+          icon: StopCircle,
+          badge: '终止任务',
+          color: 'text-rose-600 bg-rose-50 border-rose-200',
+        };
+      case 'skill':
+        return {
+          title: `按需加载技能 [${toolCall.arguments?.name || ''}] 专业规范`,
+          icon: Sparkles,
+          badge: '专业技能',
+          color: 'text-purple-600 bg-purple-50 border-purple-200',
+        };
+      case 'workspace_changes':
+        return {
+          title: '检查工作区 Git 代码修改与差异',
+          icon: GitCommit,
+          badge: '代码变更',
+          color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+        };
+      case 'load_workspace_dependencies':
+        return {
+          title: '探测宿主本地工具链与开发依赖环境',
+          icon: Wrench,
+          badge: '环境就绪',
+          color: 'text-sky-600 bg-sky-50 border-sky-200',
         };
       case 'generate_print_template': {
         const fname = toolCall.arguments?.fileName || `${toolCall.arguments?.entityApiKey || ''}_打印模板.docx`;
@@ -273,7 +327,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question', 'exit_plan_mode', 'job_list', 'job_output', 'job_kill', 'skill', 'workspace_changes', 'load_workspace_dependencies'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">

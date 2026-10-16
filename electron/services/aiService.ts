@@ -848,10 +848,11 @@ ${dialogHistoryText}`;
       activeMcpServerIds?: string[];
       compactionSummary?: any;
       projectPath?: string;
+      mode?: 'default' | 'plan';
     },
     sendEvent: (event: AiStreamEvent) => void
   ): Promise<void> {
-    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath } = params;
+    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
 
     const config = this.getAiConfig();
 
@@ -980,7 +981,32 @@ ${dialogHistoryText}`;
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
       const systemParts: string[] = [];
 
+      const isPlanMode = mode === 'plan' || currentSession.mode === 'plan';
+      if (isPlanMode) {
+        systemParts.push(`【DeepSeek Harness 方案规划模式协议 (DSH Plan Mode Active)】
+当前会话处于「方案规划模式 (Plan Mode)」。
+在此模式下，你的首要目标是深入调研、摸清代码与数据架构、设计详尽的技术实施方案与分步执行计划。
+【严格红线】：在方案规划模式下，严禁直接执行写入/修改文件、部署元数据或执行破坏性操作！
+你必须：
+1. 充分使用只读工具（read, glob, grep, list_entities, get_entity_fields 等）查清现场事实。
+2. 构思完整的技术架构、数据流与实施步骤。
+3. 当方案设计完成时，必须立即调用 exit_plan_mode({ plan: "..." }) 工具向用户呈交完整的 Markdown 方案供评审。
+4. 用户批准方案后，系统将退出计划模式进入执行阶段。`);
+      }
+
+      systemParts.push(`<available_skills>
+- salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
+- salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
+- fxiaoke-crm-cli: 纷享销客 OpenAPI v2 接口与 CLI 数据操作规范，支持对象元数据探测、SQL数据查询与大批量分页对账。
+- salesforce-cli: Salesforce CLI (sf v2) 与元数据操作规范，支持 SOQL 查询、元数据部署与拉取 retrieve。
+- neo-backend-dev: 销售易/NeoCRM 后端 Java PaaS 开发、触发器 Trigger、REST API 与自定义代码包。
+- neo-entity-management: 销售易实体模型元数据管理、自定义实体、字段创建与选项集维护。
+- neo-frontend-dev: 销售易前端自定义组件开发 (React 16 + TypeScript)。
+</available_skills>
+若当前任务属于上述专业领域，你可以在采取行动前调用 skill({ name: "..." }) 工具获取该领域的专业实战指导规范。`);
+
       systemParts.push(`【DeepSeek Harness 智能体自主行动与工程落地协议 (DSH Autonomous Agent Protocol)】
+- 【后台长任务管理 (dsh-tool-jobs)】：耗时超过 15 秒的长命令（如大型元数据拉取、npm install、全量编译、压测）推荐调用 bash({ command: "...", background: true }) 转入后台运行，返回 jobId。使用 job_output 查询输出或等待，使用 job_list 查看任务，使用 job_kill 终止无意义任务。
 你不仅是一个语言模型，你是一个运行在桌面工作台内、拥有完整物理文件读写与终端命令执行权限的「自主行动型工程智能体 (Autonomous Coding Agent)」。
 你拥有完整的 DeepSeek Harness 223 个内置插件工具链驱动支持（包含文件原子读写 read/write/edit、行级高精替换 str_replace_editor、Glob 路径检索、Grep 正则搜索、工作区命令执行 bash、任务待办清单状态机 todo_write、目标规划 goal、多 CRM 在线接口探测与元数据同步等）。当前本地项目物理工作区路径: ${projectPath || '未绑定工作区'}。
 
@@ -1211,6 +1237,9 @@ ${mcpInfoText}
         const isExecutionRequested =
           /(?:执行|开始|确认|自动执行|帮我跑|跑一下|运行|部署|拉取|同步).*(?:方案|命令|代码|脚本|步骤|manifest|retrieve|pull)/i.test(userContent) ||
           /(?:不能自动执行|为什么不自动执行|我都确认了|我已经确认|按方案|方式一|方式二|方案A|方案B|执行方案)/i.test(userContent) ||
+          userContent.includes('我已完成方案决策核对') ||
+          userContent.includes('我已审核并批准该方案') ||
+          userContent.includes('批准并执行') ||
           userContent.trim() === '执行' ||
           userContent.trim() === '确认' ||
           userContent.trim() === '开始执行' ||
@@ -1619,6 +1648,28 @@ ${mcpInfoText}
               tool_call_id: tc.id,
               content: this.formatSafeToolResultString(toolResult),
             });
+          }
+
+          // DSH 交互确认与方案评审挂起守护：如果本轮工具调用包含 ask_user_question 或 exit_plan_mode，立即挂起自主循环等待用户操作
+          const hasInteractivePause = toolCallsList.some((tc) => tc.name === 'ask_user_question' || tc.name === 'exit_plan_mode');
+          if (hasInteractivePause) {
+            console.log('[DSH Agent Loop] 捕获到交互提问/方案评审工具调用，自主循环挂起等待用户完成确认');
+            if (!finalContentGenerated.trim() && !assistantContent.trim()) {
+              const hasPlan = toolCallsList.some((tc) => tc.name === 'exit_plan_mode');
+              const guidanceText = hasPlan
+                ? '技术方案与实施规划已设计完毕，请在下方评审卡片中审阅方案详情并批准执行：'
+                : '关键业务决策项已整理就绪，请在下方交互卡片中核对选项并提交确认：';
+              sendEvent({
+                requestId,
+                sessionId,
+                messageId,
+                type: 'content_delta',
+                delta: guidanceText,
+              });
+              finalContentGenerated = guidanceText;
+            }
+            hasMoreIterations = false;
+            break;
           }
 
           hasMoreIterations = true;
@@ -2082,6 +2133,14 @@ ${toolDataContext}
           });
         }
 
+        // DSH 交互确认与方案评审挂起守护
+        const hasInteractivePause = pendingFunctionCalls.some((fc) => fc.name === 'ask_user_question' || fc.name === 'exit_plan_mode');
+        if (hasInteractivePause) {
+          console.log('[DSH Gemini Loop] 捕获到交互提问/方案评审工具调用，自主循环挂起等待用户完成确认');
+          hasMoreIterations = false;
+          break;
+        }
+
         geminiContents.push({
           role: 'user',
           parts: functionResponseParts,
@@ -2348,6 +2407,79 @@ ${toolDataContext}
       return {
         data: res,
         summary: `向用户发起确认: ${res.question} (${res.options.length} 个选项)`,
+      };
+    }
+
+    if (name === "job_list") {
+      const res = this.dshToolService.listJobs();
+      return {
+        data: res,
+        summary: `查询后台长任务: 共 ${res.total} 个任务`,
+      };
+    }
+
+    if (name === "job_output") {
+      const res = await this.dshToolService.getJobOutput(args);
+      return {
+        data: res,
+        summary: `读取任务 [${res.job_id}] 输出 (状态: ${res.status})`,
+      };
+    }
+
+    if (name === "job_kill") {
+      const res = this.dshToolService.killJob(args);
+      return {
+        data: res,
+        summary: `终止后台任务 [${res.job_id}]: ${res.status}`,
+      };
+    }
+
+    if (name === "skill") {
+      const skillName = args.name;
+      let instruction = getProtectedSkillInstruction(skillName);
+      let desc = '';
+      if (!instruction) {
+        const config = this.getAiConfig();
+        const found = (config.skills || []).find((s) => s.id === skillName || s.name === skillName);
+        if (found) {
+          instruction = found.systemInstruction || getProtectedSkillInstruction(found.id);
+          desc = found.description;
+        }
+      }
+      if (!instruction) {
+        throw new Error(`未找到名为 "${skillName}" 的技能规范`);
+      }
+      return {
+        data: {
+          name: skillName,
+          description: desc,
+          instruction,
+        },
+        summary: `成功按需加载技能 [${skillName}] 的专业执行规范`,
+      };
+    }
+
+    if (name === "workspace_changes") {
+      const res = this.dshToolService.getWorkspaceChanges(args.path || projectPath);
+      return {
+        data: res,
+        summary: res.clean ? '工作区文件干净，无未提交修改' : `检测到 ${res.changes.length} 个未提交变更文件`,
+      };
+    }
+
+    if (name === "load_workspace_dependencies") {
+      const res = this.dshToolService.loadWorkspaceDependencies();
+      return {
+        data: res,
+        summary: `本地开发环境就绪: Node ${res.node}, Python ${res.python}, Git ${res.git}`,
+      };
+    }
+
+    if (name === "exit_plan_mode") {
+      const res = this.dshToolService.exitPlanMode(args);
+      return {
+        data: res,
+        summary: '方案设计已完成，已呈交用户批准并就绪执行',
       };
     }
 

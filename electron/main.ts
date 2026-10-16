@@ -734,6 +734,24 @@ ipcMain.handle("project:getDirTree", async (_, folderPath?: string, maxDepth?: n
 ipcMain.handle("project:getRecentArtifacts", async (_, folderPath?: string, limit?: number) => {
   return projectService.getRecentArtifacts(folderPath, limit);
 });
+ipcMain.handle("project:getWorkspaceChanges", async (_, folderPath?: string) => {
+  return dshToolService.getWorkspaceChanges(folderPath);
+});
+ipcMain.handle("project:getFileDiff", async (_, filePath: string, folderPath?: string) => {
+  return dshToolService.getFileDiff(filePath, folderPath);
+});
+ipcMain.handle("project:discardFileChanges", async (_, filePath: string, folderPath?: string) => {
+  return dshToolService.discardFileChanges(filePath, folderPath);
+});
+ipcMain.handle("jobs:list", async () => {
+  return dshToolService.listJobs();
+});
+ipcMain.handle("jobs:getOutput", async (_, params: { job_id: string; wait?: boolean; timeout_ms?: number }) => {
+  return dshToolService.getJobOutput(params);
+});
+ipcMain.handle("jobs:kill", async (_, params: { job_id: string; reason?: string }) => {
+  return dshToolService.killJob(params);
+});
 ipcMain.handle("terminal:execute", async (_, params: { command: string; workdir?: string; timeoutMs?: number }) => {
   return dshToolService.executeBash(params);
 });

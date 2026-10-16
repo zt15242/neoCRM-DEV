@@ -72,6 +72,12 @@ declare global {
       shellShowItemInFolder: (targetPath: string) => Promise<boolean>;
       projectGetDirTree: (folderPath?: string, maxDepth?: number) => Promise<ProjectDirNode[]>;
       projectGetRecentArtifacts: (folderPath?: string, limit?: number) => Promise<WorkspaceArtifactItem[]>;
+      projectGetWorkspaceChanges?: (folderPath?: string) => Promise<WorkspaceGitChangesSummary>;
+      projectGetFileDiff?: (filePath: string, folderPath?: string) => Promise<{ success: boolean; diff: string; error?: string }>;
+      projectDiscardFileChanges?: (filePath: string, folderPath?: string) => Promise<{ success: boolean; message: string }>;
+      jobsList?: () => Promise<{ total: number; jobs: Array<{ id: string; command: string; status: string; durationMs: number; exitCode?: number; hasUnread: boolean }> }>;
+      jobsGetOutput?: (params: { job_id: string; wait?: boolean; timeout_ms?: number }) => Promise<{ job_id: string; status: string; exitCode?: number; output: string; isFinished: boolean }>;
+      jobsKill?: (params: { job_id: string; reason?: string }) => Promise<{ success: boolean; job_id: string; status: string }>;
       terminalExecute: (params: { command: string; workdir?: string; timeoutMs?: number }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
       testApiCall: () => Promise<{ success: boolean; data?: any; error?: string }>;
       openExternal: (url: string) => Promise<void>;
@@ -132,6 +138,7 @@ declare global {
         activeMcpServerIds?: string[];
         compactionSummary?: any;
         projectPath?: string;
+        mode?: "default" | "plan";
       }) => Promise<boolean>;
       aiAbortChatStream: (requestId: string) => Promise<boolean>;
       aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;

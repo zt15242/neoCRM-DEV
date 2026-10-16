@@ -92,6 +92,19 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   onOpenLicenseModal,
 }) => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
+  const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
+
+  // DSH 模式切换 (Default vs Plan Mode)
+  const handleToggleMode = async (newMode: 'default' | 'plan') => {
+    if (!activeSession) return;
+    const updated: AiChatSession = {
+      ...activeSession,
+      mode: newMode,
+      updatedAt: Date.now(),
+    };
+    const savedList = await window.neoApi.aiSaveSession(updated);
+    setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
+  };
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
   const [pendingComposerAttachment, setPendingComposerAttachment] = useState<AiFileAttachment | null>(null);
   const [activeExecutedSql, setActiveExecutedSql] = useState<string | null>(null);
@@ -581,6 +594,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       activeMcpServerIds: effectiveMcpIds,
       compactionSummary: targetSession.compactionSummary,
       projectPath: activeProject?.localPath,
+      mode: targetSession.mode || 'default',
     });
   };
 
@@ -887,11 +901,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               )}
 
               {/* 消息列表 */}
-              {activeSession.messages.map((msg) => (
+              {activeSession.messages.map((msg, idx) => (
                 <AiMessageItem
                   key={msg.id}
                   message={msg}
                   isStreamingCurrent={streamingMessageId === msg.id}
+                  isLastMessage={idx === activeSession.messages.length - 1}
                   projectPath={activeProject?.localPath}
                   onOpenCreateSchema={(plan) => setPendingSchemaPlan(plan)}
                   onOpenDeployWorkflow={async (plan) => {
@@ -982,6 +997,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               externalAttachmentToAdd={pendingComposerAttachment}
               workflowLicenseStatus={workflowLicenseStatus}
               onOpenLicenseModal={onOpenLicenseModal || (() => setIsLicenseModalOpen(true))}
+              mode={activeSession?.mode || 'default'}
+              onToggleMode={handleToggleMode}
+              onSwitchPanelTab={(tab) => {
+                setIsTerminalOpen(true);
+                setActivePanelTab(tab);
+              }}
             />
           </div>
         </div>
@@ -991,6 +1012,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       <CodexTerminalPanel
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}
+        activePanelTab={activePanelTab}
+        onTabChange={(tab) => setActivePanelTab(tab)}
         activeProject={activeProject}
         activeSessionAttachments={activeSession?.messages?.flatMap((m) => m.attachments || []) || []}
         toolCalls={activeToolCalls}

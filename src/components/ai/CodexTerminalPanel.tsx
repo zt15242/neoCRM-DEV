@@ -28,14 +28,22 @@ import {
   Search,
   Download,
   Image,
-  Sparkles
+  Sparkles,
+  GitBranch,
+  GitCommit,
+  FileDiff,
+  Undo2,
+  Activity,
+  StopCircle
 } from "lucide-react";
 import { 
   AiToolCallRecord, 
   WorkspaceProject, 
   ProjectDirNode, 
   WorkspaceArtifactItem, 
-  AiFileAttachment 
+  AiFileAttachment,
+  WorkspaceGitChangesSummary,
+  WorkspaceGitChangeItem
 } from "../../../shared/types";
 
 interface CodexTerminalPanelProps {
@@ -48,6 +56,8 @@ interface CodexTerminalPanelProps {
   onExecuteSql?: (sql: string) => void;
   onAttachFileToComposer?: (file: { name: string; fullPath: string }) => void;
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
+  activePanelTab?: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools";
+  onTabChange?: (tab: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools") => void;
 }
 
 interface CommandHistoryItem {
@@ -69,9 +79,62 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   onExecuteSql,
   onAttachFileToComposer,
   showToast,
+  activePanelTab,
+  onTabChange,
 }) => {
-  // 4 个主要 Tab: "files" (项目树), "artifacts" (上传/产物), "terminal" (交互终端), "tools" (调用轨迹)
-  const [activeTab, setActiveTab] = useState<"files" | "artifacts" | "terminal" | "tools">("files");
+  // 6 个主要 Tab: "files" (项目树), "changes" (Git变更), "jobs" (后台长任务), "artifacts" (上传/产物), "terminal" (交互终端), "tools" (调用轨迹)
+  const [internalTab, setInternalTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
+  const activeTab = activePanelTab || internalTab;
+  const setActiveTab = (t: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools") => {
+    setInternalTab(t);
+    onTabChange?.(t);
+  };
+
+  // ================= 后台异步长任务 (Jobs) 状态 =================
+  const [jobsList, setJobsList] = useState<Array<{ id: string; command: string; status: string; durationMs: number; exitCode?: number; hasUnread: boolean }>>([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobLogs, setActiveJobLogs] = useState<string>('');
+
+  const loadJobs = async () => {
+    if (!window.neoApi?.jobsList) return;
+    setLoadingJobs(true);
+    try {
+      const res = await window.neoApi.jobsList();
+      setJobsList(res.jobs || []);
+    } catch (e) {
+      console.warn("读取后台长任务异常:", e);
+    } finally {
+      setLoadingJobs(false);
+    }
+  };
+
+  const handleViewJobLogs = async (jobId: string) => {
+    if (!window.neoApi?.jobsGetOutput) return;
+    setActiveJobId(jobId);
+    try {
+      const res = await window.neoApi.jobsGetOutput({ job_id: jobId, wait: false });
+      setActiveJobLogs(res.output || "(暂无输出)");
+    } catch (e: any) {
+      setActiveJobLogs(`读取任务输出异常: ${e.message}`);
+    }
+  };
+
+  const handleKillJob = async (jobId: string) => {
+    if (!window.neoApi?.jobsKill) return;
+    try {
+      await window.neoApi.jobsKill({ job_id: jobId, reason: "用户手动终止" });
+      showToast?.("success", `已终止后台任务 [${jobId}]`);
+      await loadJobs();
+    } catch (e: any) {
+      showToast?.("error", `终止任务失败: ${e.message}`);
+    }
+  };
+  const [changesSummary, setChangesSummary] = useState<WorkspaceGitChangesSummary | null>(null);
+  const [loadingChanges, setLoadingChanges] = useState(false);
+  const [activeDiffFile, setActiveDiffFile] = useState<string | null>(null);
+  const [activeDiffContent, setActiveDiffContent] = useState<string>('');
+  const [loadingDiff, setLoadingDiff] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -116,6 +179,48 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
       showToast?.('error', `拉取失败: ${e.message}`);
     } finally {
       setIsPullingCode(false);
+    }
+  };
+
+
+  // 加载工作区代码变更 (Git Status & Diff)
+  const loadWorkspaceChanges = async () => {
+    if (!window.neoApi?.projectGetWorkspaceChanges || !projectPath) return;
+    setLoadingChanges(true);
+    try {
+      const summary = await window.neoApi.projectGetWorkspaceChanges(projectPath);
+      setChangesSummary(summary);
+    } catch (e: any) {
+      console.warn("读取工作区代码变更异常:", e);
+    } finally {
+      setLoadingChanges(false);
+    }
+  };
+
+  const handleViewDiff = async (file: string) => {
+    if (!window.neoApi?.projectGetFileDiff || !projectPath) return;
+    setActiveDiffFile(file);
+    setLoadingDiff(true);
+    try {
+      const res = await window.neoApi.projectGetFileDiff(file, projectPath);
+      setActiveDiffContent(res.diff || "(无行级差异)");
+    } catch (e: any) {
+      setActiveDiffContent(`读取差异异常: ${e.message}`);
+    } finally {
+      setLoadingDiff(false);
+    }
+  };
+
+  const handleDiscardChanges = async (file: string) => {
+    if (!window.confirm(`确定要撤销文件 [${file}] 的所有本地修改吗？该操作不可逆。`)) return;
+    if (!window.neoApi?.projectDiscardFileChanges || !projectPath) return;
+    try {
+      const res = await window.neoApi.projectDiscardFileChanges(file, projectPath);
+      showToast?.("success", res.message || "已撤销文件修改");
+      await loadWorkspaceChanges();
+      await loadDirTree();
+    } catch (e: any) {
+      showToast?.("error", `撤销失败: ${e.message}`);
     }
   };
 
@@ -518,6 +623,36 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
           </button>
 
           <button
+            onClick={() => {
+              setActiveTab("changes");
+              loadWorkspaceChanges();
+            }}
+            className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
+              activeTab === "changes"
+                ? "bg-white text-slate-900 font-bold shadow-2xs border border-slate-200"
+                : "text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <GitCommit className="w-3.5 h-3.5 text-indigo-600" />
+            <span>代码变更{changesSummary && !changesSummary.clean ? ` (${changesSummary.changes.length})` : ''}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab("jobs");
+              loadJobs();
+            }}
+            className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
+              activeTab === "jobs"
+                ? "bg-white text-slate-900 font-bold shadow-2xs border border-slate-200"
+                : "text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5 text-amber-500" />
+            <span>后台任务{jobsList.some(j => j.status === 'running') ? ` (${jobsList.filter(j => j.status === 'running').length})` : ''}</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("artifacts")}
             className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
               activeTab === "artifacts"
@@ -636,6 +771,244 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        
+        {/* ================= TAB 1.5: 工作区代码变更与 Git Diff 概览 (DSH Workspace Changes) ================= */}
+        {activeTab === "changes" && (
+          <div className="flex-1 flex flex-col overflow-hidden bg-white">
+            {/* 顶部分支与状态工具条 */}
+            <div className="p-2.5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center space-x-2 truncate min-w-0">
+                <GitBranch className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span className="text-xs font-bold text-slate-800 font-mono truncate">
+                  {changesSummary?.branch || "main"}
+                </span>
+                {changesSummary?.isGit && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono font-medium border ${
+                    changesSummary.clean
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-amber-50 text-amber-700 border-amber-200 font-bold"
+                  }`}>
+                    {changesSummary.clean ? "工作区干净" : `${changesSummary.changes.length} 个文件变动`}
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={loadWorkspaceChanges}
+                disabled={loadingChanges}
+                className="p-1 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-500 cursor-pointer shrink-0 shadow-2xs"
+                title="重新扫描代码变动"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingChanges ? "animate-spin text-indigo-600" : ""}`} />
+              </button>
+            </div>
+
+            {/* 变更文件列表 */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+              {!changesSummary?.isGit ? (
+                <div className="py-12 text-center text-xs text-slate-400 space-y-1">
+                  <p>当前项目尚未初始化 Git 仓库</p>
+                  <p className="text-[11px] text-slate-300">可在终端运行 git init 开启版本变更追踪</p>
+                </div>
+              ) : changesSummary.clean || changesSummary.changes.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-400 space-y-1">
+                  <Check className="w-5 h-5 text-emerald-500 mx-auto" />
+                  <p className="font-medium text-slate-600">工作区代码与仓库完全一致</p>
+                  <p className="text-[11px] text-slate-400">智能体做出的任何文件修改都将实时呈现在这里</p>
+                </div>
+              ) : (
+                changesSummary.changes.map((item) => {
+                  const isModified = item.status === "M";
+                  const isUntracked = item.status === "??" || item.status === "A";
+                  const isDeleted = item.status === "D";
+
+                  return (
+                    <div
+                      key={item.file}
+                      className="p-2 rounded-xl border border-slate-200/90 bg-slate-50/50 hover:bg-white hover:border-indigo-300 hover:shadow-xs transition-all flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="flex items-center space-x-2 truncate min-w-0 flex-1">
+                        <span className={`w-4 h-4 rounded text-[10px] font-mono font-bold flex items-center justify-center shrink-0 border ${
+                          isModified
+                            ? "bg-amber-100 text-amber-800 border-amber-300"
+                            : isUntracked
+                            ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                            : "bg-rose-100 text-rose-800 border-rose-300"
+                        }`}>
+                          {item.status === "??" ? "+" : item.status}
+                        </span>
+                        <span className="font-mono text-slate-800 truncate" title={item.file}>
+                          {item.file}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-1 shrink-0">
+                        {isModified && (
+                          <button
+                            onClick={() => handleViewDiff(item.file)}
+                            className="px-2 py-0.5 rounded text-[10px] bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 flex items-center space-x-1 cursor-pointer transition-colors"
+                            title="对比行级差异 (Git Diff)"
+                          >
+                            <FileDiff className="w-3 h-3" />
+                            <span>差异</span>
+                          </button>
+                        )}
+                        {isModified && (
+                          <button
+                            onClick={() => handleDiscardChanges(item.file)}
+                            className="p-1 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600 cursor-pointer"
+                            title="放弃修改"
+                          >
+                            <Undo2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Git Diff 展开弹窗 / 浮层 */}
+            {activeDiffFile && (
+              <div className="p-3 border-t border-slate-200 bg-slate-900 text-slate-200 max-h-56 overflow-y-auto font-mono text-[11px] space-y-1">
+                <div className="flex items-center justify-between pb-1 mb-1 border-b border-slate-800 text-slate-400">
+                  <span className="text-sky-400 truncate">Diff: {activeDiffFile}</span>
+                  <button onClick={() => setActiveDiffFile(null)} className="text-slate-500 hover:text-slate-300">
+                    关闭
+                  </button>
+                </div>
+                {loadingDiff ? (
+                  <div className="py-4 text-center text-slate-500">正在生成 Diff 差异...</div>
+                ) : (
+                  <pre className="whitespace-pre-wrap leading-relaxed">
+                    {activeDiffContent.split('\n').map((line, idx) => {
+                      const isAdd = line.startsWith('+') && !line.startsWith('+++');
+                      const isDel = line.startsWith('-') && !line.startsWith('---');
+                      return (
+                        <div
+                          key={idx}
+                          className={isAdd ? "text-emerald-400 bg-emerald-950/40" : isDel ? "text-rose-400 bg-rose-950/40" : "text-slate-300"}
+                        >
+                          {line}
+                        </div>
+                      );
+                    })}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+{/* ================= TAB 1.8: 工作区后台异步长任务 (DSH Background Jobs) ================= */}
+        {activeTab === "jobs" && (
+          <div className="flex-1 overflow-y-auto flex flex-col p-3 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <Activity className="w-4 h-4 text-amber-500" />
+                <span className="text-xs font-bold text-slate-800">后台异步长任务 (DSH Background Jobs)</span>
+                <span className="text-[10px] text-slate-400 font-mono">共 {jobsList.length} 项</span>
+              </div>
+              <button
+                onClick={loadJobs}
+                className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+                title="刷新任务状态"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingJobs ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            <div className="space-y-2 flex-1">
+              {jobsList.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-400 space-y-1">
+                  <Activity className="w-6 h-6 text-slate-300 mx-auto" />
+                  <p className="font-medium text-slate-600">暂无后台长任务</p>
+                  <p className="text-[11px] text-slate-400">长命令可通过 bash 的 background: true 选项启动异步长进程</p>
+                </div>
+              ) : (
+                jobsList.map((job) => {
+                  const isRunning = job.status === 'running';
+                  const isCompleted = job.status === 'completed';
+                  const isError = job.status === 'error';
+
+                  return (
+                    <div
+                      key={job.id}
+                      className="p-2.5 rounded-xl border border-slate-200/90 bg-slate-50/50 hover:bg-white hover:border-amber-300 hover:shadow-xs transition-all space-y-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 truncate">
+                          <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-amber-500 animate-pulse' : isCompleted ? 'bg-emerald-500' : isError ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                          <span className="font-mono text-[11px] font-bold text-slate-700">{job.id}</span>
+                          <span className={`px-1.5 py-0.2 rounded text-[10px] font-medium border ${
+                            isRunning
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : isCompleted
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : isError
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
+                          }`}>
+                            {isRunning ? '运行中' : isCompleted ? '已完成' : isError ? `失败(${job.exitCode})` : '已终止'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {(job.durationMs / 1000).toFixed(1)}s
+                        </span>
+                      </div>
+
+                      <div className="font-mono text-[11px] bg-slate-900 text-slate-200 p-2 rounded-lg overflow-x-auto truncate">
+                        $ {job.command}
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <button
+                          onClick={() => handleViewJobLogs(job.id)}
+                          className="px-2.5 py-1 rounded text-[10px] bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 flex items-center space-x-1 cursor-pointer font-medium"
+                        >
+                          <Terminal className="w-3 h-3" />
+                          <span>查看实时输出日志</span>
+                        </button>
+
+                        {isRunning && (
+                          <button
+                            onClick={() => handleKillJob(job.id)}
+                            className="px-2.5 py-1 rounded text-[10px] bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 flex items-center space-x-1 cursor-pointer font-medium"
+                          >
+                            <StopCircle className="w-3 h-3" />
+                            <span>终止任务</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* 查看特定任务日志浮层 */}
+            {activeJobId && (
+              <div className="p-3 border-t border-slate-200 bg-slate-900 text-slate-200 max-h-56 overflow-y-auto font-mono text-[11px] space-y-1">
+                <div className="flex items-center justify-between pb-1 mb-1 border-b border-slate-800 text-slate-400">
+                  <span className="text-amber-400 truncate">日志: {activeJobId}</span>
+                  <div className="flex items-center space-x-2">
+                    <button onClick={() => handleViewJobLogs(activeJobId)} className="text-slate-400 hover:text-slate-200 text-[10px]">
+                      刷新
+                    </button>
+                    <button onClick={() => setActiveJobId(null)} className="text-slate-500 hover:text-slate-300 text-[10px]">
+                      关闭
+                    </button>
+                  </div>
+                </div>
+                <pre className="whitespace-pre-wrap leading-relaxed text-slate-300 font-mono text-[10px]">
+                  {activeJobLogs}
+                </pre>
+              </div>
+            )}
           </div>
         )}
 
