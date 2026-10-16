@@ -62,7 +62,7 @@ export const Header: React.FC<HeaderProps> = ({
               title="点击检查最新版本"
               className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 window-no-drag font-medium transition-colors flex items-center space-x-1"
             >
-              <span>v1.6.2</span>
+              <span>v1.6.3</span>
               {hasUpdate ? (
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
               ) : null}
