@@ -95,11 +95,23 @@ export const App: React.FC = () => {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const showToast = (type: 'success' | 'error' | 'info', text: string) => {
-    const id = `${Date.now()}_${Math.random()}`;
-    setToasts((prev) => [...prev, { id, type, text }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return;
+
+    setToasts((prev) => {
+      // 关键防抖：如果已有完全相同类型和内容的 Toast 正在展示，忽略不重复弹出，彻底解决“一直弹”问题
+      const exists = prev.some((t) => t.type === type && t.text === cleanText);
+      if (exists) return prev;
+
+      const id = `${Date.now()}_${Math.random()}`;
+      const next = [...prev.slice(-2), { id, type, text: cleanText }]; // 屏幕最多保留3条
+
+      setTimeout(() => {
+        setToasts((curr) => curr.filter((t) => t.id !== id));
+      }, 4000);
+
+      return next;
+    });
   };
 
   const dismissToast = (id: string) => {

@@ -52,53 +52,21 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
   const [isExpiringSoon, setIsExpiringSoon] = useState(false);
   const [apiTestResult, setApiTestResult] = useState<{ success: boolean; msg: string } | null>(null);
   const [isTestingApi, setIsTestingApi] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [tokenExpiredCloud, setTokenExpiredCloud] = useState(false);
 
-  // 计算 Token 剩余倒计时与客户端自动续期触发
+  // 计算 Token 剩余倒计时 (纯客户端展示，彻底移除前端循环调用 onRefresh 产生的弹窗死循环)
   useEffect(() => {
     if (!tokenData?.expiresAt) return;
-
-    let autoRenewing = false;
 
     const updateCountdown = () => {
       const now = Date.now();
       const diff = tokenData.expiresAt - now;
 
       if (diff <= 0) {
-        setTimeLeftStr('已过期，正在自动续期...');
+        setTimeLeftStr('已过期，请重新登录');
         setIsExpiringSoon(true);
-        if (!autoRenewing && onRefresh) {
-          autoRenewing = true;
-          try {
-            const res = (onRefresh as any)();
-            if (res instanceof Promise) {
-              res.finally(() => {
-                setTimeout(() => { autoRenewing = false; }, 10000);
-              });
-            } else {
-              setTimeout(() => { autoRenewing = false; }, 10000);
-            }
-          } catch {
-            setTimeout(() => { autoRenewing = false; }, 10000);
-          }
-        }
         return;
-      }
-
-      // 剩余时间小于 5 分钟时提前触发自动续期
-      if (diff < 5 * 60 * 1000 && !autoRenewing && onRefresh) {
-        autoRenewing = true;
-        try {
-          const res = (onRefresh as any)();
-          if (res instanceof Promise) {
-            res.finally(() => {
-              setTimeout(() => { autoRenewing = false; }, 30000);
-            });
-          } else {
-            setTimeout(() => { autoRenewing = false; }, 30000);
-          }
-        } catch {
-          setTimeout(() => { autoRenewing = false; }, 30000);
-        }
       }
 
       const hours = Math.floor(diff / 3600000);
@@ -112,7 +80,25 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
     updateCountdown();
     const timer = setInterval(updateCountdown, 1000);
     return () => clearInterval(timer);
-  }, [tokenData?.expiresAt, onRefresh]);
+  }, [tokenData?.expiresAt]);
+
+  const handleManualRefresh = async () => {
+    if (isRefreshing || !onRefresh) return;
+    setIsRefreshing(true);
+    setTokenExpiredCloud(false);
+    try {
+      const res = onRefresh();
+      if (res instanceof Promise) {
+        await res;
+      }
+    } catch (e: any) {
+      if (e.message?.includes('invalid_grant') || e.message?.includes('expired access/refresh token')) {
+        setTokenExpiredCloud(true);
+      }
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const handleCopyCookie = () => {
     if (tokenData?.cookieString) {
@@ -221,17 +207,22 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
             </div>
             <div className="flex items-center space-x-2">
               <button
-                onClick={onRefresh}
-                className="text-[11px] text-sky-600 hover:text-sky-700 font-medium flex items-center space-x-1 transition-colors cursor-pointer"
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                className="text-[11px] text-sky-600 hover:text-sky-700 disabled:opacity-50 font-medium flex items-center space-x-1 transition-colors cursor-pointer"
                 title="使用 Refresh Token 静默续期换取新令牌"
               >
-                <RefreshCw className="w-3 h-3" />
-                <span>手动续期</span>
+                <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>{isRefreshing ? '续期中...' : '手动续期'}</span>
               </button>
               {onReLogin && (
                 <button
                   onClick={onReLogin}
-                  className="text-[11px] text-amber-600 hover:text-amber-700 font-medium flex items-center space-x-1 transition-colors cursor-pointer border-l border-slate-200 pl-2"
+                  className={`text-[11px] font-medium flex items-center space-x-1 transition-colors cursor-pointer border-l border-slate-200 pl-2 ${
+                    tokenExpiredCloud
+                      ? 'text-rose-600 hover:text-rose-700 font-bold animate-pulse'
+                      : 'text-amber-600 hover:text-amber-700'
+                  }`}
                   title="当刷新令牌失效时，点击重新唤起认证窗口换取全新令牌"
                 >
                   <KeyRound className="w-3 h-3" />
