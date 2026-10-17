@@ -465,12 +465,17 @@ export class AiService {
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
     const modelId = session.modelId || provider?.models?.[0]?.id || 'deepseek-chat';
 
-    // 取除最近 3 条之外的所有更早消息进行总结
-    const messagesToCompact = session.messages.slice(0, -3);
-    const recentMessages = session.messages.slice(-3);
+    // 取除最近 4 条之外的所有更早消息进行总结 (保留最近4条作为真实模型上下文 Tail)
+    const messagesToCompact = session.messages.slice(0, -4);
 
     const dialogHistoryText = messagesToCompact
-      .map((m) => `${m.role === 'user' ? '用户' : 'AI助手'}: ${m.content.slice(0, 500)}`)
+      .map((m) => {
+        let content = m.content || '';
+        if (!content && m.toolCalls && m.toolCalls.length > 0) {
+          content = `[执行了工具: ${m.toolCalls.map((t) => `${t.name}(${t.summary || ''})`).join('; ')}]`;
+        }
+        return `${m.role === 'user' ? '用户' : 'AI助手'}: ${content.slice(0, 600)}`;
+      })
       .join('\n\n');
 
     const priorSummary = session.compactionSummary?.summary ? `Prior Checkpoint Summary:\n${session.compactionSummary.summary}\n\n` : '';
@@ -510,7 +515,7 @@ Rules:
 Conversation to condense:
 ${dialogHistoryText}`;
 
-    let summaryText = '历史对话要点已压缩保留。';
+    let summaryText = '';
     try {
       const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
       const res = await axios.post(
@@ -526,12 +531,26 @@ ${dialogHistoryText}`;
             'Content-Type': 'application/json',
             Authorization: `Bearer ${provider.apiKey}`,
           },
-          timeout: 25000,
+          timeout: 20000,
         }
       );
-      summaryText = res.data?.choices?.[0]?.message?.content || summaryText;
-    } catch {
-      summaryText = `已压缩前 ${messagesToCompact.length} 轮历史对话（涵盖对象字典查询与数据分析记录）。`;
+      summaryText = res.data?.choices?.[0]?.message?.content || '';
+    } catch (err: any) {
+      console.warn('[DSH Compaction] LLM 总结接口调用超时或异常，启用智能本地兜底生成 Checkpoint:', err.message);
+    }
+
+    if (!summaryText.trim()) {
+      const userGoals = messagesToCompact
+        .filter((m) => m.role === 'user')
+        .map((m) => m.content.slice(0, 100))
+        .filter(Boolean)
+        .slice(-3);
+      const toolsRan = messagesToCompact
+        .flatMap((m) => m.toolCalls || [])
+        .map((t) => t.name);
+      const uniqueTools = Array.from(new Set(toolsRan));
+
+      summaryText = `## Primary Request and Intent\n- ${userGoals.join('\n- ') || '多轮工程排查与数据对接'}\n\n## Key Technical Concepts & CRM Objects\n- 包含实体元数据探测、字段校准与代码落盘\n\n## Files, Code & Artifacts\n- 项目工作区代码文件与配置文件\n\n## Errors and Fixes\n- 历史排查与纠偏已在会话中确认\n\n## Pending Jobs\n- (none)\n\n## Current Work & Progress\n- 已执行 ${toolsRan.length} 次工具操作 (${uniqueTools.join(', ')})\n\n## Next Step\n- 根据用户最新指令继续推进\n\n## Critical Context & User Preferences\n- 遵循 DeepSeek Harness 自主工程落地与沙箱安全规范`;
     }
 
     session.compactionSummary = {
@@ -539,7 +558,7 @@ ${dialogHistoryText}`;
       summary: summaryText.trim(),
       compactedAt: Date.now(),
     };
-    session.messages = recentMessages;
+    // 关键设计：前端与数据库完整保留所有历史消息，绝不抹除用户可见的对话列表！
     session.updatedAt = Date.now();
 
     this.saveSession(session);
@@ -863,24 +882,32 @@ ${dialogHistoryText}`;
     const config = this.getAiConfig();
 
     // ================= DeepSeek Harness 官方自动上下文压缩引擎 (Auto-Compaction) =================
-    // 当会话消息数达到 8 条以上，或历史字符估算达到上下文承载阈值时，自动静默压缩前半部分历史为结构化 Checkpoint
+    // 当会话累积消息达到阈值或字符量过大时，在后台自动浓缩为 8 节结构化工程 Checkpoint 并向前端派发事件
     let currentCompactionSummary = compactionSummary;
     let effectiveMessages = messages;
 
     try {
       const totalChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
-      const shouldAutoCompact = messages.length >= 8 || totalChars > 35000;
+      const lastCompactedAt = compactionSummary?.compactedAt || 0;
+      const cooldownOk = Date.now() - lastCompactedAt > 90000; // 90秒冷却，避免过于频繁
+      const lastCompactedCount = compactionSummary?.originalMessageCount || 0;
+      const uncompactedCount = messages.length - lastCompactedCount;
+
+      const shouldAutoCompact = (uncompactedCount >= 8 || totalChars > 30000) && cooldownOk && messages.length >= 8;
 
       if (shouldAutoCompact && sessionId) {
-        const foundSession = this.getSessions().find((s) => s.id === sessionId);
-        if (foundSession && foundSession.messages.length >= 6) {
-          console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${foundSession.messages.length} 轮 (${totalChars} 字符)，正在后台自动执行结构化记忆压缩...`);
-          const compacted = await this.compactSession(sessionId);
-          if (compacted?.compactionSummary) {
-            currentCompactionSummary = compacted.compactionSummary;
-            effectiveMessages = compacted.messages;
-            console.log(`[DSH Auto-Compaction] 自动压缩完成！成功浓缩为 8 节结构化 Checkpoint，保留最近 ${compacted.messages.length} 条对话`);
-          }
+        console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${messages.length} 条 (${totalChars} 字符)，正在执行结构化记忆自动压缩...`);
+        const compacted = await this.compactSession(sessionId);
+        if (compacted?.compactionSummary) {
+          currentCompactionSummary = compacted.compactionSummary;
+          sendEvent({
+            requestId,
+            sessionId,
+            messageId,
+            type: 'compaction_done' as any,
+            compactionSummary: currentCompactionSummary,
+          });
+          console.log(`[DSH Auto-Compaction] 自动压缩完成！成功浓缩前 ${currentCompactionSummary.originalMessageCount} 轮对话为 8 节 Checkpoint`);
         }
       }
     } catch (compactErr: any) {
@@ -1167,14 +1194,15 @@ ${mcpInfoText}
 重要提示：当用户询问外部知识库、查看 MCP 知识库、检索外部文档或使用上述 MCP 扩展功能时，请务必优先主动调用上述外部 MCP 服务提供的工具（而不是查询销售易 CRM 实体对象表）！`);
       }
 
-      // 注入历史对话压缩记忆
+      // 注入历史对话压缩记忆 (DSH 8-Section Checkpoint)
       if (currentCompactionSummary?.summary) {
         systemParts.push(`【DeepSeek Harness 前序历史结构化工程记忆 Checkpoint (Compact Summary)】\n${currentCompactionSummary.summary}`);
       }
 
-      // 2. 截取最近上下文消息
-      const contextLimit = config.settings.contextLimit || 20;
-      const recentMessages = effectiveMessages.slice(-contextLimit);
+      // 2. 截取上下文消息：当存在压缩记忆 Checkpoint 时，仅取最近 6 条消息作为当前活跃尾部 (Verbatim Tail)，前文由 Checkpoint 全量承载
+      const recentMessages = currentCompactionSummary?.summary
+        ? effectiveMessages.slice(-6)
+        : effectiveMessages.slice(-(config.settings.contextLimit || 20));
 
       // 实时意图强引导：当已连接租户且用户请求查询对象、实体或字段时，注入最高优先级调具执行指令
       if (currentSession.isLoggedIn && currentSession.environment && config.settings.enableCrmTools !== false) {

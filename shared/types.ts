@@ -389,11 +389,12 @@ export interface AiStreamEvent {
   requestId: string;
   sessionId: string;
   messageId: string;
-  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error';
+  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error' | 'compaction_done';
   usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
   durationMs?: number;
   delta?: string;
   toolCall?: AiToolCallRecord;
+  compactionSummary?: AiCompactedSummary;
   error?: string;
 }
 

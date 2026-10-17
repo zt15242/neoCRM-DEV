@@ -12,7 +12,7 @@ import { InlineDecisionCard } from "./InlineDecisionCard";
 import { MessageArtifactsCard } from "./MessageArtifactsCard";
 import { extractDecisionsFromText, extractDecisionsFromToolCalls, DecisionRequestPayload } from "./decisionHelper";
 import { PlanReviewCard } from "./PlanReviewCard";
-import { Copy, Check, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
+import { Copy, Check, CheckCircle2, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
@@ -239,6 +239,22 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
             <div className="flex items-center space-x-2 py-1 text-slate-400 text-xs">
               <span className="inline-block w-2 h-2 rounded-full bg-sky-500 animate-ping" />
               <span>正在组织语言生成中...</span>
+            </div>
+          ) : message.toolCalls && message.toolCalls.length > 0 ? (
+            <div className="flex items-center justify-between py-1 text-xs text-slate-600">
+              <span className="flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>已执行完成上述 {message.toolCalls.length} 项工具操作</span>
+              </span>
+              {onSendMessage && isLastMessage && (
+                <button
+                  type="button"
+                  onClick={() => onSendMessage('请结合上述工具执行结果，给出完整详尽的总结分析与最终答复。')}
+                  className="px-3 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+                >
+                  继续输出总结 ➔
+                </button>
+              )}
             </div>
           ) : (
             <div className="text-slate-400 text-xs italic">无回答内容</div>

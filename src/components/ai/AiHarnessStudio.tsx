@@ -326,7 +326,22 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     if (!window.neoApi?.onAiStreamEvent) return;
 
     const unsubscribe = window.neoApi.onAiStreamEvent((event) => {
-      const { sessionId, messageId, type, delta, toolCall, error } = event;
+      const { sessionId, messageId, type, delta, toolCall, error, compactionSummary } = event;
+
+      // 捕获后台自动压缩完成事件，实时更新会话中的 compactionSummary
+      if (type === 'compaction_done' && compactionSummary) {
+        setSessions((prevSessions) => {
+          return prevSessions.map((sess) => {
+            if (sess.id !== sessionId) return sess;
+            return {
+              ...sess,
+              compactionSummary,
+              updatedAt: Date.now(),
+            };
+          });
+        });
+        return;
+      }
 
       setSessions((prevSessions) => {
         const updated = prevSessions.map((sess) => {
