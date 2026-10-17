@@ -5,13 +5,14 @@ import { EntitySearchSelect } from './data/EntitySearchSelect';
 
 interface CreateFieldModalProps {
   isOpen: boolean;
+  productType?: 'neocrm' | 'salesforce' | 'fxiaoke' | 'custom';
   entity: EntityMetadata | null;
   entities?: EntityMetadata[];
   onClose: () => void;
   onSubmit: (entityApiKey: string, payload: CreateFieldPayload) => Promise<{ success: boolean; error?: string }>;
 }
 
-const FIELD_TYPES = [
+const NEOCRM_FIELD_TYPES = [
   { key: '1', type: 1, name: '单行文本 (Text)' },
   { key: '2', type: 2, name: '多行文本 (TextArea)' },
   { key: '10', type: 10, name: '关联关系 (Reference)' },
@@ -32,8 +33,47 @@ const FIELD_TYPES = [
   { key: '40', type: 40, name: '富文本 (RichText)' },
 ];
 
+const SALESFORCE_FIELD_TYPES = [
+  { key: '1', type: 1, name: '文本 (Text)' },
+  { key: '2', type: 2, name: '长文本 (Text Area Long)' },
+  { key: '40', type: 40, name: '富文本 (Text Area Rich)' },
+  { key: '10', type: 10, name: '查找关联 (Lookup Relationship)' },
+  { key: '3', type: 3, name: '选项列表 (Picklist)' },
+  { key: '4', type: 4, name: '多选选项列表 (Multi-Select Picklist)' },
+  { key: '5', type: 5, name: '整数 (Number)' },
+  { key: '6_decimal', type: 6, isCurrency: false, name: '小数 (Number)' },
+  { key: '6_currency', type: 6, isCurrency: true, name: '货币 (Currency)' },
+  { key: '33', type: 33, name: '百分比 (Percent)' },
+  { key: '7', type: 7, name: '日期 (Date)' },
+  { key: '21', type: 21, name: '日期/时间 (Date/Time)' },
+  { key: '31', type: 31, name: '复选框 (Checkbox)' },
+  { key: '22', type: 22, name: '电话 (Phone)' },
+  { key: '23', type: 23, name: '电子邮件 (Email)' },
+  { key: '24', type: 24, name: 'URL (网址)' },
+];
+
+const FXIAOKE_FIELD_TYPES = [
+  { key: '1', type: 1, name: '单行文本 (Text)' },
+  { key: '2', type: 2, name: '多行文本 (Long Text)' },
+  { key: '40', type: 40, name: '富文本 (Rich Text)' },
+  { key: '10', type: 10, name: '查找关联 (Reference)' },
+  { key: '3', type: 3, name: '单选列表 (Select)' },
+  { key: '4', type: 4, name: '多选列表 (Multi Select)' },
+  { key: '5', type: 5, name: '整数 (Integer)' },
+  { key: '6_decimal', type: 6, isCurrency: false, name: '数字 (Number)' },
+  { key: '6_currency', type: 6, isCurrency: true, name: '货币 (Currency)' },
+  { key: '33', type: 33, name: '百分比 (Percent)' },
+  { key: '7', type: 7, name: '日期 (Date)' },
+  { key: '21', type: 21, name: '日期时间 (DateTime)' },
+  { key: '31', type: 31, name: '勾选框 (Boolean)' },
+  { key: '22', type: 22, name: '电话 (Phone)' },
+  { key: '23', type: 23, name: '邮箱 (Email)' },
+  { key: '24', type: 24, name: '网址 (URL)' },
+];
+
 export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
   isOpen,
+  productType = 'neocrm',
   entity,
   entities = [],
   onClose,
@@ -41,6 +81,12 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
 }) => {
   const [apiKey, setApiKey] = useState('');
   const [label, setLabel] = useState('');
+  const fieldTypes = productType === 'salesforce'
+    ? SALESFORCE_FIELD_TYPES
+    : productType === 'fxiaoke'
+    ? FXIAOKE_FIELD_TYPES
+    : NEOCRM_FIELD_TYPES;
+
   const [selectedTypeKey, setSelectedTypeKey] = useState<string>('1');
   const [itemType, setItemType] = useState<number>(1);
   const [isCurrency, setIsCurrency] = useState<boolean>(true);
@@ -140,7 +186,13 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
           <div className="flex items-center space-x-2">
             <Tag className="w-5 h-5 text-emerald-600" />
             <div>
-              <h3 className="text-base font-semibold text-slate-900">新增自定义字段</h3>
+              <h3 className="text-base font-semibold text-slate-900">
+                {productType === 'salesforce'
+                  ? '新增 Salesforce 自定义字段 (CustomField)'
+                  : productType === 'fxiaoke'
+                  ? '新增纷享销客自定义字段 (Field)'
+                  : '新增自定义字段'}
+              </h3>
               <p className="text-[11px] text-slate-500">
                 所属对象: <span className="text-sky-700 font-mono font-medium">{entity.label} ({entity.apiKey})</span>
               </p>
@@ -198,14 +250,18 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
 
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1">
-              字段类型 (Item Type) <span className="text-rose-500">*</span>
+              {productType === 'salesforce'
+                ? '字段数据类型 (Data Type)'
+                : productType === 'fxiaoke'
+                ? '字段类型 (Field Type)'
+                : '字段类型 (Item Type)'} <span className="text-rose-500">*</span>
             </label>
             <select
               value={selectedTypeKey}
               onChange={(e) => {
                 const val = e.target.value;
                 setSelectedTypeKey(val);
-                const found = FIELD_TYPES.find((t) => t.key === val);
+                const found = fieldTypes.find((t) => t.key === val);
                 if (found) {
                   setItemType(found.type);
                   setIsCurrency(Boolean(found.isCurrency));
@@ -213,7 +269,7 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
               }}
               className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-medium"
             >
-              {FIELD_TYPES.map((t) => (
+              {fieldTypes.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.name}
                 </option>
@@ -242,35 +298,37 @@ export const CreateFieldModal: React.FC<CreateFieldModalProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    级联删除规则 (cascadeDelete)
-                  </label>
-                  <select
-                    value={cascadeDelete}
-                    onChange={(e) => setCascadeDelete(Number(e.target.value))}
-                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-sky-500"
-                  >
-                    <option value={1}>1: 清理置空 (推荐，主数据删除时字段置空)</option>
-                    <option value={2}>2: 不允许删除 (存在关联记录时禁止删除主数据)</option>
-                    <option value={0}>0: 级联删除 (主数据删除时同步删除本记录)</option>
-                  </select>
-                </div>
+              {productType !== 'salesforce' && productType !== 'fxiaoke' && (
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      级联删除规则 (cascadeDelete)
+                    </label>
+                    <select
+                      value={cascadeDelete}
+                      onChange={(e) => setCascadeDelete(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-sky-500"
+                    >
+                      <option value={1}>1: 清理置空 (推荐，主数据删除时字段置空)</option>
+                      <option value={2}>2: 不允许删除 (存在关联记录时禁止删除主数据)</option>
+                      <option value={0}>0: 级联删除 (主数据删除时同步删除本记录)</option>
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    相关列表名称 (linkLabel)
-                  </label>
-                  <input
-                    type="text"
-                    value={linkLabel}
-                    onChange={(e) => setLinkLabel(e.target.value)}
-                    placeholder="目标实体详情页相关列表中显示名"
-                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500"
-                  />
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      相关列表名称 (linkLabel)
+                    </label>
+                    <input
+                      type="text"
+                      value={linkLabel}
+                      onChange={(e) => setLinkLabel(e.target.value)}
+                      placeholder="目标实体详情页相关列表中显示名"
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 

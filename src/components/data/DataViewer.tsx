@@ -56,17 +56,36 @@ export const DataViewer: React.FC<DataViewerProps> = ({
     const text = raw.trim();
     if (!text) return null;
 
+    // 1. 销售易页面 URL
     const urlMatch = text.match(/(?:xobjects|detail|entity|module)\/([a-zA-Z0-9_]+)\/(\d+)/i);
     if (urlMatch) {
       return { entity: urlMatch[1], id: urlMatch[2], isId: true };
     }
 
-    const paramIdMatch = text.match(/[?&]id=(\d+)/i);
+    // 2. Salesforce 页面 URL: /lightning/r/{sObjectName}/{id}/view 或 /{id}
+    const sfLightningMatch = text.match(/\/lightning\/r\/([a-zA-Z0-9_]+)\/([a-zA-Z0-9]{15,18})\/view/i);
+    if (sfLightningMatch) {
+      return { entity: sfLightningMatch[1], id: sfLightningMatch[2], isId: true };
+    }
+
+    const sfIdUrlMatch = text.match(/force\.com\/([a-zA-Z0-9]{15,18})(?:[/?#]|$)/i);
+    if (sfIdUrlMatch) {
+      return { entity: selectedEntityApiKey, id: sfIdUrlMatch[1], isId: true };
+    }
+
+    // 3. 纷享销客页面 URL: dataId=xxx
+    const fxParamMatch = text.match(/[?&]dataId=([a-f0-9]{24})/i);
+    if (fxParamMatch) {
+      const objMatch = text.match(/[?&]dataObjectApiName=([a-zA-Z0-9_]+)/i);
+      return { entity: objMatch ? objMatch[1] : selectedEntityApiKey, id: fxParamMatch[1], isId: true };
+    }
+
+    const paramIdMatch = text.match(/[?&]id=([a-zA-Z0-9_]+)/i);
     if (paramIdMatch) {
       return { entity: selectedEntityApiKey, id: paramIdMatch[1], isId: true };
     }
 
-    // 支持三套系统的 ID 识别：销售易纯数字 ID (13位时间戳ID)、Salesforce 15/18 位复合 ID、纷享销客 24 位 Hex ID
+    // 支持三套系统的 ID 识别：销售易纯数字 ID (8-20位)、Salesforce 15/18 位复合 ID、纷享销客 24 位 Hex ID
     if (/^\d{8,20}$/.test(text) || /^[a-zA-Z0-9]{15}$/.test(text) || /^[a-zA-Z0-9]{18}$/.test(text) || /^[a-f0-9]{24}$/i.test(text)) {
       return { entity: selectedEntityApiKey, id: text, isId: true };
     }
@@ -252,42 +271,51 @@ export const DataViewer: React.FC<DataViewerProps> = ({
       {/* 查询结果详情大卡片 (浅色) */}
       {recordData && (
         <div className="p-5 bg-white border border-slate-200/90 rounded-2xl shadow-xs space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <div className="space-y-0.5">
-              <div className="flex items-center space-x-2">
-                <span className="text-base font-bold text-slate-900">
-                  {recordData.name || recordData.accountName || recordData.title || `记录 #${recordData.id}`}
-                </span>
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-medium">
-                  {selectedEntityApiKey}
-                </span>
-                <span className="text-xs font-mono text-slate-500">ID: {recordData.id}</span>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                创建时间: {recordData.createdAt ? new Date(Number(recordData.createdAt)).toLocaleString() : 'N/A'}
-              </p>
-            </div>
+          {(() => {
+            const currentRecId = recordData.Id || recordData._id || recordData.id;
+            const currentRecName = recordData.Name || recordData.name || recordData.accountName || recordData.title || recordData.Subject || recordData.CaseNumber || recordData.label || `记录 #${currentRecId}`;
+            const rawCreate = recordData.createdAt || recordData.CreatedDate || recordData.create_time;
+            const formattedCreate = rawCreate ? (isNaN(Number(rawCreate)) ? new Date(rawCreate).toLocaleString() : new Date(Number(rawCreate)).toLocaleString()) : 'N/A';
 
-            <div className="flex items-center space-x-2.5">
-              <div className="relative w-60">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
-                <input
-                  type="text"
-                  value={fieldFilterKeyword}
-                  onChange={(e) => setFieldFilterKeyword(e.target.value)}
-                  placeholder="搜索字段名、API Key 或值..."
-                  className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border border-slate-200 bg-slate-50/70 text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-sky-500"
-                />
+            return (
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="space-y-0.5">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-base font-bold text-slate-900">
+                      {currentRecName}
+                    </span>
+                    <span className="text-xs font-mono px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-medium">
+                      {selectedEntityApiKey}
+                    </span>
+                    <span className="text-xs font-mono text-slate-500">ID: {currentRecId}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    创建时间: {formattedCreate}
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-2.5">
+                  <div className="relative w-60">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                    <input
+                      type="text"
+                      value={fieldFilterKeyword}
+                      onChange={(e) => setFieldFilterKeyword(e.target.value)}
+                      placeholder="搜索字段名、API Key 或值..."
+                      className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border border-slate-200 bg-slate-50/70 text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-sky-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => onNavigateToEdit(selectedEntityApiKey, currentRecId, recordData)}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all shrink-0 cursor-pointer"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>以此记录进入编辑更新</span>
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => onNavigateToEdit(selectedEntityApiKey, recordData.id, recordData)}
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all shrink-0 cursor-pointer"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>以此记录进入编辑更新</span>
-              </button>
-            </div>
-          </div>
+            );
+          })()}
 
           {/* 字段明细网格 */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">

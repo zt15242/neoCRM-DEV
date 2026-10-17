@@ -4,12 +4,14 @@ import { CreateEntityPayload } from '../../shared/types';
 
 interface CreateEntityModalProps {
   isOpen: boolean;
+  productType?: 'neocrm' | 'salesforce' | 'fxiaoke' | 'custom';
   onClose: () => void;
   onSubmit: (payload: CreateEntityPayload) => Promise<{ success: boolean; error?: string }>;
 }
 
 export const CreateEntityModal: React.FC<CreateEntityModalProps> = ({
   isOpen,
+  productType = 'neocrm',
   onClose,
   onSubmit,
 }) => {
@@ -60,7 +62,13 @@ export const CreateEntityModal: React.FC<CreateEntityModalProps> = ({
         <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
           <div className="flex items-center space-x-2">
             <Box className="w-5 h-5 text-sky-400" />
-            <h3 className="text-base font-semibold text-slate-900">创建自定义业务实体 (Object)</h3>
+            <h3 className="text-base font-semibold text-slate-900">
+              {productType === 'salesforce'
+                ? '创建 Salesforce 自定义对象 (CustomObject)'
+                : productType === 'fxiaoke'
+                ? '创建纷享销客自定义业务对象 (Custom Object)'
+                : '创建自定义业务实体 (Object)'}
+            </h3>
           </div>
           <button
             onClick={onClose}
@@ -159,27 +167,29 @@ export const CreateEntityModal: React.FC<CreateEntityModalProps> = ({
             )}
           </div>
 
-          {/* 扩展功能开关 */}
-          <div className="space-y-2 pt-1">
-            <label className="flex items-center space-x-2 text-xs text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={enableScript}
-                onChange={(e) => setEnableScript(e.target.checked)}
-                className="rounded bg-slate-100 border-slate-700 text-sky-500 focus:ring-0"
-              />
-              <span>启用服务端脚本触发器 (Trigger)</span>
-            </label>
-            <label className="flex items-center space-x-2 text-xs text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={enableBusitype}
-                onChange={(e) => setEnableBusitype(e.target.checked)}
-                className="rounded bg-slate-100 border-slate-700 text-sky-500 focus:ring-0"
-              />
-              <span>启用多业务类型 (Busitype)</span>
-            </label>
-          </div>
+          {/* 扩展功能开关 (仅销售易展示) */}
+          {productType !== 'salesforce' && productType !== 'fxiaoke' && (
+            <div className="space-y-2 pt-1">
+              <label className="flex items-center space-x-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableScript}
+                  onChange={(e) => setEnableScript(e.target.checked)}
+                  className="rounded bg-slate-100 border-slate-700 text-sky-500 focus:ring-0"
+                />
+                <span>启用服务端脚本触发器 (Trigger)</span>
+              </label>
+              <label className="flex items-center space-x-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableBusitype}
+                  onChange={(e) => setEnableBusitype(e.target.checked)}
+                  className="rounded bg-slate-100 border-slate-700 text-sky-500 focus:ring-0"
+                />
+                <span>启用多业务类型 (Busitype)</span>
+              </label>
+            </div>
+          )}
 
           {/* 底部按钮 */}
           <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-200">

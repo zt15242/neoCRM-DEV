@@ -2,6 +2,10 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import url from 'node:url';
 import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { execSync, spawn, ChildProcess } from 'node:child_process';
 import axios from 'axios';
 import { BrowserWindow, shell, session } from 'electron';
 import { NeoEnvironment, TokenData, UserInfo } from '../types';
@@ -9,6 +13,7 @@ import { NeoEnvironment, TokenData, UserInfo } from '../types';
 export class AuthService {
   private activeServer: http.Server | null = null;
   private embeddedAuthWindow: BrowserWindow | null = null;
+  private activeCliProcess: ChildProcess | null = null;
 
   /**
    * 检查指定端口是否已被占用
@@ -319,6 +324,200 @@ export class AuthService {
     };
   }
 
+  /**
+   * 解析本地 Salesforce CLI (sf v2) 的当前有效 Org 别名
+   */
+  public getSalesforceAlias(env?: NeoEnvironment): string {
+    const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
+    if (fs.existsSync(aliasJsonPath)) {
+      try {
+        const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
+        const orgs = aliasData.orgs || {};
+        const found = Object.entries(orgs).find(([a, u]) => 
+          String(u).includes('stagefull') || String(u).includes('olympus')
+        );
+        if (found) return found[0];
+        const keys = Object.keys(orgs);
+        if (keys.length > 0) return keys[0];
+      } catch {}
+    }
+    return env?.id || 'aliNewStageFull';
+  }
+
+  /**
+   * 采用 Salesforce CLI (sf v2) 官方标准进行网页授权登录 (全面对齐 salesforce-cli skill 规范)
+   */
+  public async loginWithSalesforceCli(env: NeoEnvironment): Promise<TokenData> {
+    this.cancelActiveAuth();
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'sf.cmd' : 'sf';
+
+    let instanceUrl = env.neoBaseURL?.trim() || (env.envType === 'sandbox' ? 'https://test.sfcrmproducts.cn' : 'https://login.sfcrmproducts.cn');
+    if (instanceUrl.endsWith('/')) {
+      instanceUrl = instanceUrl.slice(0, -1);
+    }
+
+    const alias = this.getSalesforceAlias(env);
+    const args = ['org', 'login', 'web', '--instance-url', instanceUrl, '--alias', alias, '--set-default'];
+    if (env.clientId) {
+      args.push('--client-id', env.clientId);
+    }
+
+    console.log(`[Salesforce CLI Auth] 正在启动官方 sf 命令行授权: ${cmd} ${args.join(' ')}`);
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(cmd, args, {
+        shell: true,
+        env: { ...process.env, CI: 'false', SF_USE_PROGRESS_BAR: 'false' },
+      });
+      this.activeCliProcess = child;
+
+      let stderrOutput = '';
+      let stdoutOutput = '';
+
+      child.stdout?.on('data', (d) => {
+        stdoutOutput += d.toString();
+      });
+
+      child.stderr?.on('data', (d) => {
+        stderrOutput += d.toString();
+      });
+
+      child.on('close', (code) => {
+        this.activeCliProcess = null;
+        if (code === 0) {
+          console.log('[Salesforce CLI Auth] sf org login web 授权成功！');
+          resolve();
+        } else {
+          reject(new Error(`Salesforce CLI 授权未完成 (退出码 ${code}): ${stderrOutput || stdoutOutput || '用户取消了登录'}`));
+        }
+      });
+
+      child.on('error', (err) => {
+        this.activeCliProcess = null;
+        reject(new Error(`无法启动 Salesforce CLI (sf): ${err.message}。请确保已安装 @salesforce/cli`));
+      });
+    });
+
+    return this.getSalesforceTokenFromCli(env, alias);
+  }
+
+  /**
+   * 从 Salesforce CLI (sf) 中提取当前 Org 的最新有效 Access Token 与实例元数据
+   */
+  public getSalesforceTokenFromCli(env: NeoEnvironment, targetAlias?: string): TokenData {
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'sf.cmd' : 'sf';
+    const alias = targetAlias || this.getSalesforceAlias(env);
+
+    try {
+      const stdout = execSync(
+        `SF_TEMP_SHOW_SECRETS=true "${cmd}" org display --target-org "${alias}" --json`,
+        {
+          encoding: 'utf-8',
+          timeout: 15000,
+          shell: true,
+          env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+          windowsHide: true,
+        }
+      );
+
+      const jsonStart = stdout.indexOf('{');
+      const jsonEnd = stdout.lastIndexOf('}');
+      if (jsonStart === -1 || jsonEnd === -1) {
+        throw new Error('未能从 Salesforce CLI 解析返回的 JSON 数据');
+      }
+
+      const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
+      const res = parsed.result;
+      if (!res || !res.accessToken) {
+        throw new Error(parsed.message || res?.connectedStatus || 'Salesforce CLI 未返回有效 accessToken');
+      }
+
+      const instanceUri = res.instanceUrl || env.neoBaseURL;
+      const orgId = res.id || 'salesforce_org';
+      const username = res.username || 'Salesforce 用户';
+
+      const tokenData: TokenData = {
+        access_token: res.accessToken,
+        expires_in: 7200,
+        instance_uri: instanceUri,
+        tenant_id: orgId,
+        userInfo: {
+          userId: orgId,
+          name: username,
+          tenant_id: orgId,
+          tenantName: `Salesforce 组织 (${orgId})`,
+        },
+        savedAt: Date.now(),
+        expiresAt: Date.now() + 7200 * 1000,
+      };
+
+      return tokenData;
+    } catch (e: any) {
+      throw new Error(`从 Salesforce CLI 读取凭据失败: ${e.message}`);
+    }
+  }
+
+  /**
+   * 遵循 salesforce-cli skill 规范对 Salesforce 实施无感/交互式令牌续期
+   */
+  public async refreshSalesforceTokenViaCli(
+    env: NeoEnvironment,
+    currentTokenData?: TokenData,
+    isInteractive = false
+  ): Promise<TokenData> {
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'sf.cmd' : 'sf';
+    const alias = this.getSalesforceAlias(env);
+
+    // 1. 优先尝试从 sf CLI 读取已刷新的有效凭据
+    try {
+      const stdout = execSync(
+        `SF_TEMP_SHOW_SECRETS=true "${cmd}" org display --target-org "${alias}" --json`,
+        {
+          encoding: 'utf-8',
+          timeout: 12000,
+          shell: true,
+          env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+          windowsHide: true,
+        }
+      );
+      const jsonStart = stdout.indexOf('{');
+      const jsonEnd = stdout.lastIndexOf('}');
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
+        const res = parsed.result;
+        if (res && res.accessToken && res.connectedStatus === 'Connected') {
+          console.log(`[Salesforce] 从本地 CLI (${alias}) 成功获取有效 Connected 凭据`);
+          return {
+            access_token: res.accessToken,
+            expires_in: 7200,
+            instance_uri: res.instanceUrl || env.neoBaseURL,
+            tenant_id: res.id || 'salesforce_org',
+            userInfo: {
+              userId: res.id || 'salesforce_org',
+              name: res.username || 'Salesforce 用户',
+              tenant_id: res.id || 'salesforce_org',
+              tenantName: `Salesforce 组织 (${res.id || 'salesforce_org'})`,
+            },
+            savedAt: Date.now(),
+            expiresAt: Date.now() + 7200 * 1000,
+          };
+        }
+      }
+    } catch {}
+
+    // 2. 如果属于用户主动触发的交互式操作（点击重新登录/手动续期），唤起 sf 官方网页认证
+    if (isInteractive) {
+      console.log('[Salesforce] 正在遵循 salesforce-cli skill 规范启动 sf org login web 重新认证...');
+      return await this.loginWithSalesforceCli(env);
+    }
+
+    // 3. 后台定时轮询静默模式下：不弹窗骚扰用户，抛出明确错误提示
+    throw new Error('Salesforce CLI 授权会话已失效，请在连接器详情中点击「重新登录」重新授权');
+  }
+
   public async loginWithBrowser(env: NeoEnvironment): Promise<TokenData> {
     if (env.productType === 'fxiaoke' && (env.authMode === 'client_credentials' || env.permanentCode)) {
       return this.loginWithFxiaoKeClientCredentials(env);
@@ -509,13 +708,18 @@ export class AuthService {
       }).catch(() => {});
 
       const authWin = new BrowserWindow({
-        width: 860,
-        height: 750,
-        parent: parentWindow,
-        modal: true,
-        title: `${env.productType === "salesforce" ? "Salesforce" : env.productType === "fxiaoke" ? "纷享销客" : "销售易"}登录 - ${env.name}`,
+        width: 880,
+        height: 760,
+        parent: process.platform === 'darwin' ? undefined : parentWindow,
+        modal: false,
+        title: `${env.productType === "salesforce" ? "Salesforce" : env.productType === "fxiaoke" ? "纷享销客" : "销售易"} 登录认证 - ${env.name}`,
         autoHideMenuBar: true,
         backgroundColor: '#ffffff',
+        closable: true,
+        minimizable: false,
+        resizable: true,
+        center: true,
+        show: true,
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
@@ -524,6 +728,100 @@ export class AuthService {
       });
 
       this.embeddedAuthWindow = authWin;
+
+      const injectCloseButton = () => {
+        if (authWin.isDestroyed()) return;
+        authWin.webContents.insertCSS(`
+          #__neocrm_close_floating_btn__ {
+            position: fixed !important;
+            top: 14px !important;
+            right: 18px !important;
+            z-index: 2147483647 !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            background: rgba(15, 23, 42, 0.85) !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+            border-radius: 9999px !important;
+            padding: 7px 15px !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            line-height: 1 !important;
+            cursor: pointer !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25) !important;
+            backdrop-filter: blur(8px) !important;
+            -webkit-backdrop-filter: blur(8px) !important;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            user-select: none !important;
+          }
+          #__neocrm_close_floating_btn__:hover {
+            background: #e11d48 !important;
+            border-color: rgba(255, 255, 255, 0.6) !important;
+            box-shadow: 0 6px 20px rgba(225, 29, 72, 0.4) !important;
+            transform: translateY(-1px) !important;
+          }
+          #__neocrm_close_floating_btn__:active {
+            transform: translateY(1px) !important;
+          }
+        `).catch(() => {});
+
+        authWin.webContents.executeJavaScript(`
+          (function() {
+            if (document.getElementById('__neocrm_close_floating_btn__')) return;
+            var btn = document.createElement('div');
+            btn.id = '__neocrm_close_floating_btn__';
+            btn.title = '关闭此登录窗口 (快捷键: Esc)';
+            btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:2px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg><span>关闭窗口</span>';
+            btn.onclick = function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('__NEOCRM_CLOSE_WINDOW__');
+            };
+            if (document.body) {
+              document.body.appendChild(btn);
+            } else {
+              document.addEventListener('DOMContentLoaded', function() {
+                if (document.body && !document.getElementById('__neocrm_close_floating_btn__')) {
+                  document.body.appendChild(btn);
+                }
+              });
+            }
+          })();
+        `).catch(() => {});
+      };
+
+      authWin.webContents.on('dom-ready', injectCloseButton);
+      authWin.webContents.on('did-finish-load', injectCloseButton);
+      authWin.webContents.on('did-navigate', injectCloseButton);
+      authWin.webContents.on('did-navigate-in-page', injectCloseButton);
+
+      authWin.webContents.on('console-message', (_, __, message) => {
+        if (message === '__NEOCRM_CLOSE_WINDOW__') {
+          if (!isSettled) {
+            isSettled = true;
+            setTimeout(() => {
+              try { if (!authWin.isDestroyed()) authWin.close(); } catch {}
+              this.embeddedAuthWindow = null;
+            }, 50);
+            reject(new Error("用户取消了登录"));
+          }
+        }
+      });
+
+      authWin.webContents.on('before-input-event', (_, input) => {
+        if (input.key === 'Escape' && input.type === 'keyDown') {
+          if (!isSettled) {
+            isSettled = true;
+            setTimeout(() => {
+              try { if (!authWin.isDestroyed()) authWin.close(); } catch {}
+              this.embeddedAuthWindow = null;
+            }, 50);
+            reject(new Error("用户取消了登录"));
+          }
+        }
+      });
 
       const checkUrl = async (targetUrl: string) => {
         if (isSettled) return;
@@ -593,6 +891,19 @@ export class AuthService {
       });
 
       authWin.webContents.session.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
+        if (details.url.startsWith('neocrm-action://close') || details.url.includes('__neocrm_cancel__')) {
+          callback({ cancel: true });
+          if (!isSettled) {
+            isSettled = true;
+            setTimeout(() => {
+              try { if (!authWin.isDestroyed()) authWin.close(); } catch {}
+              this.embeddedAuthWindow = null;
+            }, 50);
+            reject(new Error("用户取消了登录"));
+          }
+          return;
+        }
+
         let isRedirectMatched = false;
         try {
           const u = new URL(details.url);
@@ -689,7 +1000,7 @@ export class AuthService {
       throw new Error('纷享销客自动续期需要配置完整的 appId、appSecret 及 permanentCode 凭据');
     }
 
-    // 2. Salesforce 续期 (支持客户端凭证直连换新与 OAuth2 refresh_token)
+    // 2. Salesforce 续期 (支持 OAuth2 refresh_token 换新与本地 sf CLI 双向同步)
     if (env.productType === 'salesforce') {
       if (env.authMode === 'client_credentials' || (env.clientId && env.clientSecret && !currentTokenData?.refresh_token)) {
         return await this.loginWithSalesforceClientCredentials(env);
@@ -697,7 +1008,7 @@ export class AuthService {
       if (currentTokenData?.refresh_token) {
         return await this.refreshToken(env, currentTokenData.refresh_token);
       }
-      throw new Error('Salesforce 续期需要 Client Credentials 凭证或有效 refresh_token');
+      throw new Error('Salesforce 续期需要 Client Credentials 凭证或有效 refresh_token，请在连接器详情点击「重新登录」');
     }
 
     // 3. 销售易 NeoCRM 续期
@@ -1090,15 +1401,40 @@ export class AuthService {
       const win = new BrowserWindow({
         width: 980,
         height: 740,
-        parent: parentWindow,
-        modal: true,
+        parent: process.platform === 'darwin' ? undefined : parentWindow,
+        modal: false,
         title: `登录并捕获 Web 后台管理会话 Cookie - ${env.name}`,
         autoHideMenuBar: true,
+        closable: true,
+        minimizable: false,
+        resizable: true,
+        center: true,
+        show: true,
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
           partition: authPartition,
         },
+      });
+
+      win.webContents.on('before-input-event', (_, input) => {
+        if (input.key === 'Escape' && input.type === 'keyDown') {
+          if (!isSettled) {
+            isSettled = true;
+            try { if (!win.isDestroyed()) win.close(); } catch {}
+            reject(new Error("用户取消了 Cookie 捕获"));
+          }
+        }
+      });
+
+      win.webContents.on('console-message', (_, __, message) => {
+        if (message === '__NEOCRM_CLOSE_COOKIE_WINDOW__') {
+          if (!isSettled) {
+            isSettled = true;
+            try { if (!win.isDestroyed()) win.close(); } catch {}
+            reject(new Error("用户取消了 Cookie 捕获"));
+          }
+        }
       });
 
       const finishCapture = async () => {
@@ -1148,7 +1484,7 @@ export class AuthService {
               var bar = document.createElement("div");
               bar.id = "__neocrm_cookie_banner";
               bar.style.cssText = "position:fixed;top:0;left:0;right:0;height:38px;background:linear-gradient(90deg,#0d9488,#059669);color:#fff;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:12px;font-family:sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.15);";
-              bar.innerHTML = "<span>🔐 <b>NeoCRM 后台会话捕获模式</b>：请在下方完成账号登录，进入系统后台后将自动提取管理员 Cookie 并关闭窗口。</span><button onclick=\"window.close()\" style=\"background:#fff;color:#0f766e;border:none;padding:4px 12px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:12px;\">我已登录，立即提取并关闭</button>";
+              bar.innerHTML = "<span>🔐 <b>NeoCRM 后台会话捕获模式</b>：请在下方完成账号登录，进入系统后台后将自动提取管理员 Cookie 并关闭窗口。</span><div style=\"display:flex;align-items:center;gap:8px;\"><button onclick=\"window.close()\" style=\"background:#fff;color:#0f766e;border:none;padding:5px 12px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:12px;\">我已登录，立即提取并关闭</button><button onclick=\"console.log('__NEOCRM_CLOSE_COOKIE_WINDOW__');try{window.close();}catch(e){}\" style=\"background:rgba(255,255,255,0.2);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;\">✕ 关闭窗口 (Esc)</button></div>";
               document.body.appendChild(bar);
             })();
           `)

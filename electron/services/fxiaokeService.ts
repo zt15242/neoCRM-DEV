@@ -328,16 +328,32 @@ export class FxiaokeService {
     tokenData: TokenData,
     objectApiName: string,
     keyword: string,
-    limit = 20
+    limit = 50
   ): Promise<Array<{ id: string | number; name: string }>> {
-    const res = await this.queryData(env, tokenData, {
-      objectApiName,
-      limit,
-    });
-    return (res.records || []).map((r: any) => ({
-      id: r._id || r.id,
-      name: r.name || r._id,
-    }));
+    const cleanKw = String(keyword || '').trim();
+    let sql = `SELECT _id, name FROM ${objectApiName}`;
+    if (cleanKw) {
+      sql += ` WHERE name LIKE '%${cleanKw.replace(/'/g, '')}%'`;
+    }
+    sql += ` LIMIT ${Math.min(limit, 50)}`;
+
+    try {
+      const res = await this.queryData(env, tokenData, {
+        objectApiName,
+        sql,
+        limit,
+      });
+      return (res.records || []).map((r: any) => ({
+        id: r._id || r.id,
+        name: r.name || r._id || r.id,
+      }));
+    } catch {
+      const res = await this.queryData(env, tokenData, { objectApiName, limit });
+      return (res.records || []).map((r: any) => ({
+        id: r._id || r.id,
+        name: r.name || r._id || r.id,
+      }));
+    }
   }
 
   /**
@@ -454,6 +470,142 @@ export class FxiaokeService {
     }
 
     return { success: true };
+  }
+
+  /**
+   * 9. 创建纷享销客自定义业务对象 (POST /cgi/crm/v2/object/create)
+   */
+  public async createCustomObject(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    payload: { apiKey: string; label: string; description?: string }
+  ): Promise<{ success: boolean; data?: any; createdApiKey?: string; error?: string }> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const token = tokenData.access_token;
+    const openCorpId = String(tokenData.userInfo?.userId || tokenData.tenant_id || '');
+    const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
+
+    let cleanKey = payload.apiKey.trim().replace(/__c$/i, '').replace(/Obj$/i, '');
+    const targetApiName = `${cleanKey}__c`;
+
+    const url = `${baseUrl}/cgi/crm/v2/object/create?thirdTraceId=${randomUUID()}`;
+    const reqBody = {
+      corpAccessToken: token,
+      corpId: openCorpId,
+      currentOpenUserId,
+      data: {
+        apiName: targetApiName,
+        displayName: payload.label.trim(),
+        description: payload.description || payload.label.trim(),
+      },
+    };
+
+    try {
+      const res = await axios.post(url, reqBody, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+      if (res.data?.errorCode === 0 || res.data?.errorCode === '0') {
+        return { success: true, createdApiKey: targetApiName, data: res.data?.data };
+      }
+      const errMsg = res.data?.errorMessage || JSON.stringify(res.data);
+      if (errMsg.includes('已存在') || errMsg.includes('重复') || errMsg.includes('exist')) {
+        return { success: true, createdApiKey: targetApiName };
+      }
+      return { success: false, error: errMsg };
+    } catch (e: any) {
+      const errMsg = e.response?.data?.errorMessage || e.message;
+      if (errMsg && (errMsg.includes('已存在') || errMsg.includes('exist'))) {
+        return { success: true, createdApiKey: targetApiName };
+      }
+      return { success: false, error: errMsg };
+    }
+  }
+
+  /**
+   * 10. 创建纷享销客自定义字段 (POST /cgi/crm/v2/field/create)
+   */
+  public async createCustomField(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectApiName: string,
+    payload: {
+      apiKey: string;
+      label: string;
+      itemType: number;
+      currency?: boolean;
+      maxLength?: number;
+      decimal?: number;
+      pickOption?: any[];
+      description?: string;
+    }
+  ): Promise<{ success: boolean; data?: any; createdApiKey?: string; error?: string }> {
+    const baseUrl = this.getBaseUrl(env, tokenData);
+    const token = tokenData.access_token;
+    const openCorpId = String(tokenData.userInfo?.userId || tokenData.tenant_id || '');
+    const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
+
+    let targetObj = objectApiName.trim();
+    if (!targetObj.endsWith('Obj') && !targetObj.endsWith('__c')) {
+      targetObj = `${targetObj.charAt(0).toUpperCase()}${targetObj.slice(1)}Obj`;
+    }
+
+    const cleanFieldKey = payload.apiKey.trim().replace(/__c$/i, '');
+    const targetFieldApiName = `${cleanFieldKey}__c`;
+
+    let fxType = 'text';
+    const it = Number(payload.itemType);
+    if (it === 1) fxType = 'text';
+    else if (it === 2) fxType = 'long_text';
+    else if (it === 40) fxType = 'rich_text';
+    else if (it === 10) fxType = 'reference';
+    else if (it === 3) fxType = 'select';
+    else if (it === 4) fxType = 'multi_select';
+    else if (it === 5) fxType = 'integer';
+    else if (it === 6) fxType = payload.currency !== false ? 'currency' : 'number';
+    else if (it === 33) fxType = 'percent';
+    else if (it === 7) fxType = 'date';
+    else if (it === 21) fxType = 'date_time';
+    else if (it === 31) fxType = 'boolean';
+    else if (it === 22) fxType = 'phone';
+    else if (it === 23) fxType = 'email';
+    else if (it === 24) fxType = 'url';
+
+    const url = `${baseUrl}/cgi/crm/v2/field/create?thirdTraceId=${randomUUID()}`;
+    const reqBody: any = {
+      corpAccessToken: token,
+      corpId: openCorpId,
+      currentOpenUserId,
+      data: {
+        objectApiName: targetObj,
+        apiName: targetFieldApiName,
+        displayName: payload.label.trim(),
+        type: fxType,
+        description: payload.description || payload.label.trim(),
+      },
+    };
+
+    if (it === 3 || it === 4) {
+      reqBody.data.options = (payload.pickOption || []).map((o: any, idx: number) => {
+        const val = typeof o === 'string' ? o : o.optionLabel || o.label || o.name || `选项${idx + 1}`;
+        return { label: val, value: String(idx + 1) };
+      });
+    }
+
+    try {
+      const res = await axios.post(url, reqBody, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+      if (res.data?.errorCode === 0 || res.data?.errorCode === '0') {
+        return { success: true, createdApiKey: targetFieldApiName, data: res.data?.data };
+      }
+      const errMsg = res.data?.errorMessage || JSON.stringify(res.data);
+      if (errMsg.includes('已存在') || errMsg.includes('重复') || errMsg.includes('exist')) {
+        return { success: true, createdApiKey: targetFieldApiName };
+      }
+      return { success: false, error: errMsg };
+    } catch (e: any) {
+      const errMsg = e.response?.data?.errorMessage || e.message;
+      if (errMsg && (errMsg.includes('已存在') || errMsg.includes('exist'))) {
+        return { success: true, createdApiKey: targetFieldApiName };
+      }
+      return { success: false, error: errMsg };
+    }
   }
 
 }

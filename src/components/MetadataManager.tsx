@@ -220,14 +220,6 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
 
           <button
             onClick={() => {
-              if (session?.environment?.productType === 'salesforce') {
-                showToast('info', 'Salesforce 自定义对象与字段请在 Salesforce 设置【对象管理器 (Object Manager)】中创建');
-                return;
-              }
-              if (session?.environment?.productType === 'fxiaoke') {
-                showToast('info', '纷享销客自定义对象请在纷享管理后台【业务对象管理】中创建');
-                return;
-              }
               setIsCreateEntityOpen(true);
             }}
             className="flex items-center space-x-1.5 px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg shadow-sm shadow-sky-600/20 transition-all"
@@ -496,11 +488,12 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
       {/* 弹窗组件 */}
       <CreateEntityModal
         isOpen={isCreateEntityOpen}
+        productType={session?.environment?.productType}
         onClose={() => setIsCreateEntityOpen(false)}
         onSubmit={async (payload) => {
           const res = await window.neoApi.createEntity(payload);
           if (res.success) {
-            showToast('success', `实体 "${payload.label}" 创建成功！`);
+            showToast('success', `业务对象 "${payload.label}" 创建成功！`);
             await loadEntities();
           }
           return res;
@@ -509,6 +502,7 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
 
       <CreateFieldModal
         isOpen={isCreateFieldOpen}
+        productType={session?.environment?.productType}
         entity={selectedEntity}
         entities={entities}
         onClose={() => setIsCreateFieldOpen(false)}

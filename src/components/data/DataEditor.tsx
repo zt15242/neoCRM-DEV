@@ -175,7 +175,8 @@ export const DataEditor: React.FC<DataEditorProps> = ({
   useEffect(() => {
     if (initialRecordData) {
       setMode('update');
-      setTargetRecordId(String(initialRecordData.id || ''));
+      const recId = initialRecordData.Id || initialRecordData._id || initialRecordData.dataId || initialRecordData.id || '';
+      setTargetRecordId(String(recId));
       setFormData(initialRecordData);
       setInitialSnapshot({ ...initialRecordData });
       setJsonCode(JSON.stringify(initialRecordData, null, 2));
@@ -306,7 +307,7 @@ export const DataEditor: React.FC<DataEditorProps> = ({
       if (mode === 'create') {
         const res = await window.neoApi.createRecord(selectedEntityApiKey, payload);
         if (res.success) {
-          const newId = res.data?.id;
+          const newId = res.data?.id || res.data?.Id || res.data?.dataId || res.data?.data?.id;
           showToast('success', `数据创建成功！`);
           if (newId) {
             onNavigateToView(selectedEntityApiKey, newId);

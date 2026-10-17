@@ -286,6 +286,148 @@ export const CRM_HARNESS_TOOLS_SPEC = [
   {
     type: 'function',
     function: {
+      name: 'create_record',
+      description: '【CRM 数据写入工具 - 新增记录】在当前已连接的 CRM 平台（销售易 NeoCRM / Salesforce / 纷享销客）中为指定业务对象新增一条数据记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          entityApiKey: {
+            type: 'string',
+            description: '目标业务对象 API Key，如 account、Account、AccountObj、ContactObj、order 等',
+          },
+          data: {
+            type: 'object',
+            description: '包含要插入字段键值对的记录数据对象',
+          },
+        },
+        required: ['entityApiKey', 'data'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_record',
+      description: '【CRM 数据写入工具 - 更新记录】在当前已连接的 CRM 平台（销售易 NeoCRM / Salesforce / 纷享销客）中更新指定业务对象的现有数据记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          entityApiKey: {
+            type: 'string',
+            description: '目标业务对象 API Key，如 account、Account、AccountObj 等',
+          },
+          recordId: {
+            type: 'string',
+            description: '要更新的目标数据记录 ID',
+          },
+          data: {
+            type: 'object',
+            description: '待更新的字段键值对',
+          },
+        },
+        required: ['entityApiKey', 'recordId', 'data'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_record',
+      description: '【CRM 数据写入工具 - 删除记录】在当前已连接的 CRM 平台（销售易 NeoCRM / Salesforce / 纷享销客）中删除指定的业务数据记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          entityApiKey: {
+            type: 'string',
+            description: '目标业务对象 API Key',
+          },
+          recordId: {
+            type: 'string',
+            description: '要删除的目标记录 ID',
+          },
+        },
+        required: ['entityApiKey', 'recordId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_custom_entity',
+      description: '【CRM 元数据工具 - 创建业务对象】在当前连接的 CRM 平台（销售易 / Salesforce / 纷享销客）中创建新的自定义实体/业务对象。',
+      parameters: {
+        type: 'object',
+        properties: {
+          apiKey: {
+            type: 'string',
+            description: '自定义对象 API Key（如 projectTrack, maintenanceOrder 等）',
+          },
+          label: {
+            type: 'string',
+            description: '自定义对象显示名称（如 项目跟踪, 维保工单 等）',
+          },
+          description: {
+            type: 'string',
+            description: '可选的对象描述说明',
+          },
+        },
+        required: ['apiKey', 'label'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_custom_field',
+      description: '【CRM 元数据工具 - 创建业务字段】在当前连接的 CRM 平台（销售易 / Salesforce / 纷享销客）中为指定对象创建新的自定义字段。',
+      parameters: {
+        type: 'object',
+        properties: {
+          entityApiKey: {
+            type: 'string',
+            description: '目标业务对象 API Key（如 contract, account, Account, AccountObj 等）',
+          },
+          apiKey: {
+            type: 'string',
+            description: '自定义字段 API Key（如 discountRate, actualCost 等）',
+          },
+          label: {
+            type: 'string',
+            description: '自定义字段显示名称（如 折扣率, 实际成本 等）',
+          },
+          itemType: {
+            type: 'number',
+            description: '字段类型编码: 1 单行文本, 2 多行长文本, 3 单选下拉, 4 多选下拉, 5 日期, 6 数值/货币, 7 布尔/勾选框, 8 日期时间',
+          },
+          currency: {
+            type: 'boolean',
+            description: '当 itemType 为 6 时，是否标记为货币类型（默认 true）',
+          },
+          maxLength: {
+            type: 'number',
+            description: '文本类型最大长度',
+          },
+          decimal: {
+            type: 'number',
+            description: '数值或货币类型的小数位数（默认 2）',
+          },
+          pickOption: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '单选或多选字段的可选枚举项标签数组',
+          },
+          description: {
+            type: 'string',
+            description: '可选的字段用途描述说明',
+          },
+        },
+        required: ['entityApiKey', 'apiKey', 'label', 'itemType'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_approval_resources',
       description: '查询当前租户在审批流/工作流中可用的真实组织与元数据资源：包含真实角色/职能列表 (roles)、真实用户列表 (users)、真实部门列表 (departments)、指定实体的业务类型列表 (busiTypes) 以及单选/多选字段真实选项 (picklistFields)。涉及人员指派、审批人角色、会签、部门或条件分流时必须先调用此工具获取真实数据，严禁臆造！',
       parameters: {

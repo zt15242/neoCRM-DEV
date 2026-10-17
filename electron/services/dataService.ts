@@ -105,6 +105,16 @@ export class DataService {
     if (this.entityPrimaryFieldCache.has(key)) {
       return this.entityPrimaryFieldCache.get(key)!;
     }
+    if (key.endsWith('Obj')) {
+      return 'name';
+    }
+    if (/^[A-Z]/.test(key) || key.includes('__c')) {
+      const lower = key.toLowerCase();
+      if (lower === 'case') return 'CaseNumber';
+      if (lower === 'contract') return 'ContractNumber';
+      if (lower === 'task' || lower === 'event') return 'Subject';
+      return 'Name';
+    }
     return STANDARD_ENTITY_NAME_FIELD_MAP[key] || 'name';
   }
 
@@ -188,6 +198,12 @@ export class DataService {
     if (!record || typeof record !== 'object') return '';
     return (
       record.name ||
+      record.Name ||
+      record.Subject ||
+      record.Title ||
+      record.CaseNumber ||
+      record.ContractNumber ||
+      record.OrderNumber ||
       record.accountName ||
       record.contactName ||
       record.opportunityName ||
@@ -561,14 +577,14 @@ export class DataService {
     maxLimit = 50000,
     onProgress?: (progress: { current: number; total: number; percent: number; page: number }) => void
   ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
+    // Salesforce 和 纷享销客直接走原生单次/分页执行即可（绝不经过销售易 XOQL 语法重写）
+    if (env.productType === 'salesforce' || env.productType === 'fxiaoke') {
+      return this.executeQuery(env, tokenData, rawSql);
+    }
+
     const { sql: checkedSql, rejectReason } = this.sanitizeAndRewriteXoql(rawSql);
     if (rejectReason) {
       return { success: false, error: rejectReason };
-    }
-
-    // Salesforce 和 纷享销客直接走原生单次/分页执行即可
-    if (env.productType === 'salesforce' || env.productType === 'fxiaoke') {
-      return this.executeQuery(env, tokenData, rawSql);
     }
 
     // 如果是聚合查询 (GROUP BY 或 COUNT/SUM/AVG/MAX/MIN)，直接走单次 XOQL 查询即可返回完整统计结果
@@ -773,14 +789,18 @@ export class DataService {
 
     try {
       const primaryName = this.getPrimaryNameField(entityApiKey);
-      const qRes = await this.executeQuery(
-        env,
-        tokenData,
-        `SELECT id, ${primaryName} FROM ${entityApiKey} WHERE id = ${id} LIMIT 1`
-      );
+      let querySql = `SELECT id, ${primaryName} FROM ${entityApiKey} WHERE id = ${id} LIMIT 1`;
+      if (env.productType === 'salesforce') {
+        const safeId = String(id).replace(/'/g, "\\'");
+        querySql = `SELECT Id, ${primaryName} FROM ${entityApiKey} WHERE Id = '${safeId}' LIMIT 1`;
+      } else if (env.productType === 'fxiaoke') {
+        const safeId = String(id).replace(/'/g, "\\'");
+        querySql = `SELECT _id, ${primaryName} FROM ${entityApiKey} WHERE _id = '${safeId}' LIMIT 1`;
+      }
+      const qRes = await this.executeQuery(env, tokenData, querySql);
       if (qRes.success && qRes.data?.records?.[0]) {
-        const name =
-          this.extractRecordName(qRes.data.records[0]) || String(qRes.data.records[0][primaryName] || '');
+        const rec = qRes.data.records[0];
+        const name = this.extractRecordName(rec) || String(rec[primaryName] || '');
         if (name) {
           this.nameCache.set(cacheKey, name);
           return name;
@@ -851,17 +871,17 @@ export class DataService {
       return nameMap;
     }
 
-    // 2. 普通业务对象：优先通过单次 XOQL IN 查询批量解析名称
+    // 2. 普通业务对象：优先通过单次 IN 查询批量解析名称
     const primaryName = this.getPrimaryNameField(entityApiKey);
-    const validNumericIds = unCachedIds.filter((id) => /^\d+$/.test(String(id)));
-    if (validNumericIds.length > 0) {
+    if (env.productType === 'salesforce') {
       try {
-        const inSql = `SELECT id, ${primaryName} FROM ${entityApiKey} WHERE id IN (${validNumericIds.join(', ')}) LIMIT ${validNumericIds.length}`;
-        const batchRes = await this.executeQuery(env, tokenData, inSql);
-        if (batchRes.success && batchRes.data?.records) {
-          for (const rec of batchRes.data.records) {
-            const rId = String(rec.id || '');
-            const rName = this.extractRecordName(rec) || String(rec[primaryName] || '');
+        const idListStr = unCachedIds.map((id) => `'${String(id).replace(/'/g, "\\'")}'`).join(', ');
+        const inSql = `SELECT Id, ${primaryName} FROM ${entityApiKey} WHERE Id IN (${idListStr}) LIMIT ${unCachedIds.length}`;
+        const batchRes = await this.salesforceService.executeQuery(env, tokenData, inSql);
+        if (batchRes && batchRes.records) {
+          for (const rec of batchRes.records) {
+            const rId = String(rec.Id || rec.id || '');
+            const rName = rec[primaryName] || this.extractRecordName(rec);
             if (rId && rName) {
               this.nameCache.set(`${entityApiKey}_${rId}`, rName);
               nameMap[rId] = rName;
@@ -869,6 +889,40 @@ export class DataService {
           }
         }
       } catch {}
+    } else if (env.productType === 'fxiaoke') {
+      try {
+        const idListStr = unCachedIds.map((id) => `'${String(id).replace(/'/g, "\\'")}'`).join(', ');
+        const inSql = `SELECT _id, ${primaryName} FROM ${entityApiKey} WHERE _id IN (${idListStr}) LIMIT ${unCachedIds.length}`;
+        const batchRes = await this.fxiaokeService.queryData(env, tokenData, { sql: inSql });
+        if (batchRes && batchRes.records) {
+          for (const rec of batchRes.records) {
+            const rId = String(rec._id || rec.id || '');
+            const rName = rec[primaryName] || this.extractRecordName(rec);
+            if (rId && rName) {
+              this.nameCache.set(`${entityApiKey}_${rId}`, rName);
+              nameMap[rId] = rName;
+            }
+          }
+        }
+      } catch {}
+    } else {
+      const validNumericIds = unCachedIds.filter((id) => /^\d+$/.test(String(id)));
+      if (validNumericIds.length > 0) {
+        try {
+          const inSql = `SELECT id, ${primaryName} FROM ${entityApiKey} WHERE id IN (${validNumericIds.join(', ')}) LIMIT ${validNumericIds.length}`;
+          const batchRes = await this.executeQuery(env, tokenData, inSql);
+          if (batchRes.success && batchRes.data?.records) {
+            for (const rec of batchRes.data.records) {
+              const rId = String(rec.id || '');
+              const rName = this.extractRecordName(rec) || String(rec[primaryName] || '');
+              if (rId && rName) {
+                this.nameCache.set(`${entityApiKey}_${rId}`, rName);
+                nameMap[rId] = rName;
+              }
+            }
+          }
+        } catch {}
+      }
     }
 
     // 对仍未命中的 ID 兜底单条查询
@@ -934,6 +988,26 @@ export class DataService {
     limit = 2000
   ): Promise<{ success: boolean; records: Record<string, any>[]; error?: string }> {
     const cleanKeyword = String(keyword || '').trim();
+
+    if (env.productType === 'salesforce') {
+      try {
+        const list = await this.salesforceService.searchRecords(env, tokenData, entityApiKey, cleanKeyword, limit);
+        const records = Array.isArray(list) ? list : (list as any)?.records || [];
+        return { success: true, records };
+      } catch (e: any) {
+        return { success: false, records: [], error: e.message };
+      }
+    }
+
+    if (env.productType === 'fxiaoke') {
+      try {
+        const list = await this.fxiaokeService.searchRecords(env, tokenData, entityApiKey, cleanKeyword, limit);
+        const records = Array.isArray(list) ? list : (list as any)?.records || [];
+        return { success: true, records };
+      } catch (e: any) {
+        return { success: false, records: [], error: e.message };
+      }
+    }
 
     // 1. 业务类型专用通道 (entityBelongType 或 entityBelongType:<hostEntity>)
     if (entityApiKey.startsWith('entityBelongType')) {
@@ -1050,6 +1124,24 @@ export class DataService {
     entityApiKey: string,
     recordData: Record<string, any>
   ): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (env.productType === 'salesforce') {
+      try {
+        const res = await this.salesforceService.createRecord(env, tokenData, entityApiKey, recordData);
+        return { success: res.success, data: res };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+
+    if (env.productType === 'fxiaoke') {
+      try {
+        const res = await this.fxiaokeService.createRecord(env, tokenData, entityApiKey, recordData);
+        return { success: res.success, data: res };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getDmlHeaders(tokenData);
     const url = `${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}`;
@@ -1090,6 +1182,24 @@ export class DataService {
     id: string | number,
     recordData: Record<string, any>
   ): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (env.productType === 'salesforce') {
+      try {
+        const res = await this.salesforceService.updateRecord(env, tokenData, entityApiKey, id, recordData);
+        return { success: res.success, data: res };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+
+    if (env.productType === 'fxiaoke') {
+      try {
+        const res = await this.fxiaokeService.updateRecord(env, tokenData, entityApiKey, id, recordData);
+        return { success: res.success, data: res };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getDmlHeaders(tokenData);
     const url = `${baseUrl}/rest/data/v2.0/xobjects/${entityApiKey}/${id}`;

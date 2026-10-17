@@ -169,6 +169,12 @@ export class MetadataService {
     tokenData: TokenData, 
     payload: CreateEntityPayload
   ): Promise<{ success: boolean; data?: any; createdApiKey?: string; error?: string }> {
+    if (env.productType === 'salesforce') {
+      return this.salesforceService.createCustomObject(env, tokenData, payload);
+    }
+    if (env.productType === 'fxiaoke') {
+      return this.fxiaokeService.createCustomObject(env, tokenData, payload);
+    }
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
     const url = `${baseUrl}/rest/metadata/v3.1/xobjects/`;
@@ -218,6 +224,12 @@ export class MetadataService {
     entityApiKey: string,
     payload: CreateFieldPayload
   ): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (env.productType === 'salesforce') {
+      return this.salesforceService.createCustomField(env, tokenData, entityApiKey, payload);
+    }
+    if (env.productType === 'fxiaoke') {
+      return this.fxiaokeService.createCustomField(env, tokenData, entityApiKey, payload);
+    }
     const baseUrl = this.getBaseUrl(env, tokenData);
     const headers = this.getHeaders(tokenData);
 

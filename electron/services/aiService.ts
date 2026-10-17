@@ -2714,6 +2714,75 @@ ${toolDataContext}
       };
     }
 
+    if (name === "create_record") {
+      const apiKey = args.entityApiKey;
+      if (!apiKey) throw new Error("缺少 entityApiKey 参数");
+      const recordData = args.data || {};
+      const res = await this.dataService.createRecord(env, tokenData, apiKey, recordData);
+      if (!res.success) throw new Error(res.error || "创建数据记录失败");
+      const idStr = res.data?.id || res.data?.dataId || (res.data?.data?.id) || "成功生成";
+      return {
+        data: res.data,
+        summary: `成功在 ${env.productType || 'CRM'} [${apiKey}] 中新增记录 (ID: ${idStr})`,
+      };
+    }
+
+    if (name === "update_record") {
+      const apiKey = args.entityApiKey;
+      const recordId = args.recordId || args.id;
+      if (!apiKey || !recordId) throw new Error("缺少 entityApiKey 或 recordId 参数");
+      const recordData = args.data || {};
+      const res = await this.dataService.updateRecord(env, tokenData, apiKey, recordId, recordData);
+      if (!res.success) throw new Error(res.error || "更新数据记录失败");
+      return {
+        data: res.data,
+        summary: `成功在 ${env.productType || 'CRM'} [${apiKey}] 中更新记录 [${recordId}]`,
+      };
+    }
+
+    if (name === "delete_record") {
+      const apiKey = args.entityApiKey;
+      const recordId = args.recordId || args.id;
+      if (!apiKey || !recordId) throw new Error("缺少 entityApiKey 或 recordId 参数");
+      const res = await this.dataService.deleteRecord(env, tokenData, apiKey, recordId);
+      if (!res.success) throw new Error(res.error || "删除数据记录失败");
+      return {
+        data: { success: true },
+        summary: `成功在 ${env.productType || 'CRM'} [${apiKey}] 中删除记录 [${recordId}]`,
+      };
+    }
+
+    if (name === "create_custom_entity") {
+      const res = await this.metadataService.createEntity(env, tokenData, {
+        apiKey: args.apiKey,
+        label: args.label,
+        description: args.description,
+      });
+      if (!res.success) throw new Error(res.error || "创建业务对象失败");
+      return {
+        data: res,
+        summary: `成功在 ${env.productType || 'CRM'} 中创建自定义对象 [${args.label}] (${res.createdApiKey})`,
+      };
+    }
+
+    if (name === "create_custom_field") {
+      const res = await this.metadataService.createField(env, tokenData, args.entityApiKey, {
+        apiKey: args.apiKey,
+        label: args.label,
+        itemType: args.itemType,
+        currency: args.currency,
+        maxLength: args.maxLength,
+        decimal: args.decimal,
+        pickOption: args.pickOption,
+        description: args.description,
+      });
+      if (!res.success) throw new Error(res.error || "创建自定义字段失败");
+      return {
+        data: res,
+        summary: `成功在 ${env.productType || 'CRM'} 对象 [${args.entityApiKey}] 中创建字段 [${args.label}] (${args.apiKey})`,
+      };
+    }
+
     if (name === "get_approval_resources") {
       const res = await this.workflowService.getApprovalResources(env, tokenData, args.entityApiKey);
       return {

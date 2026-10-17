@@ -115,12 +115,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const [editingTitle, setEditingTitle] = useState('');
   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
 
-  // 默认展开所有项目
-  useEffect(() => {
-    if (projects.length > 0 && expandedProjectIds.length === 0) {
-      setExpandedProjectIds(projects.map((p) => p.id));
-    }
-  }, [projects.length]);
+  // 程序启动时默认全部折叠收起 (用户要求启动自动缩起)
 
   const toggleProjectExpand = (id: string) => {
     setExpandedProjectIds((prev) =>
@@ -438,12 +433,18 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             return (
               <div key={proj.id} className="space-y-0.5">
                 <div
-                  onClick={() => {
-                    onSelectProject?.(proj.id);
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // 单击项目行：仅展开/收起目录，不切换当前活跃项目
                     toggleProjectExpand(proj.id);
                   }}
-                  title={`本地路径: ${proj.localPath}`}
-                  className={`group px-2 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors ${
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    // 双击项目行：才算正式切换工作区项目！
+                    onSelectProject?.(proj.id);
+                  }}
+                  title={`本地路径: ${proj.localPath}\n• 单击: 展开/收起目录\n• 双击: 切换为当前工作区项目`}
+                  className={`group px-2 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between cursor-pointer transition-colors select-none ${
                     isCurrentActive
                       ? 'bg-amber-50/80 text-amber-900 border border-amber-200/70 shadow-2xs'
                       : 'hover:bg-slate-200/60 text-slate-700'
@@ -456,6 +457,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                       <Folder className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                     )}
                     <span className="truncate">{proj.name}</span>
+                    {isCurrentActive && (
+                      <span className="text-[9px] font-normal px-1 rounded bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                        当前
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center space-x-0.5 shrink-0">
@@ -498,9 +504,19 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                         <Trash2 className="w-2.5 h-2.5" />
                       </button>
                     )}
-                    <ChevronRight
-                      className={`w-3 h-3 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                    />
+                    {/* 展开/收起箭头 (点击仅触发展开/折叠，绝不切换项目) */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleProjectExpand(proj.id);
+                      }}
+                      title={isExpanded ? '收起目录' : '展开目录'}
+                      className="p-0.5 rounded hover:bg-slate-300/40 cursor-pointer"
+                    >
+                      <ChevronRight
+                        className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                      />
+                    </div>
                   </div>
                 </div>
 

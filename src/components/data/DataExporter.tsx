@@ -182,7 +182,8 @@ export const DataExporter: React.FC<DataExporterProps> = ({
 
       if (exportFormat === 'json') {
         const orderedRecords = records.map((r: any) => {
-          const obj: Record<string, any> = { id: r.id };
+          const pkVal = r[pkName] || r.id || r.Id || r._id;
+          const obj: Record<string, any> = { [pkName]: pkVal };
           for (const k of exportFieldKeys) {
             obj[k] = r[k];
           }
@@ -197,7 +198,7 @@ export const DataExporter: React.FC<DataExporterProps> = ({
         URL.revokeObjectURL(url);
       } else {
         const headers = exportFieldKeys.map((k) => {
-          if (k === 'id') return '数据ID (id)';
+          if (k === pkName) return `数据ID (${pkName})`;
           const f = fields.find((item) => item.apiKey === k);
           return f ? `${f.label} (${k})` : k;
         });
