@@ -49,9 +49,12 @@ import {
 } from '../../shared/constants';
 import { 
   CRM_HARNESS_TOOLS_SPEC, 
+  DSH_PTC_TOOL_SPEC, 
+  DSH_MINIMAL_TOOL_SPEC, 
   getProtectedSkillInstruction, 
   isProtectedBuiltinSkill 
 } from '../security/protectedHarness';
+import { AiSessionMode } from '../../shared/types';
 import { MetadataService } from './metadataService';
 import { DataService } from './dataService';
 import { SessionStore } from './sessionStore';
@@ -867,7 +870,7 @@ ${dialogHistoryText}`;
       activeMcpServerIds?: string[];
       compactionSummary?: any;
       projectPath?: string;
-      mode?: 'default' | 'plan';
+      mode?: AiSessionMode;
     },
     sendEvent: (event: AiStreamEvent) => void
   ): Promise<void> {
@@ -993,13 +996,14 @@ ${dialogHistoryText}`;
         }
       }
 
-      // 0. 流程引擎专属安全锁强制校验 (自动流程与新版审批流共用内核级安全锁)
+      // 0. 流程引擎 & BI 分析部署大师专属安全锁强制校验 (共用内核级安全锁)
       const isAutoflowPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]"));
       const isApprovalPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::approval-architect]"));
-      if (isAutoflowPreset || isApprovalPreset) {
+      const isBiPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::neobi-architect]"));
+      if (isAutoflowPreset || isApprovalPreset || isBiPreset) {
         const lockStatus = licenseService.getLicenseStatus();
         if (!lockStatus.isAuthorized) {
-          const featureName = isApprovalPreset ? "审批流高级功能" : "自动流程功能";
+          const featureName = isBiPreset ? "BI分析部署大师功能" : isApprovalPreset ? "审批流高级功能" : "自动流程功能";
           sendEvent({
             requestId,
             sessionId,
@@ -1014,8 +1018,58 @@ ${dialogHistoryText}`;
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
       const systemParts: string[] = [];
 
-      const isPlanMode = mode === 'plan' || currentSession.mode === 'plan';
-      if (isPlanMode) {
+      const sessionMode: AiSessionMode = mode || currentSession.mode || 'standard';
+      const isPlanMode = sessionMode === 'plan';
+      const isPtcMode = sessionMode === 'ptc';
+      const isMinimalMode = sessionMode === 'minimal';
+      const isStandardMode = sessionMode === 'standard' || sessionMode === 'default';
+
+      if (isMinimalMode) {
+        systemParts.push(`You are a helpful software engineer assistant.
+【DeepSeek Harness 官方极简模式 (Minimal Mode)】
+当前会话处于「极简模式 (Minimal Mode)」。
+在此模式下，Agent 仅使用终端 Shell 工具（bash）推进并完成任务，适合测试和对比基础表现。
+工作区根目录绝对路径: ${projectPath || "未绑定工作区"}。
+你可以通过终端命令行（如 cat、ls、grep、sed、git、node、python 等）执行文件读写、检索与任务推进。请直接高效地回答并解决用户问题。`);
+      } else if (isPtcMode) {
+        systemParts.push(`【DeepSeek Harness 官方高级 PTC 模式 (Program-Through-Chat)】
+当前会话处于「PTC 模式 (Program-Through-Chat)」。
+在 PTC 模式下，【你不需要且不能逐一进行低效的单步工具调用】，你拥有唯一的全局程序化代码执行工具：\`run_code\`！
+你通过编写一段高效的异步 JavaScript/TypeScript 代码，使用全局 \`tools\` SDK 命名空间完成所有操作！
+
+【全局异步 SDK 命名空间 tools API 规范】：
+\`\`\`typescript
+declare const tools: {
+  // 终端命令与本地物理文件操作
+  bash(args: { command: string; workdir?: string; background?: boolean; timeoutMs?: number }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  read(args: { file_path: string; offset?: number; limit?: number }): Promise<{ path: string; content: string; totalLines: number }>;
+  write(args: { file_path: string; content: string }): Promise<{ path: string; bytesWritten: number; linesCount: number }>;
+  edit(args: { file_path: string; old_string: string; new_string: string; replace_all?: boolean }): Promise<{ path: string; replacedOccurrences: number }>;
+  str_replace_editor(args: { command: 'view'|'create'|'str_replace'|'insert'; path: string; file_text?: string; old_str?: string; new_str?: string; insert_line?: number; view_range?: [number, number] }): Promise<any>;
+  glob(args: { pattern: string; path?: string }): Promise<{ matches: string[]; count: number }>;
+  grep(args: { pattern: string; path?: string; glob?: string; case_sensitive?: boolean }): Promise<{ matches: Array<{ file: string; line: number; text: string }>; totalMatches: number }>;
+  
+  // CRM 实时数据与元数据操作 (当前已连接环境: ${currentSession.environment?.name || 'CRM'})
+  list_entities(args?: { keyword?: string; isCustomOnly?: boolean }): Promise<{ totalCount: number; entities: Array<{ apiKey: string; label: string }> }>;
+  get_entity_fields(args: { entityApiKey: string }): Promise<{ entityApiKey: string; totalFields: number; fields: any[] }>;
+  execute_sql_query(args: { sql: string }): Promise<{ records: any[]; totalSize: number; fields: string[] }>;
+  create_record(args: { entityApiKey: string; data: Record<string, any> }): Promise<any>;
+  update_record(args: { entityApiKey: string; recordId: string; data: Record<string, any> }): Promise<any>;
+  delete_record(args: { entityApiKey: string; recordId: string }): Promise<{ success: boolean }>;
+  create_custom_entity(args: { apiKey: string; label: string; description?: string }): Promise<any>;
+  create_custom_field(args: { entityApiKey: string; apiKey: string; label: string; itemType: number; currency?: boolean; maxLength?: number; decimal?: number; pickOption?: string[]; description?: string }): Promise<any>;
+
+  // 任务管理与工作区
+  todo_write(args: { todos: Array<{ id: string; content: string; status: 'pending'|'in_progress'|'completed' }> }): Promise<any>;
+  workspace_changes(): Promise<any>;
+  load_workspace_dependencies(): Promise<any>;
+};
+\`\`\`
+
+【PTC 编写铁律】：
+1. 遇到需要遍历文件、扫描匹配、批量生成、链式处理的任务，直接编写一段包含 \`await tools.<method>(...)\`、循环、条件分支的 JavaScript 代码，传给 \`run_code\` 一次性运行完成！
+2. 可以在代码中使用 \`console.log(...)\` 打印排查日志，并通过 \`return { ... }\` 返回最终处理结果数据。`);
+      } else if (isPlanMode) {
         systemParts.push(`【DeepSeek Harness 方案规划模式协议 (DSH Plan Mode Active)】
 当前会话处于「方案规划模式 (Plan Mode)」。
 在此模式下，你的首要目标是深入调研、摸清代码与数据架构、设计详尽的技术实施方案与分步执行计划。
@@ -1027,7 +1081,8 @@ ${dialogHistoryText}`;
 4. 用户批准方案后，系统将退出计划模式进入执行阶段。`);
       }
 
-      systemParts.push(`<available_skills>
+      if (!isMinimalMode) {
+        systemParts.push(`<available_skills>
 - salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
 - salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
 - fxiaoke-crm-cli: 纷享销客 OpenAPI v2 接口与 CLI 数据操作规范，支持对象元数据探测、SQL数据查询与大批量分页对账。
@@ -1068,6 +1123,9 @@ ${dialogHistoryText}`;
    - 工具执行完后，必须检查 exitCode 与输出内容；
    - 若遇到错误，不要停滞或推卸给用户，而是自主分析原因，调整参数自动重试纠错，直至任务最终圆满完成；
    - 任务完成后，带着真实产生的文件路径、接口返回值或执行结果向用户汇报！`);
+      } else {
+        systemParts.push(`【项目工作区物理安全沙箱约束】：\n当前项目工作区根目录绝对路径: ${projectPath || "未绑定工作区"}。\n你调用的 bash 终端命令均在上述项目目录内执行。请优先使用相对路径。`);
+      }
 
       // 若处于自动流程或审批流专家预设角色，全局优先注入《销售易流程实施视角规范》核心工程认知
       if (isAutoflowPreset || isApprovalPreset) {
@@ -1090,6 +1148,11 @@ ${dialogHistoryText}`;
           }
         } else if (presetPrompt.includes("[PROTECTED_PRESET::print-template-architect]")) {
           const decodedPreset = getProtectedSkillInstruction("preset-print-template-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
+        } else if (presetPrompt.includes("[PROTECTED_PRESET::neobi-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-neobi-architect");
           if (decodedPreset) {
             systemParts.push(decodedPreset);
           }
@@ -1423,10 +1486,16 @@ ${mcpInfoText}
         lowerModelId.includes('thinking') ||
         lowerModelId.includes('qwq');
       const canUseTools =
+        !isMinimalMode &&
         (enableTools !== false) &&
         config.settings.enableCrmTools &&
         (modelObj?.tools ?? !isPureReasoner) &&
         provider.protocol !== 'anthropic-messages';
+
+      let effectiveActiveToolsSpec = activeToolsSpec;
+      if (isPtcMode) {
+        effectiveActiveToolsSpec = DSH_PTC_TOOL_SPEC;
+      }
 
       // 5. 执行 DeepSeek Harness 官方原版自主智能体推进循环 (DSH Autonomous Agent Loop)
       // 彻底废除 3 轮 / 8 轮的死板硬编码限制！完全对齐 DSH：只要大模型在发出 tool_calls，就自主无限循环执行到底，直到模型自主认为任务完成 (toolCalls.length === 0)！
@@ -1451,7 +1520,7 @@ ${mcpInfoText}
         };
 
         if (canUseTools && !isSafetyFuseTurn) {
-          requestBody.tools = activeToolsSpec;
+          requestBody.tools = effectiveActiveToolsSpec;
           requestBody.tool_choice = 'auto';
         }
 
@@ -2017,11 +2086,19 @@ ${toolDataContext}
     }
 
     // 2. 判断是否支持工具调用
+    const sessionMode: AiSessionMode = (opts as any).mode || currentSession.mode || 'standard';
+    const isPtcMode = sessionMode === 'ptc';
+    const isMinimalMode = sessionMode === 'minimal';
+
     const isThinkingExp = cleanModelId.toLowerCase().includes('thinking');
-    const canUseTools = enableTools && !isThinkingExp;
+    const canUseTools = !isMinimalMode && enableTools && !isThinkingExp;
 
     // 转换全量激活工具为 Gemini functionDeclarations (带 JSON Schema 安全清理)
-    const effectiveTools = activeToolsSpec && activeToolsSpec.length > 0 ? activeToolsSpec : CRM_HARNESS_TOOLS_SPEC;
+    const selectedToolsSpec = isPtcMode
+      ? DSH_PTC_TOOL_SPEC
+      : (activeToolsSpec && activeToolsSpec.length > 0 ? activeToolsSpec : CRM_HARNESS_TOOLS_SPEC);
+
+    const effectiveTools = selectedToolsSpec;
     const geminiFunctionDeclarations = effectiveTools.map((spec) => {
       const fn = spec.function;
       const cleanedParams = cleanGeminiSchema(fn.parameters);
@@ -2377,6 +2454,78 @@ ${toolDataContext}
     projectPath?: string,
     sessionAllowedFiles?: string[]
   ): Promise<{ data: any; summary: string }> {
+    // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
+    if (name === "run_code") {
+      const toolsContext: Record<string, Function> = {
+        bash: async (params: any) => this.dshToolService.executeBash(params, projectPath),
+        read: async (params: any) => this.dshToolService.readFile(params, projectPath, sessionAllowedFiles),
+        write: async (params: any) => this.dshToolService.writeFile(params, projectPath),
+        edit: async (params: any) => this.dshToolService.editFile(params, projectPath),
+        str_replace_editor: async (params: any) => this.dshToolService.strReplaceEditor(params, projectPath),
+        glob: async (params: any) => this.dshToolService.globSearch(params, projectPath),
+        grep: async (params: any) => this.dshToolService.grepSearch(params, projectPath),
+        web_search: async (params: any) => this.dshToolService.webSearch(params),
+        web_fetch: async (params: any) => this.dshToolService.webFetch(params),
+        todo_write: async (params: any) => this.dshToolService.writeTodos(params),
+        get_goal: async () => this.dshToolService.getGoal(),
+        create_goal: async (params: any) => this.dshToolService.createGoal(params),
+        update_goal: async (params: any) => this.dshToolService.updateGoal(params),
+        list_jobs: async () => this.dshToolService.listJobs(),
+        job_list: async () => this.dshToolService.listJobs(),
+        get_job_output: async (params: any) => this.dshToolService.getJobOutput(params),
+        job_output: async (params: any) => this.dshToolService.getJobOutput(params),
+        kill_job: async (params: any) => this.dshToolService.killJob(params),
+        job_kill: async (params: any) => this.dshToolService.killJob(params),
+        workspace_changes: async () => this.dshToolService.getWorkspaceChanges(projectPath),
+        load_workspace_dependencies: async () => this.dshToolService.loadWorkspaceDependencies(),
+        get_tenant_info: async () => ({
+          isLoggedIn: currentSession.isLoggedIn,
+          tenantName: currentSession.tokenData?.userInfo?.tenantName || currentSession.environment?.name,
+          productType: currentSession.environment?.productType,
+          instanceUri: currentSession.tokenData?.instance_uri || currentSession.environment?.neoBaseURL,
+        }),
+      };
+
+      if (env && tokenData) {
+        toolsContext.list_entities = async (params: any) => {
+          const res = await this.metadataService.fetchEntityList(env, tokenData);
+          return { totalCount: res.length, entities: res.slice(0, 150) };
+        };
+        toolsContext.get_entity_fields = async (params: any) => {
+          const res = await this.metadataService.fetchEntityFields(env, tokenData, params?.entityApiKey || '');
+          return { entityApiKey: params?.entityApiKey, totalFields: res.length, fields: res };
+        };
+        toolsContext.execute_sql_query = async (params: any) => {
+          const res = await this.dataService.executeQuery(env, tokenData, params?.sql || params?.query || '');
+          return res.data || res;
+        };
+        toolsContext.create_record = async (params: any) => {
+          const res = await this.dataService.createRecord(env, tokenData, params?.entityApiKey || '', params?.data || {});
+          return res.data || res;
+        };
+        toolsContext.update_record = async (params: any) => {
+          const res = await this.dataService.updateRecord(env, tokenData, params?.entityApiKey || '', params?.recordId || params?.id, params?.data || {});
+          return res.data || res;
+        };
+        toolsContext.delete_record = async (params: any) => {
+          return await this.dataService.deleteRecord(env, tokenData, params?.entityApiKey || '', params?.recordId || params?.id);
+        };
+        toolsContext.create_custom_entity = async (params: any) => {
+          return await this.metadataService.createEntity(env, tokenData, params);
+        };
+        toolsContext.create_custom_field = async (params: any) => {
+          return await this.metadataService.createField(env, tokenData, params?.entityApiKey || '', params);
+        };
+      }
+
+      const res = await this.dshToolService.executePtcCode(args, toolsContext);
+      const logSummary = res.logs.length > 0 ? ` (输出了 ${res.logs.length} 行日志)` : '';
+      return {
+        data: res,
+        summary: res.error ? `PTC 执行失败: ${res.error}` : `PTC 脚本运行完成${logSummary}，耗时 ${res.executionTimeMs}ms`,
+      };
+    }
+
     // ================= DeepSeek Harness 原生工具分发 (无需 CRM 登录) =================
     if (name === "bash") {
       const res = await this.dshToolService.executeBash(

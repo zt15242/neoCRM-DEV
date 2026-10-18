@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   AiChatSession, 
+  AiSessionMode,
   AiChatMessage, 
   AiProviderConfig, 
   AiHarnessSettings, 
@@ -94,8 +95,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
 
-  // DSH 模式切换 (Default vs Plan Mode)
-  const handleToggleMode = async (newMode: 'default' | 'plan') => {
+  // DSH 模式切换 (Standard / PTC / Minimal / Plan)
+  const [currentSessionMode, setCurrentSessionMode] = useState<AiSessionMode>("standard");
+
+  const handleToggleMode = async (newMode: AiSessionMode) => {
+    setCurrentSessionMode(newMode);
     if (!activeSession) return;
     const updated: AiChatSession = {
       ...activeSession,
@@ -200,7 +204,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   >(null);
 
   const isFlowEnginePreset = (id?: string) =>
-    id === "autoflow-architect" || id === "approval-architect";
+    id === "autoflow-architect" || id === "approval-architect" || id === "neobi-architect";
 
   // 上下文压缩状态
   const [isCompacting, setIsCompacting] = useState(false);
@@ -306,6 +310,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   }, []);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
+
+  useEffect(() => {
+    if (activeSession?.mode) {
+      setCurrentSessionMode(activeSession.mode);
+    }
+  }, [activeSessionId, activeSession?.mode]);
 
   // 关键修复：当切换会话时，将滚动位置重置到顶部 (scrollTop = 0)，保证用户从头完整阅读提问与回答！
   useEffect(() => {
@@ -528,7 +538,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       if (latestLic) setWorkflowLicenseStatus(latestLic);
       if (!latestLic?.isAuthorized) {
         setIsLicenseModalOpen(true);
-        showToast("info", "🔒 流程引擎高级功能已上锁，请先输入绑定本机的加密密码完成设备激活");
+        const featureName = preset.id === "neobi-architect" ? "BI分析部署大师" : "流程引擎";
+        showToast("info", `🔒 ${featureName}高级功能已上锁，请先输入绑定本机的加密密码完成设备激活`);
         return;
       }
     }
@@ -545,6 +556,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
         messages: [],
         activeSkillIds: skillIds || activeSkillIds,
+        mode: currentSessionMode,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -553,6 +565,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         ...targetSession,
         title: effectiveTitle,
         activeSkillIds: skillIds || activeSkillIds,
+        mode: targetSession.mode || currentSessionMode,
       };
     }
 
@@ -588,6 +601,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       modelId: currentModelId,
       messages: updatedMessages,
       activeSkillIds: skillIds || activeSkillIds,
+      mode: targetSession.mode || currentSessionMode,
       updatedAt: Date.now(),
     };
 
@@ -614,7 +628,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       activeMcpServerIds: effectiveMcpIds,
       compactionSummary: targetSession.compactionSummary,
       projectPath: activeProject?.localPath,
-      mode: targetSession.mode || 'default',
+      mode: updatedSession.mode || currentSessionMode || 'standard',
     });
   };
 
@@ -1017,7 +1031,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               externalAttachmentToAdd={pendingComposerAttachment}
               workflowLicenseStatus={workflowLicenseStatus}
               onOpenLicenseModal={onOpenLicenseModal || (() => setIsLicenseModalOpen(true))}
-              mode={activeSession?.mode || 'default'}
+              mode={activeSession?.mode || currentSessionMode}
               onToggleMode={handleToggleMode}
               onSwitchPanelTab={(tab) => {
                 setIsTerminalOpen(true);

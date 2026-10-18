@@ -92,6 +92,45 @@ export const FXIAOKE_SKILL_INSTRUCTION = `【系统全局首要植入规范：�
    - 绝对不向外部暴露任何密钥凭证。
 `;
 
+export const NEOBI_ARCHITECT_INSTRUCTION = `【系统全局首要植入规范：销售易智能分析代码实施与部署大师 (NeoBI Architect)】
+你是一个精通销售易新版智能分析（NeoBI / 配置服务根路径 \`/rest/neobi/v2.0/\`）全生命周期的顶尖代码级部署大师。
+你严格遵循《销售易智能分析代码实施指南》，面向开发人员与执行 Agent，不依赖前端手工拖拽，通过代码与标准 JSON 资产向平台提交持久化定义，实现数据源 (dataResource)、视图 (view)、看板 (board)、报告 (report) 的构建、配置部署与独立对账验收。
+
+【核心工程认知与十步依赖实施链（铁律）】：
+1. 【固定业务口径先行】：在写任何配置前，必须先确定统计对象、主键、去重规则、时间字段与粒度（日/月/年）、时间范围、币种换算、权限类型、零值与空值处理。
+2. 【空间与权限核查】：读取当前租户许可、空间（注意：个人空间负号合法，如 -4166689482228720，负号有明确业务语义，严禁擅自取绝对值）、实体字段与关联候选；先备份被修改资源。
+3. 【数据源建立与对账】：确定主表、从表、连接类型（leftJoin / innerJoin）与连接字段。左连接保留左主表全集，内连接只保留匹配行。关系图必须连通、无环、无孤立节点。必须先对账连接后的基数！
+4. 【独立资源准备】：历史快照、外部数据或共享计算字段先作为独立资源准备，再加入数据源。普通实时 CRM 分析不必经过数据集。
+5. 【视图双套配置严格同步 (web.dataConfig + server)】：
+   - web.dataConfig 负责编辑器字段槽（dimensionSetInfo, measureSetInfo, toolTipDimensionSetInfo 等）、字段属性、展示标签与本地引用标识 (fieldWebId)；
+   - server 负责后端实际查询定义（dimensions, measures, filters, orders, queryConfig）；
+   - 【双套一致铁律】：两套必须严格保持一致！只改一套会导致“能查询但重开编辑丢配置”或“编辑器显示已改但查询仍旧”的不一致！
+   - 保存时清理临时设计器属性（如 dataSetConfig, dataSourceNodeList, gettingData 等），补齐 web.viewBaseOnIndicator。
+6. 【保存后独立查询回读验收】：创建或更新 view 后，必须调用 query/query 执行真实查询回读验证，核对聚合值、分组、排序与筛选结果。预览 (queryView) 不能替代独立查询验收！
+7. 【建立看板并关联报告】：维护视图引用与桌面/移动布局，最后将真实看板 ID 按顺序关联到报告 (report)。
+8. 【配置五大高级交互】：看板全局筛选控件 (filterConfig)、图表联动 (linkage)、维度下钻 (drillInfo)、对象列表穿透 (penetrate)、带参跳转 (jump)。
+9. 【展示与权限配置】：配置展示、缓存周期 (cachePeriod: 缓存优先/12h/4h/1h/30m/10m/5m)、共享与订阅。
+10. 【迁移与部署防错】：跨租户时必须校验模型与字段 ID 映射，导入后独立读回运行。
+
+【统计粒度与基数防错铁律】：
+- 明确统计口径：“商机数”包含原始商机记录数、连接后行数、主键去重数三种完全不同的口径！
+- 当商机左连接一对多子表（如产品明细、跟进记录）后，主表记录数 count 与金额 sum 必然发生重复放大！必须先用可追溯查询获取主表行数、连接后行数与主键去重数对账；严禁通过图表显示格式去掩盖重复金额！
+- 维度使用稳定 ID 识别分组，同名客户或重命名阶段必须保持独立业务组。
+
+【21 类图表配置配方精粹】：
+- 一维图：一个分类维度 + 多个度量；
+- 多维图：轴维度 + 分组维度 + 一个度量；
+- 阶段漏斗 (biViewFunnel) vs 通用漏斗 (biViewCommonFunnel)：阶段漏斗保存 stageSet[].width/height、stageConfigSet 与阶段身份；通用漏斗使用普通维度与 funnelHeightDataSets/funnelWidthDataSets，两套序列化完全不同，严禁混淆；
+- 地图：地域维度必须是合法地理编码；
+- 双轴图：左/右轴范围与度量单位严格匹配。
+
+【API 编码与调用范式】：
+- 接口统一以 /rest/neobi/v2.0/ 为基准；
+- POST/PATCH 使用 application/x-www-form-urlencoded，每个对象/数组参数先 JSON.stringify 再编码到表单；
+- 严禁把 modelJson 双重字符串化；
+- 核心接口：dataResource/save, view/addView, view/updateView, view/getView, query/queryView, query/query, board/addBoard, board/updateBoard, report/addReport, report/getReport。
+`;
+
 export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范：Salesforce CLI (sf v2) 架构与安全操作规范】
 你是一个精通 Salesforce 全生态架构与官方 sf v2 工具链的顶尖专家。
 你严格遵守 Salesforce 安全优先模型（Safety-First Model），始终以组织真实元数据为唯一事实基线。
@@ -152,9 +191,19 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
   if (
     skillId === "preset-salesforce-architect" ||
     skillId === "skill-salesforce-cli" ||
-    skillId === "salesforce-cli"
+    skillId === "salesforce-cli" ||
+    skillId === "preset-neobi-architect" ||
+    skillId === "skill-neobi-architect" ||
+    skillId === "neobi-architect"
   ) {
     return SALESFORCE_SKILL_INSTRUCTION;
+  }
+  if (
+    skillId === "preset-neobi-architect" ||
+    skillId === "skill-neobi-architect" ||
+    skillId === "neobi-architect"
+  ) {
+    return NEOBI_ARCHITECT_INSTRUCTION;
   }
   const raw = OBFUSCATED_BUILTIN_SKILLS[skillId];
   if (!raw) return null;
@@ -191,7 +240,94 @@ export function isProtectedBuiltinSkill(skillId: string): boolean {
 /**
  * 销售易 Agent Harness 本地工具规范 (严格封装在主进程内核，不对前端暴露)
  */
+/**
+ * DeepSeek Harness 官方 PTC 模式工具定义 (Program-Through-Chat)
+ */
+/**
+ * DeepSeek Harness 官方极简模式工具定义 (Minimal Mode - 仅保留终端工具)
+ */
+export const DSH_MINIMAL_TOOL_SPEC = [
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "【DeepSeek Harness 官方极简模式终端工具】在当前项目工作区根目录下执行命令行指令并返回结果（受物理沙箱严格约束，仅限当前项目目录内）。极简模式下 Agent 仅使用终端命令推进与完成任务。",
+      parameters: {
+        type: "object",
+        properties: {
+          command: {
+            type: "string",
+            description: "待执行的 Bash Shell 命令行指令（禁止执行整盘扫描命令）",
+          },
+          description: {
+            type: "string",
+            description: "简要说明命令的作用（5-10个字），如 \"查看工作区状态\"、\"运行编译\"",
+          },
+          workdir: {
+            type: "string",
+            description: "可选的执行目录，必须为当前项目根目录或其子目录",
+          },
+          background: {
+            type: "boolean",
+            description: "是否在后台运行长时命令（非阻塞，立即返回 jobId，可通过 job_output 查看输出或等待其完成）",
+          },
+          timeoutMs: {
+            type: "number",
+            description: "超时时间（毫秒），默认为 30000ms",
+          },
+        },
+        required: ["command"],
+      },
+    },
+  },
+];
+
+export const DSH_PTC_TOOL_SPEC = [
+  {
+    type: 'function',
+    function: {
+      name: 'run_code',
+      description: '【DeepSeek Harness 官方高级 PTC 模式 (Program-Through-Chat)】执行一段异步 JavaScript/TypeScript 脚本程序。代码运行在隔离环境中，可直接通过全局 `await tools.<toolName>(args)` 并行、循环或条件组合调用任何本地与 CRM 工具，支持控制台日志 console.log 与最终返回值 return。适用于多步骤批量处理、复杂管道与数据转换，一次性高效完成。',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: '待执行的完整异步 JavaScript/TypeScript 脚本代码体（支持顶层 await 与 return，可直接调用 tools.* 与 console.log）',
+          },
+          description: {
+            type: 'string',
+            description: '简述本段程序的目标或作用（例如 "批量扫描Apex类并更新接口说明"）',
+          },
+        },
+        required: ['code'],
+      },
+    },
+  },
+];
+
 export const CRM_HARNESS_TOOLS_SPEC = [
+  {
+    type: 'function',
+    function: {
+      name: 'run_code',
+      description: '【DeepSeek Harness 官方高级 PTC 模式 (Program-Through-Chat)】执行一段异步 JavaScript/TypeScript 脚本程序。代码运行在隔离环境中，可直接通过全局 `await tools.<toolName>(args)` 并行、循环或条件组合调用任何本地与 CRM 工具，支持控制台日志 console.log 与最终返回值 return。适用于多步骤批量处理、复杂管道与数据转换，一次性高效完成。',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: '待执行的完整异步 JavaScript/TypeScript 脚本代码体（支持顶层 await 与 return，可直接调用 tools.* 与 console.log）',
+          },
+          description: {
+            type: 'string',
+            description: '简述本段程序的目标或作用',
+          },
+        },
+        required: ['code'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {

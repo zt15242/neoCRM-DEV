@@ -17,6 +17,7 @@ import {
   FileCheck, 
   Layers, 
   Printer,
+  BarChart3,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -90,6 +91,8 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
         return Box;
       case 'Code2':
         return Code2;
+      case 'BarChart3':
+        return BarChart3;
       default:
         return Sparkles;
     }
@@ -143,7 +146,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
               {presets.map((p) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isLocked = (p.id === 'autoflow-architect' || p.id === 'approval-architect') && !workflowLicenseStatus?.isAuthorized;
+                const isLocked = (p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect') && !workflowLicenseStatus?.isAuthorized;
 
                 return (
                   <button

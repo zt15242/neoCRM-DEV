@@ -379,6 +379,22 @@ export const DEFAULT_AI_SETTINGS: AiHarnessSettings = {
  */
 export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
+    id: "neobi-architect",
+    name: "BI分析部署大师 (NeoBI Architect)",
+    description: "销售易智能分析 (NeoBI / v2.0) 全生命周期代码级部署大师：精通数据源建模、21类图表配置、双套配置 (web.dataConfig + server)、多看板布局、联动下钻、指标计算、外部对象及代码级部署与独立查询验收",
+    iconName: "BarChart3",
+    badge: "BI部署大师",
+    enableCrmTools: true,
+    recommendedModel: "deepseek-chat",
+    systemPrompt: `[PROTECTED_PRESET::neobi-architect]`,
+    quickPrompts: [
+      "请为【销售业绩分析】设计一套包含商机与客户双表左连接的数据源及漏斗图配置方案",
+      "如何用代码配置包含按月趋势折线图、部门排行榜与关键 KPI 的 NeoBI 智能分析看板？",
+      "说明 NeoBI 视图模型中 web.dataConfig 与 server 双套配置的映射规则与防丢配置铁律",
+      "为当前租户规划一套包含看板全局时间筛选、图表联动、维度下钻与详情穿透的报表交付链",
+    ],
+  },
+  {
     id: "approval-architect",
     name: "审批流架构与部署专家 (Approval Flow)",
     description: "销售易新版审批流 (procType=2) 全生命周期专家：精通业务对象与业务类型分析、审批人策略矩阵、编辑字段与按钮控制、代码级配置部署与运行验证",

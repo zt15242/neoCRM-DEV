@@ -31,7 +31,8 @@ import {
   StopCircle,
   ClipboardCheck,
   GitCommit,
-  Sparkles
+  Sparkles,
+  Code2
 } from 'lucide-react';
 
 interface ToolCallCardProps {
@@ -244,6 +245,13 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           badge: '代码变更',
           color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
         };
+      case 'run_code':
+        return {
+          title: `执行 PTC 脚本: ${toolCall.arguments?.description || '程序化运行'}`,
+          icon: Code2,
+          badge: 'PTC 运行态',
+          color: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+        };
       case 'load_workspace_dependencies':
         return {
           title: '探测宿主本地工具链与开发依赖环境',
@@ -327,7 +335,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question', 'exit_plan_mode', 'job_list', 'job_output', 'job_kill', 'skill', 'workspace_changes', 'load_workspace_dependencies', 'create_record', 'update_record', 'delete_record', 'create_custom_entity', 'create_custom_field'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question', 'exit_plan_mode', 'job_list', 'job_output', 'job_kill', 'skill', 'workspace_changes', 'load_workspace_dependencies', 'create_record', 'update_record', 'delete_record', 'create_custom_entity', 'create_custom_field', 'run_code'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">

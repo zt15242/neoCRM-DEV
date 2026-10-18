@@ -950,4 +950,66 @@ export class DshToolService {
     };
   }
 
+  // ================= 18. run_code (DeepSeek Harness 官方 PTC 模式程序执行器) =================
+  public async executePtcCode(
+    params: { code: string; description?: string },
+    toolsContext: Record<string, Function>,
+    timeoutMs = 60000
+  ): Promise<{ value: any; logs: string[]; executionTimeMs: number; error?: string }> {
+    const startTime = Date.now();
+    const logs: string[] = [];
+    const customConsole = {
+      log: (...args: any[]) =>
+        logs.push(args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')),
+      info: (...args: any[]) =>
+        logs.push('[INFO] ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')),
+      warn: (...args: any[]) =>
+        logs.push('[WARN] ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')),
+      error: (...args: any[]) =>
+        logs.push('[ERROR] ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')),
+    };
+
+        try {
+      let rawCode = (params.code || "").trim();
+      rawCode = rawCode.replace(/^\`\`\`(?:javascript|js|typescript|ts)?\s*/i, "").replace(/\s*\`\`\`$/i, "").trim();
+
+      let executableCode = rawCode;
+      try {
+        const esbuild = require("esbuild");
+        const wrapped = "async function __ptc_wrapper__() {\n" + rawCode + "\n}";
+        const transformed = esbuild.transformSync(wrapped, { loader: "ts", target: "es2022" }).code;
+        const bodyMatch = transformed.match(/async function __ptc_wrapper__\(\)\s*\{([\s\S]*)\}\s*$/);
+        if (bodyMatch && bodyMatch[1]) {
+          executableCode = bodyMatch[1];
+        }
+      } catch {
+        // esbuild 转换失败或不可用时降级使用原始代码
+      }
+
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const fn = new AsyncFunction("tools", "console", executableCode);
+
+      const execPromise = fn(toolsContext, customConsole);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`PTC 程序执行超时 (${timeoutMs}ms)`)), timeoutMs)
+      );
+
+      const result = await Promise.race([execPromise, timeoutPromise]);
+      const duration = Date.now() - startTime;
+
+      return {
+        value: result !== undefined ? result : null,
+        logs: logs.slice(-200),
+        executionTimeMs: duration,
+      };
+    } catch (err: any) {
+      return {
+        value: null,
+        logs: logs.slice(-200),
+        executionTimeMs: Date.now() - startTime,
+        error: `PTC 程序运行异常: ${err.message}`,
+      };
+    }
+  }
+
 }

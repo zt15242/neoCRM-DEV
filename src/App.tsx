@@ -309,6 +309,7 @@ export const App: React.FC = () => {
       setAccountHistory(history);
     } catch (e: any) {
       showToast('error', `续期失败: ${e.message}`);
+      throw e;
     }
   };
 

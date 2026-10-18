@@ -138,7 +138,7 @@ declare global {
         activeMcpServerIds?: string[];
         compactionSummary?: any;
         projectPath?: string;
-        mode?: "default" | "plan";
+        mode?: "standard" | "ptc" | "minimal" | "plan" | "default";
       }) => Promise<boolean>;
       aiAbortChatStream: (requestId: string) => Promise<boolean>;
       aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;

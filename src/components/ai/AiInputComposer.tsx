@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   Printer,
   Workflow,
+  BarChart3,
   FileCheck,
   Terminal,
   Globe,
@@ -34,8 +35,10 @@ import {
   Lock,
   Unlock,
   Activity,
-  GitCommit
+  GitCommit,
+  Zap
 } from 'lucide-react';
+import { AiSessionMode } from '../../../shared/types';
 import { 
   AiContextEntityRef, 
   AiFileAttachment, 
@@ -71,8 +74,8 @@ interface ComposerContext {
   externalAttachmentToAdd?: AiFileAttachment | null;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
-  mode?: 'default' | 'plan';
-  onToggleMode?: (mode: 'default' | 'plan') => void;
+  mode?: AiSessionMode;
+  onToggleMode?: (mode: AiSessionMode) => void;
   onSwitchPanelTab?: (tab: 'files' | 'changes' | 'jobs' | 'artifacts' | 'terminal' | 'tools') => void;
 }
 
@@ -118,8 +121,8 @@ interface AiInputComposerProps {
   externalAttachmentToAdd?: AiFileAttachment | null;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
-  mode?: 'default' | 'plan';
-  onToggleMode?: (mode: 'default' | 'plan') => void;
+  mode?: AiSessionMode;
+  onToggleMode?: (mode: AiSessionMode) => void;
   onSwitchPanelTab?: (tab: 'files' | 'changes' | 'jobs' | 'artifacts' | 'terminal' | 'tools') => void;
 }
 
@@ -158,7 +161,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   externalAttachmentToAdd,
   workflowLicenseStatus,
   onOpenLicenseModal,
-  mode = 'default',
+  mode = 'standard',
   onToggleMode,
   onSwitchPanelTab,
 }) => {
@@ -168,6 +171,48 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [activeCommand, setActiveCommand] = useState<SlashCommandItem | null>(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
+
+  const DSH_MODES = [
+    {
+      id: 'standard' as AiSessionMode,
+      label: '标准模式',
+      shortLabel: '⚡️ 标准模式',
+      badge: '全量工具',
+      desc: '处理代码、文件和资料，适合大多数任务。Agent 按需使用检索、编辑和终端等全量工具。',
+      icon: Sparkles,
+      color: 'text-amber-700 bg-amber-50 border-amber-300',
+    },
+    {
+      id: 'ptc' as AiSessionMode,
+      label: 'PTC 模式',
+      shortLabel: '🧬 PTC 模式',
+      badge: '程序化执行',
+      desc: '包含标准模式的所有能力，更适合批量调用工具，通过编写脚本对结果进行筛选与汇总。',
+      icon: Code2,
+      color: 'text-emerald-700 bg-emerald-50 border-emerald-300',
+    },
+    {
+      id: 'minimal' as AiSessionMode,
+      label: '极简模式',
+      shortLabel: '🍃 极简模式',
+      badge: '终端基线',
+      desc: '仅使用终端 Shell 工具完成任务，不加载复杂 Skills 与附加辅助，适合基准测试与对比。',
+      icon: Zap,
+      color: 'text-sky-700 bg-sky-50 border-sky-300',
+    },
+    {
+      id: 'plan' as AiSessionMode,
+      label: '方案规划',
+      shortLabel: '📋 方案规划',
+      badge: '方案规划',
+      desc: '先做技术调研与架构设计，生成完整方案经您评审确认后再执行。',
+      icon: Layers,
+      color: 'text-indigo-700 bg-indigo-50 border-indigo-300',
+    },
+  ];
+
+  const currentModeObj = DSH_MODES.find((m) => m.id === mode || (mode === 'default' && m.id === 'standard')) || DSH_MODES[0];
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ================= 触发弹窗状态 (Trigger Menus for / and @) =================
@@ -413,29 +458,55 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       },
     },
     {
-      id: 'plan_on',
-      command: '/plan on',
-      name: '开启方案规划模式 (Plan Mode)',
+      id: 'mode_standard',
+      command: '/standard',
+      name: 'DSH 标准模式 (Standard Mode)',
+      description: 'DSH 官方经典自主智能体，按步调用原生工具闭环推进到底',
+      icon: Sparkles,
+      iconColor: 'text-amber-600 bg-amber-50 border-amber-200',
+      badge: '模式切换',
+      action: (ctx) => {
+        ctx.onToggleMode?.('standard');
+        ctx.showToast?.('info', '已切换至「DSH 标准模式」：支持 20+ 个原生工具自主闭环');
+      },
+    },
+    {
+      id: 'mode_ptc',
+      command: '/ptc',
+      name: 'DSH PTC 模式 (Program-Through-Chat)',
+      description: 'DSH 官方高级模式：大模型编写代码调用 tools.* 一次性执行复合管道',
+      icon: Code2,
+      iconColor: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+      badge: '模式切换',
+      action: (ctx) => {
+        ctx.onToggleMode?.('ptc');
+        ctx.showToast?.('info', '已切换至「DSH PTC 模式」：模型将编写脚本调用 tools.* 一次性运行完成');
+      },
+    },
+    {
+      id: 'mode_minimal',
+      command: '/minimal',
+      name: 'DSH 极简模式 (Minimal Mode)',
+      description: 'Agent 仅使用终端 Shell 工具完成任务，适合测试和对比其基础表现',
+      icon: Zap,
+      iconColor: 'text-sky-600 bg-sky-50 border-sky-200',
+      badge: '模式切换',
+      action: (ctx) => {
+        ctx.onToggleMode?.('minimal');
+        ctx.showToast?.('info', '已切换至「DSH 极简模式」：仅使用终端 Shell 工具完成任务');
+      },
+    },
+    {
+      id: 'mode_plan',
+      command: '/plan',
+      name: '方案规划模式 (Plan Mode)',
       description: '深入调研与构思架构方案，经您评审确认后再执行',
       icon: Layers,
       iconColor: 'text-indigo-600 bg-indigo-50 border-indigo-200',
       badge: '模式切换',
       action: (ctx) => {
         ctx.onToggleMode?.('plan');
-        ctx.showToast?.('info', '已开启方案规划模式 (Plan Mode)');
-      },
-    },
-    {
-      id: 'plan_off',
-      command: '/plan off',
-      name: '开启直接执行模式 (Default Mode)',
-      description: '自主行动闭环执行到底，直接调用工具完成落地',
-      icon: Sparkles,
-      iconColor: 'text-amber-600 bg-amber-50 border-amber-200',
-      badge: '模式切换',
-      action: (ctx) => {
-        ctx.onToggleMode?.('default');
-        ctx.showToast?.('info', '已开启直接执行模式 (Default Mode)');
+        ctx.showToast?.('info', '已切换至「方案规划模式 (Plan Mode)」：AI将先调研设计，获批后执行');
       },
     },
     {
@@ -1051,38 +1122,63 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             <span className="truncate max-w-[130px] font-semibold text-slate-800">{tenantName}</span>
           </div>
 
-          {/* DSH 运行模式切换器 (Default Mode vs Plan Mode) */}
-          <button
-            type="button"
-            onClick={() => {
-              const nextMode = mode === 'plan' ? 'default' : 'plan';
-              onToggleMode?.(nextMode);
-              showToast?.(
-                'info',
-                nextMode === 'plan'
-                  ? '已切换为「方案规划模式 (Plan Mode)」：AI将先调研设计，获批后执行'
-                  : '已切换为「直接执行模式 (Default Mode)」：AI将自主行动闭环执行到底'
-              );
-            }}
-            className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs cursor-pointer transition-all border ${
-              mode === 'plan'
-                ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 shadow-2xs font-semibold'
-                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900 font-medium'
-            }`}
-            title={mode === 'plan' ? '当前处于方案规划模式：点击切换为直接执行' : '当前处于直接执行模式：点击切换为方案规划'}
-          >
-            {mode === 'plan' ? (
-              <>
-                <Layers className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                <span>📋 方案规划</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span>⚡️ 直接执行</span>
-              </>
+          {/* DSH 4 种运行模式选择器 (标准模式 / PTC模式 / 极简模式 / 方案规划) */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setModeDropdownOpen(!modeDropdownOpen)}
+              className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs cursor-pointer transition-all border shadow-2xs ${currentModeObj.color} font-semibold`}
+              title="点击切换运行模式: 标准模式 / PTC模式 / 极简模式 / 方案规划"
+            >
+              <currentModeObj.icon className="w-3.5 h-3.5 shrink-0" />
+              <span>{currentModeObj.shortLabel}</span>
+              <ChevronDown className="w-3 h-3 opacity-60 ml-0.5" />
+            </button>
+
+            {modeDropdownOpen && (
+              <div className="absolute left-0 bottom-full mb-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 p-2 z-50 text-xs space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  DSH 智能体运行模式
+                </div>
+                {DSH_MODES.map((m) => {
+                  const isCur = m.id === mode || (mode === 'default' && m.id === 'standard');
+                  const Icon = m.icon;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        onToggleMode?.(m.id);
+                        setModeDropdownOpen(false);
+                        showToast?.('info', `已切换至「${m.label}」: ${m.desc}`);
+                      }}
+                      className={`w-full text-left p-2 rounded-xl flex items-start space-x-2.5 transition-colors cursor-pointer ${
+                        isCur
+                          ? 'bg-slate-100/90 text-slate-900 font-semibold'
+                          : 'hover:bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-lg border shrink-0 mt-0.5 ${m.color}`}>
+                        <Icon className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs">{m.label}</span>
+                          <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">
+                            {m.badge}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-normal leading-relaxed mt-0.5">
+                          {m.desc}
+                        </p>
+                      </div>
+                      {isCur && <Check className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-1" />}
+                    </button>
+                  );
+                })}
+              </div>
             )}
-          </button>
+          </div>
 
           {/* 角色标识徽标 */}
           {currentPresetName && (

@@ -368,6 +368,8 @@ export interface AiChatMessage {
   durationMs?: number;
 }
 
+export type AiSessionMode = 'standard' | 'ptc' | 'minimal' | 'plan' | 'default';
+
 export interface AiChatSession {
   id: string;
   title: string;
@@ -379,7 +381,7 @@ export interface AiChatSession {
   entityRefs?: AiContextEntityRef[];
   activeSkillIds?: string[]; // 当前会话挂载的技能 ID
   compactionSummary?: AiCompactedSummary; // 上下文压缩摘要
-  mode?: 'default' | 'plan'; // 运行模式: 'default' (默认直接执行) | 'plan' (计划模式)
+  mode?: AiSessionMode; // 运行模式: 'standard' (DSH标准模式) | 'ptc' (PTC代码执行模式) | 'minimal' (极简模式) | 'plan' (方案规划模式)
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;

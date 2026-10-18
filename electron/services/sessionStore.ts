@@ -207,6 +207,41 @@ export class SessionStore {
           windowsHide: true,
           shell: true,
         });
+
+        // 关键修复：sf org login sfdx-url 执行后，若 Salesforce 启用了 Refresh Token 轮转，会生成新 refresh_token
+        // 通过 sf org auth show-sfdx-auth-url 提取最新 refresh_token，同步写回当前会话，避免旧令牌作废
+        try {
+          const authOut = execSync(`"${cmd}" org auth show-sfdx-auth-url --target-org ${alias} --json`, {
+            encoding: 'utf-8',
+            windowsHide: true,
+            shell: true,
+          });
+          const jsonStart = authOut.indexOf('{');
+          const jsonEnd = authOut.lastIndexOf('}');
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            const parsed = JSON.parse(authOut.slice(jsonStart, jsonEnd + 1));
+            const sfdxUrl = parsed.result?.sfdxAuthUrl;
+            if (sfdxUrl) {
+              const m = sfdxUrl.match(/^force:\/\/[^:]+:[^:]+:([^@]+)@/);
+              if (m && m[1] && m[1] !== tokenData.refresh_token) {
+                tokenData.refresh_token = m[1];
+                console.log("[Salesforce] 已从 CLI 提取最新轮转的 Refresh Token 并同步回会话");
+                try {
+                  const storage = this.readStorage();
+                  if (storage.current?.isLoggedIn && storage.current.tokenData) {
+                    storage.current.tokenData.refresh_token = m[1];
+                  }
+                  const accId = storage.current?.activeAccountId;
+                  if (accId) {
+                    const h = storage.history.find((item) => item.id === accId);
+                    if (h && h.tokenData) h.tokenData.refresh_token = m[1];
+                  }
+                  this.writeStorage(storage);
+                } catch {}
+              }
+            }
+          }
+        } catch {}
       } catch (err: any) {
         console.warn('sf org login sfdx-url 同步提示:', err.message);
       } finally {

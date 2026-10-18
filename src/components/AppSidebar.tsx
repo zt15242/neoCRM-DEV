@@ -38,7 +38,7 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame } from 'lucide-react';
+import { Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame, BarChart3 } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
 export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai';
@@ -142,6 +142,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         return Box;
       case 'Code2':
         return Code2;
+      case 'BarChart3':
+        return BarChart3;
       default:
         return Sparkles;
     }
@@ -211,13 +213,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               {AI_AGENT_PRESETS.map((p: any) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isFlow = p.id === 'autoflow-architect' || p.id === 'approval-architect';
+                const isLocked = p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect';
 
                 return (
                   <button
                     key={p.id}
                     onClick={() => {
-                      if (isFlow && !workflowLicenseStatus?.isAuthorized) {
+                      if (isLocked && !workflowLicenseStatus?.isAuthorized) {
                         onOpenLicenseModal?.();
                         setPresetDropdownOpen(false);
                         return;
@@ -233,7 +235,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                       <Icon className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">{p.name.split(' (')[0]}</span>
                     </div>
-                    {isFlow ? (
+                    {isLocked ? (
                       workflowLicenseStatus?.isAuthorized ? (
                         <span
                           onClick={(e) => {

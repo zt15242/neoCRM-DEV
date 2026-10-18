@@ -25,6 +25,8 @@ interface SessionDashboardProps {
   session: SessionState;
   onRefresh: () => void | Promise<void>;
   onReLogin?: () => void;
+  onReLoginBrowser?: () => void;
+  onReLoginEmbedded?: () => void;
   onLogout: () => void;
   onOpenDesigner: (type: 'web' | 'h5') => void;
   onTestApi: () => Promise<{ success: boolean; data?: any; error?: string }>;
@@ -36,6 +38,8 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
   session,
   onRefresh,
   onReLogin,
+  onReLoginBrowser,
+  onReLoginEmbedded,
   onLogout,
   onOpenDesigner,
   onTestApi,
@@ -94,6 +98,7 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
     } catch (e: any) {
       if (e.message?.includes('invalid_grant') || e.message?.includes('expired access/refresh token')) {
         setTokenExpiredCloud(true);
+        showToast?.('info', '云端 Refresh Token 已失效，请通过浏览器或内嵌窗口完成重新登录换取');
       }
     } finally {
       setIsRefreshing(false);
@@ -245,6 +250,36 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
               环境: {environment?.name} ({tokenData?.instance_uri})
             </p>
           </div>
+
+          {(timeLeftStr.includes('已过期') || tokenExpiredCloud) && (
+            <div className="mt-2.5 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between text-xs gap-2">
+              <span className="text-amber-800 text-[11px] font-medium truncate">
+                云端会话已到期，请立即重新换取 Token：
+              </span>
+              <div className="flex items-center space-x-1.5 shrink-0">
+                {onReLoginBrowser && (
+                  <button
+                    onClick={onReLoginBrowser}
+                    className="px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-md text-[11px] font-semibold transition-colors cursor-pointer flex items-center space-x-1 shadow-xs"
+                    title="呼起系统默认浏览器登录并换取最新 Token"
+                  >
+                    <Globe className="w-3 h-3" />
+                    <span>浏览器登录 (推荐)</span>
+                  </button>
+                )}
+                {onReLoginEmbedded && (
+                  <button
+                    onClick={onReLoginEmbedded}
+                    className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-md text-[11px] font-medium transition-colors cursor-pointer flex items-center space-x-1"
+                    title="在应用内嵌窗口中登录换取最新 Token"
+                  >
+                    <KeyRound className="w-3 h-3" />
+                    <span>内嵌窗口</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
