@@ -29,7 +29,7 @@
    - **开发者证书**：在 **「开发者证书 devCertificate」** 输入框中粘贴 PaaS 开发者证书；
    - 点击右下角 **「保存修改」**。
 
-![纷享销客连接器配置界面](/var/folders/y8/1nscgpy16gn1pzqf1_xnc4yw0000gn/T/codex-clipboard-919374da-4795-4c01-80de-296b3e8ec366.png)
+![纷享销客连接器配置界面](/Users/xiiaowu/Desktop/销售易/neoCRM-DEV/docs_screenshots/02_edit_connector_modal.png)
 
 > 💡 **提示**：系统已实现动态联动，保存修改后当前会话会立即同步最新凭据，无需退出客户端即可生效。
 
@@ -37,11 +37,12 @@
 
 ## 三、 第二步：激活本地项目工作区
 
-1. 在左侧 **`Projects`** 列表中，找到或新建目标本地项目目录（例如 `佳能中国`）；
-2. **双击**项目名称（如 `佳能中国`），使其右侧亮起 **「当前」** 徽标，完成工作区激活；
-3. 激活后，所有拉取的代码、元数据、脚本以及 Git 版本仓库都将严格锚定在该目录下。
+1. 在连接器中心确认纷享销客连接器处于 **「生效中」** 且 **「凭证已配」** 状态；
+2. 在左侧 **`Projects`** 列表中，找到或新建目标本地项目目录（例如 `佳能中国`）；
+3. **双击**项目名称（如 `佳能中国`），使其右侧亮起 **「当前」** 徽标，完成工作区激活；
+4. 激活后，所有拉取的代码、元数据、脚本以及 Git 版本仓库都将严格锚定在该目录下。
 
-![项目工作区激活与主工作台](/var/folders/y8/1nscgpy16gn1pzqf1_xnc4yw0000gn/T/codex-clipboard-57b54e70-0cd4-4bdd-8c66-6bb5b8e830cb.png)
+![连接器中心与当前工作区环境](/Users/xiiaowu/Desktop/销售易/neoCRM-DEV/docs_screenshots/01_connectors_hub.png)
 
 ---
 
@@ -54,16 +55,17 @@
    - 自动向 OpenAPI v2 接口获取 150+ 个业务对象列表与核心字段 Describe 字典；
    - 自动通过微服务网关 `POST /FHH/EMDHFUNC/biz/query` 提取租户全量 APL 函数的 Groovy 源代码；
    - 自动在当前工作区初始化 Git 仓库并执行首次基线快照。
+   - 工具调用全部绿色通过，无任何沙箱拦截或报错。
 
-![智能体执行代码拉取过程](/var/folders/y8/1nscgpy16gn1pzqf1_xnc4yw0000gn/T/codex-clipboard-f657f507-c721-4bc7-a5a2-19950bacfaeb.png)
+![智能体执行代码拉取全绿完成](/Users/xiiaowu/Desktop/销售易/neoCRM-DEV/docs_screenshots/03_ai_studio_pull_clean.png)
 
 ---
 
 ## 五、 第四步：本地工程资产对账与目录结构
 
-拉取完成后，右侧 **项目文件树** 与产物列表将实时刷新，标准工程目录组织如下：
+拉取完成后，右侧 **项目文件树** 与产物列表将实时刷新，展开 `src/` 即可看到完整的 `apl/` 源码目录：
 
-![右侧项目文件树结构](/var/folders/y8/1nscgpy16gn1pzqf1_xnc4yw0000gn/T/codex-clipboard-510672ff-1b58-42a9-9a25-f3cac150f70e.png)
+![本地工程结构与右侧文件树 (包含 src/apl/ 源码仓库)](/Users/xiiaowu/Desktop/销售易/neoCRM-DEV/docs_screenshots/04_project_files_expanded.png)
 
 ### 核心目录解析：
 
@@ -109,7 +111,7 @@
 
 ### Q2：提示【安全沙箱拦截】越界访问被拒绝？
 - **排查原因**：当前对话会话绑定的项目路径与实际文件所在目录不一致。
-- **解决方式**：双击左侧项目列表中的目标工程（如 `佳能中国`），确保顶部与侧边栏高亮为该项目后，再发起拉取。
+- **解决方式**：双击左侧项目列表中的目标工程（如 `佳能中国`），确保顶部与侧边栏高亮为该项目后，再发起拉取。当前版本已具备根路径自适应锚定能力。
 
 ### Q3：如何离线测试拉取到的数据与脚本？
 - 在当前工作区根目录下，可在软件内置终端直接执行：
