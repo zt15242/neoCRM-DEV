@@ -608,4 +608,193 @@ export class FxiaokeService {
     }
   }
 
+
+  // ==================== 纷享销客 PaaS / APL 开发者接口 (share-dev 官方协议) ====================
+
+  /**
+   * 核心网关统一请求转发 (/FHH/EMDH...)
+   */
+  public async requestFHH(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    subPath: string,
+    body: any = {}
+  ): Promise<any> {
+    const certificate = env.devCertificate || tokenData.access_token || "";
+    if (!certificate) {
+      throw new Error("缺少纷享销客开发者证书 (devCertificate)，请在连接器配置中填写开发者证书");
+    }
+
+    let cleanPath = subPath.replace(/^\/+/, "");
+    cleanPath = cleanPath.replace(/^FHH\/+/, "");
+    cleanPath = cleanPath.replace(/^EM\dH/, "EMDH");
+
+    // 默认使用官方主站域名，私有云或独立域名使用 env.neoBaseURL
+    let domain = "https://www.fxiaoke.com";
+    if (env.neoBaseURL && !env.neoBaseURL.includes("open.fxiaoke.com") && !env.neoBaseURL.includes("open-")) {
+      domain = env.neoBaseURL.replace(/\/+$/, "");
+    }
+
+    const traceId = `E-E.desktop-ide-${Date.now()}`;
+    const url = `${domain}/FHH/${cleanPath}?traceId=${traceId}`;
+
+    const headers: Record<string, string> = {
+      Authorization: certificate,
+      "Content-Type": "application/json; charset=utf-8",
+      "Accept-Language": "zh-cn",
+    };
+
+    const res = await axios.post(url, body, { headers, timeout: 20000 });
+    const data = res.data;
+
+    if (data?.Result && data.Result.StatusCode !== 0) {
+      throw new Error(data.Result.FailureMessage || `PaaS API 失败: StatusCode ${data.Result.StatusCode}`);
+    }
+
+    return data?.Value !== undefined ? data.Value : data;
+  }
+
+  /**
+   * 基于 Token 的异步任务长轮询 (用于 CompileCheck、Analyze、Debug、Update 等)
+   */
+  public async pollTask(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    subPath: string,
+    body: any = {},
+    maxRetries = 12,
+    intervalMs = 600
+  ): Promise<any> {
+    const taskToken = body.token || `${Date.now()}-${randomUUID()}`;
+    const payload = { ...body, token: taskToken };
+
+    for (let i = 0; i < maxRetries; i++) {
+      const res = await this.requestFHH(env, tokenData, subPath, payload);
+      // 若返回结果中不含 token 或 token 已被消费，表明后台异步处理完成
+      if (!res?.token) {
+        return res;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new Error(`任务轮询超时 (${maxRetries * intervalMs}ms): ${subPath}`);
+  }
+
+  /**
+   * 拉取租户全部 APL 业务函数列表与源码 (POST /FHH/EMDHFUNC/biz/query)
+   */
+  public async fetchAPLList(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    pageSize = 3000,
+    pageNumber = 1
+  ): Promise<any[]> {
+    const res = await this.requestFHH(env, tokenData, "/EMDHFUNC/biz/query", { pageSize, pageNumber });
+    return res?.function || res?.data?.function || (Array.isArray(res) ? res : []);
+  }
+
+  /**
+   * 获取单个 APL 函数详情与最新源码 (POST /FHH/EMDHFUNC/biz/find)
+   */
+  public async getAPLDetail(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    apiName: string,
+    bindingObjectApiName?: string
+  ): Promise<any> {
+    return await this.requestFHH(env, tokenData, "/EMDHFUNC/biz/find", {
+      api_name: apiName,
+      binding_object_api_name: bindingObjectApiName || "",
+    });
+  }
+
+  /**
+   * 对 APL 源码进行语法编译检查 (POST /FHH/EMDHFUNC/runtime/compileCheck)
+   */
+  public async compileCheckAPL(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    apiName: string,
+    body: string
+  ): Promise<{ success: boolean; compileError?: string }> {
+    return await this.pollTask(env, tokenData, "/EMDHFUNC/runtime/compileCheck", {
+      function: { api_name: apiName, body },
+    });
+  }
+
+  /**
+   * 保存或更新 APL 函数代码体 (POST /FHH/EMDHFUNC/biz/updateBody)
+   */
+  public async updateAPLBody(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    apiName: string,
+    body: string,
+    commitLog = "Update from NeoCRM AI Studio"
+  ): Promise<any> {
+    return await this.pollTask(env, tokenData, "/EMDHFUNC/biz/updateBody", {
+      function: {
+        api_name: apiName,
+        body,
+        commit_log: commitLog,
+      },
+    });
+  }
+
+  /**
+   * 在线调试运行 APL 函数 (POST /FHH/EMDHFUNC/runtime/debug)
+   */
+  public async debugAPL(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    params: {
+      apiName: string;
+      code: string;
+      bindingObjectApiName?: string;
+      dataSourceRecordId?: string;
+      inputs?: Array<{ name: string; type: string; value: any }>;
+    }
+  ): Promise<{ success: boolean; logInfo?: string; runResult?: any; errorInfo?: any }> {
+    return await this.pollTask(env, tokenData, "/EMDHFUNC/runtime/debug", {
+      api_name: params.apiName,
+      binding_object_api_name: params.bindingObjectApiName || "NONE",
+      data_source: params.dataSourceRecordId || "",
+      function: {
+        api_name: params.apiName,
+        body: params.code,
+      },
+      input_data: params.inputs || [],
+    });
+  }
+
+  /**
+   * 拉取 PWC 前端组件代码清单与文件 (POST /FHH/EMDHCompBuild/VscodeExtension/downloadCode)
+   */
+  public async fetchPWCComponents(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    type: "Component" | "Plugin" = "Component",
+    apiName?: string
+  ): Promise<any[]> {
+    const res = await this.requestFHH(env, tokenData, "/EMDHCompBuild/VscodeExtension/downloadCode", {
+      type,
+      apiName: apiName || "",
+    });
+    return res?.components || res?.data?.components || (Array.isArray(res) ? res : []);
+  }
+
+  /**
+   * 下载 PWC 组件单文件 (Base64 解码) (POST /FHH/EMDHCompBuild/VscodeExtension/downloadFile)
+   */
+  public async downloadPWCFile(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    nPath: string
+  ): Promise<Buffer> {
+    const res = await this.requestFHH(env, tokenData, "/EMDHCompBuild/VscodeExtension/downloadFile", {
+      nPath,
+    });
+    const base64Str = res?.base64String || "";
+    return Buffer.from(base64Str, "base64");
+  }
+
 }

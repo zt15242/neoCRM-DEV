@@ -288,6 +288,7 @@ export class EnvService {
       permanentCode: env.permanentCode?.trim(),
       cloudDomain: env.cloudDomain?.trim(),
       ea: env.ea?.trim(),
+      devCertificate: env.devCertificate?.trim(),
       customHeaders: env.customHeaders,
       updatedAt: Date.now(),
       createdAt: env.createdAt || Date.now(),

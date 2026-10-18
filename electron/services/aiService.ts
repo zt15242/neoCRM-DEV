@@ -58,6 +58,7 @@ import { AiSessionMode } from '../../shared/types';
 import { MetadataService } from './metadataService';
 import { DataService } from './dataService';
 import { SessionStore } from './sessionStore';
+import { EnvService } from './envService';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -72,7 +73,8 @@ export class AiService {
   constructor(
     private sessionStore: SessionStore,
     private metadataService: MetadataService,
-    private dataService: DataService
+    private dataService: DataService,
+    private envService?: EnvService
   ) {}
 
   // ================= 技能包 ZIP 导入与导出 =================
@@ -941,6 +943,12 @@ ${dialogHistoryText}`;
     }
 
     const currentSession = this.sessionStore.getCurrentSession();
+    if (currentSession?.environment?.id && this.envService) {
+      const freshEnv = this.envService.getEnvironmentById(currentSession.environment.id);
+      if (freshEnv) {
+        currentSession.environment = freshEnv;
+      }
+    }
     const controller = new AbortController();
     this.activeControllers.set(requestId, controller);
 
@@ -2476,7 +2484,7 @@ ${toolDataContext}
         job_output: async (params: any) => this.dshToolService.getJobOutput(params),
         kill_job: async (params: any) => this.dshToolService.killJob(params),
         job_kill: async (params: any) => this.dshToolService.killJob(params),
-        workspace_changes: async () => this.dshToolService.getWorkspaceChanges(projectPath),
+        workspace_changes: async (params?: any) => this.dshToolService.getWorkspaceChanges(params?.path, projectPath),
         load_workspace_dependencies: async () => this.dshToolService.loadWorkspaceDependencies(),
         get_tenant_info: async () => ({
           isLoggedIn: currentSession.isLoggedIn,
@@ -2703,7 +2711,7 @@ ${toolDataContext}
     }
 
     if (name === "workspace_changes") {
-      const res = this.dshToolService.getWorkspaceChanges(args.path || projectPath);
+      const res = this.dshToolService.getWorkspaceChanges(args?.path, projectPath);
       return {
         data: res,
         summary: res.clean ? '工作区文件干净，无未提交修改' : `检测到 ${res.changes.length} 个未提交变更文件`,

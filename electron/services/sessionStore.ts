@@ -78,6 +78,20 @@ export class SessionStore {
     return session;
   }
 
+  public updateCurrentEnvironment(env: NeoEnvironment): void {
+    const data = this.readStorage();
+    if (data.current?.isLoggedIn && data.current.environment?.id === env.id) {
+      data.current.environment = { ...data.current.environment, ...env };
+    }
+    for (const h of data.history) {
+      if (h.environmentId === env.id) {
+        h.environment = { ...(h.environment || {}), ...env };
+        h.environmentName = env.name;
+      }
+    }
+    this.writeStorage(data);
+  }
+
   public clearSession(): SessionState {
     const data = this.readStorage();
     data.current = { isLoggedIn: false };

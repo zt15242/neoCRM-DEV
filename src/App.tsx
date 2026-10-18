@@ -218,6 +218,12 @@ export const App: React.FC = () => {
       const envs = await window.neoApi.getEnvironments();
       setEnvironments(envs);
       setSelectedEnvId(saved.id);
+      if (session.isLoggedIn && session.environment?.id === saved.id) {
+        setSession((prev) => ({
+          ...prev,
+          environment: saved,
+        }));
+      }
     } catch (e: any) {
       showToast('error', `保存自定义环境失败: ${e.message}`);
     }

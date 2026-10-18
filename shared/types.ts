@@ -22,6 +22,7 @@ export interface CrmConnector {
   permanentCode?: string; // 纷享销客自建应用企业永久授权码
   cloudDomain?: string; // 纷享所在云 (open.fxiaoke.com / open-hwcloud.fxiaoke.com 等)
   ea?: string; // 纷享销客企业账号代码
+  devCertificate?: string; // 纷享销客官方开发者证书 (Developer Certificate，用于拉取/部署 APL 函数与 PWC 组件)
   customHeaders?: Record<string, string>;
   createdAt?: number;
   updatedAt?: number;

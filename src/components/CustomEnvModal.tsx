@@ -46,6 +46,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   const [cloudDomain, setCloudDomain] = useState('open.fxiaoke.com');
   const [sfRegion, setSfRegion] = useState<'alicloud' | 'global' | 'custom'>('alicloud');
   const [ea, setEa] = useState('');
+  const [devCertificate, setDevCertificate] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -67,6 +68,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       setPermanentCode(initialEnv.permanentCode || '');
       setCloudDomain(initialEnv.cloudDomain || 'open.fxiaoke.com');
       setEa(initialEnv.ea || '');
+      setDevCertificate(initialEnv.devCertificate || '');
       if (initialEnv.productType === 'salesforce') {
         const u = initialEnv.neoBaseURL || '';
         if (u.includes('sfcrmproducts.cn')) {
@@ -245,6 +247,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       permanentCode: permanentCode.trim(),
       cloudDomain: cloudDomain.trim(),
       ea: ea.trim(),
+      devCertificate: devCertificate.trim(),
     });
     onClose();
   };
@@ -619,6 +622,20 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
                     />
                   </div>
                 )}
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-orange-900 flex items-center justify-between">
+                    <span>开发者证书 devCertificate (用于拉取/调试 APL 代码与组件)</span>
+                    <span className="text-[10px] text-orange-700 font-normal">PaaS 开发者中心生成</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={devCertificate}
+                    onChange={(e) => setDevCertificate(e.target.value)}
+                    placeholder="eyJhbGciOi..."
+                    className="w-full px-2.5 py-1.5 bg-white border border-orange-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
 
                 <div className="space-y-1">
                   <label className="block text-[11px] font-semibold text-orange-900">

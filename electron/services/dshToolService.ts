@@ -873,7 +873,9 @@ export class DshToolService {
 
   // ================= 16. workspace_changes / getFileDiff (工作区变更与 Git 差异) =================
   public getWorkspaceChanges(customWorkdir?: string, projectRoot?: string): WorkspaceGitChangesSummary {
-    const cwd = this.assertPathWithinProject(customWorkdir || projectRoot || '', projectRoot);
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot || customWorkdir));
+    const target = customWorkdir ? (path.isAbsolute(customWorkdir) ? customWorkdir : path.resolve(root, customWorkdir)) : root;
+    const cwd = this.assertPathWithinProject(target, root);
     try {
       const isGit = fs.existsSync(path.join(cwd, '.git'));
       if (!isGit) {
@@ -920,7 +922,8 @@ export class DshToolService {
   }
 
   public getFileDiff(filePath: string, customWorkdir?: string, projectRoot?: string): { success: boolean; diff: string; error?: string } {
-    const cwd = this.assertPathWithinProject(customWorkdir || projectRoot || '', projectRoot);
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot || customWorkdir));
+    const cwd = this.assertPathWithinProject(customWorkdir || root, root);
     const safeFilePath = this.assertPathWithinProject(filePath, cwd);
     try {
       const diff = execSync(`git diff HEAD -- "${filePath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
@@ -931,7 +934,8 @@ export class DshToolService {
   }
 
   public discardFileChanges(filePath: string, customWorkdir?: string, projectRoot?: string): { success: boolean; message: string } {
-    const cwd = this.assertPathWithinProject(customWorkdir || projectRoot || '', projectRoot);
+    const root = path.resolve(this.resolveWorkspaceDir(projectRoot || customWorkdir));
+    const cwd = this.assertPathWithinProject(customWorkdir || root, root);
     const safeFilePath = this.assertPathWithinProject(filePath, cwd);
     try {
       execSync(`git checkout HEAD -- "${filePath}"`, { cwd, encoding: 'utf-8', timeout: 5000 });

@@ -54,7 +54,7 @@ const handleTokenRefresh = (env: any, newToken: any) => {
 metadataService.setTokenRefreshCallback(handleTokenRefresh);
 dataService.setTokenRefreshCallback(handleTokenRefresh);
 
-const aiService = new AiService(sessionStore, metadataService, dataService);
+const aiService = new AiService(sessionStore, metadataService, dataService, envService);
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
@@ -156,7 +156,11 @@ ipcMain.handle('window:close', () => win?.close());
 // 环境管理
 ipcMain.handle('env:getAll', async () => envService.getAllEnvironments());
 ipcMain.handle('env:getTemplates', async () => envService.getPresetTemplates());
-ipcMain.handle('env:saveCustom', async (_, env) => envService.saveCustomEnvironment(env));
+ipcMain.handle('env:saveCustom', async (_, env) => {
+  const saved = envService.saveCustomEnvironment(env);
+  sessionStore.updateCurrentEnvironment(saved);
+  return saved;
+});
 ipcMain.handle('env:deleteCustom', async (_, id: string) => envService.deleteCustomEnvironment(id));
 ipcMain.handle('env:testConnectivity', async (_, url: string) => envService.testConnectivity(url));
 

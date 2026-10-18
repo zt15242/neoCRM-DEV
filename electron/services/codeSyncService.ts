@@ -132,6 +132,54 @@ export class CodeSyncService {
       }
     }
 
+    // 3. 尝试拉取 APL 业务函数代码 (若配置了开发者证书 devCertificate)
+    let aplCount = 0;
+    let aplError: string | null = null;
+    const aplDir = path.join(targetDir, "src", "apl");
+    const cert = env.devCertificate || (env.customHeaders && env.customHeaders["Authorization"]) || "";
+    if (cert) {
+      try {
+        fs.mkdirSync(aplDir, { recursive: true });
+        const functions = await this.fxiaokeService.fetchAPLList(env, tokenData);
+        if (Array.isArray(functions) && functions.length > 0) {
+          const manifestApl = [];
+          for (const fn of functions) {
+            const apiName = fn.api_name || fn.funcApiName || "unnamed_fn";
+            const bindingObj = fn.binding_object_api_name || "global";
+            const fnDir = path.join(aplDir, bindingObj);
+            fs.mkdirSync(fnDir, { recursive: true });
+            
+            // 写入 APL Groovy 源码文件
+            const filePath = path.join(fnDir, `${apiName}.groovy`);
+            const bodyContent = fn.body || "// No body content returned";
+            const headerComment = `/**\n * 纷享销客 APL 函数: ${fn.function_name || apiName}\n * API Name: ${apiName}\n * Binding Object: ${bindingObj}\n * Return Type: ${fn.return_type || "void"}\n * Version: ${fn.version || 1}\n * Description: ${fn.remark || "无描述"}\n */\n\n`;
+            fs.writeFileSync(filePath, headerComment + bodyContent, "utf-8");
+            createdFiles.push(`src/apl/${bindingObj}/${apiName}.groovy`);
+            aplCount++;
+
+            manifestApl.push({
+              apiName,
+              functionName: fn.function_name,
+              bindingObject: bindingObj,
+              returnType: fn.return_type,
+              version: fn.version,
+              isActive: fn.is_active,
+              filePath: `src/apl/${bindingObj}/${apiName}.groovy`,
+            });
+          }
+          fs.writeFileSync(
+            path.join(aplDir, "apl_manifest.json"),
+            JSON.stringify({ total: aplCount, functions: manifestApl }, null, 2),
+            "utf-8"
+          );
+          createdFiles.push("src/apl/apl_manifest.json");
+        }
+      } catch (aplErr: any) {
+        aplError = aplErr.message;
+        console.warn("[Pull] 拉取 APL 函数异常:", aplErr.message);
+      }
+    }
+
     // 3. 生成 package.json 与执行脚本
     const pkgPath = path.join(targetDir, 'package.json');
     if (!fs.existsSync(pkgPath)) {
@@ -281,6 +329,7 @@ ${path.basename(targetDir)}/
 
 - **总对象数**: ${allObjects.length} 个（标准对象: ${allObjects.filter((o) => o.isStandard).length}，自定义对象: ${allObjects.filter((o) => !o.isStandard).length}）
 - **核心已 Describe 对象**: ${targetEntities.join(', ')}
+- **已拉取 APL 业务函数**: ${aplCount} 个
 - **云网关**: \`https://${env.cloudDomain || 'open.fxiaoke.com'}\`
 - **自建应用 AppId**: \`${env.clientId || '未配置'}\`
 
@@ -304,14 +353,18 @@ ${path.basename(targetDir)}/
       }
     } catch {}
 
+    const aplSummary = cert
+      ? (aplCount > 0 ? `、${aplCount} 个 APL 业务函数源码 (已落盘至 src/apl/ 目录)` : (aplError ? `、APL 拉取异常 (${aplError})` : "、当前租户无 APL 函数"))
+      : " (未配置开发者证书 devCertificate，跳过 APL 源码)";
+
     return {
       success: true,
       targetDir,
-      productType: 'fxiaoke',
+      productType: "fxiaoke",
       createdFilesCount: createdFiles.length,
       files: createdFiles,
       manifest: manifestContent,
-      summary: `成功在工作区 [${path.basename(targetDir)}] 拉取纷享销客元数据：包含全量 ${allObjects.length} 个业务对象清单、${targetEntities.length} 个核心对象 Describe 字段详情、查询脚本与 README 说明文档。`,
+      summary: `成功在工作区 [${path.basename(targetDir)}] 拉取纷享销客工程：包含全量 ${allObjects.length} 个业务对象清单、${targetEntities.length} 个核心对象 Describe 字段详情${aplSummary}、增量同步脚本与说明文档。`,
     };
   }
 
