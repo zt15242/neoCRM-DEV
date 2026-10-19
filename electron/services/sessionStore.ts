@@ -225,7 +225,8 @@ export class SessionStore {
         // 关键修复：sf org login sfdx-url 执行后，若 Salesforce 启用了 Refresh Token 轮转，会生成新 refresh_token
         // 通过 sf org auth show-sfdx-auth-url 提取最新 refresh_token，同步写回当前会话，避免旧令牌作废
         try {
-          const authOut = execSync(`"${cmd}" org auth show-sfdx-auth-url --target-org ${alias} --json`, {
+          const authOut = execSync(`"${cmd}" org auth show-sfdx-auth-url --target-org "${alias}" --json`, {
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
             encoding: 'utf-8',
             windowsHide: true,
             shell: true,

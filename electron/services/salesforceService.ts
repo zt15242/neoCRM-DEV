@@ -18,42 +18,125 @@ export class SalesforceService {
   }
 
   /**
-   * 自动探测并从本地 Salesforce CLI (sf) 或端点获取最新有效的 Access Token
+   * 从本地磁盘 ~/.sfdx/*.json 直接提取已认证凭据与 Refresh Token
    */
-  private getLatestTokenFromCli(): string | null {
+  private getAuthFileFromDisk(username?: string, instanceUrl?: string): any | null {
     try {
-      const cmd = process.platform === 'win32' ? 'sf.cmd' : 'sf';
-      let alias = 'aliNewStageFull';
-      const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
-      if (fs.existsSync(aliasJsonPath)) {
-        try {
-          const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
-          const orgs = aliasData.orgs || {};
-          const found = Object.entries(orgs).find(([a, u]) => 
-            String(u).includes('stagefull') || String(u).includes('olympus')
-          );
-          if (found) alias = found[0];
-          else if (Object.keys(orgs).length > 0) alias = Object.keys(orgs)[0];
-        } catch {}
+      const sfdxDir = path.join(os.homedir(), '.sfdx');
+      if (!fs.existsSync(sfdxDir)) return null;
+
+      if (username) {
+        const uFile = path.join(sfdxDir, `${username}.json`);
+        if (fs.existsSync(uFile)) {
+          return JSON.parse(fs.readFileSync(uFile, 'utf-8'));
+        }
       }
 
-      const stdout = execSync(
-        `SF_TEMP_SHOW_SECRETS=true "${cmd}" org display --target-org "${alias}" --json`,
-        {
-          encoding: 'utf-8',
-          timeout: 12000,
-          windowsHide: true,
-          shell: true,
-          env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-        }
+      const files = fs.readdirSync(sfdxDir).filter(
+        (f) => f.endsWith('.json') && f !== 'alias.json' && f !== 'sfdx-config.json' && f !== 'key.json'
       );
+      for (const f of files) {
+        try {
+          const content = JSON.parse(fs.readFileSync(path.join(sfdxDir, f), 'utf-8'));
+          if (instanceUrl && content.instanceUrl && content.instanceUrl.toLowerCase().includes(new URL(instanceUrl).host.toLowerCase())) {
+            return content;
+          }
+          if (content.accessToken && content.refreshToken) {
+            return content;
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * 自动探测并从本地 Salesforce CLI (sf) 或端点获取最新有效的 Access Token (跨平台兼顾 Windows)
+   */
+  private getLatestTokenFromCli(env?: NeoEnvironment, tokenData?: TokenData): string | null {
+    try {
+      const isWin = process.platform === 'win32';
+      const cmd = isWin ? 'sf.cmd' : 'sf';
+
+      // 1. 尝试直接从本地磁盘 ~/.sfdx/*.json 读取（0ms 极速无开销）
+      const username = tokenData?.userInfo?.name;
+      const diskAuth = this.getAuthFileFromDisk(username, tokenData?.instance_uri || env?.neoBaseURL);
+      if (diskAuth?.accessToken && diskAuth.accessToken !== tokenData?.access_token) {
+        if (diskAuth.refreshToken && tokenData) tokenData.refresh_token = diskAuth.refreshToken;
+        return diskAuth.accessToken;
+      }
+
+      // 2. 解析别名：优先读取 ~/.sf/config.json -> ~/.sfdx/sfdx-config.json -> ~/.sfdx/alias.json
+      let alias = '';
+      try {
+        const sfConfigPath = path.join(os.homedir(), '.sf', 'config.json');
+        if (fs.existsSync(sfConfigPath)) {
+          const sfConfig = JSON.parse(fs.readFileSync(sfConfigPath, 'utf-8'));
+          alias = sfConfig['target-org'] || '';
+        }
+      } catch {}
+      if (!alias) {
+        try {
+          const sfdxConfigPath = path.join(os.homedir(), '.sfdx', 'sfdx-config.json');
+          if (fs.existsSync(sfdxConfigPath)) {
+            const sfdxConfig = JSON.parse(fs.readFileSync(sfdxConfigPath, 'utf-8'));
+            alias = sfdxConfig['defaultusername'] || '';
+          }
+        } catch {}
+      }
+      if (!alias) {
+        const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
+        if (fs.existsSync(aliasJsonPath)) {
+          try {
+            const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
+            const orgs = aliasData.orgs || {};
+            const keys = Object.keys(orgs);
+            if (keys.length > 0) alias = keys[0];
+          } catch {}
+        }
+      }
+
+      // 3. 执行 sf org display（彻底修复 Windows cmd.exe 语法：绝不使用行内环境变量赋值）
+      let stdout = '';
+      try {
+        const targetParam = alias ? `--target-org "${alias}"` : '';
+        stdout = execSync(
+          `"${cmd}" org display ${targetParam} --json`.trim(),
+          {
+            encoding: 'utf-8',
+            timeout: 15000,
+            windowsHide: true,
+            shell: true,
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+          }
+        );
+      } catch {
+        stdout = execSync(
+          `"${cmd}" org display --json`,
+          {
+            encoding: 'utf-8',
+            timeout: 15000,
+            windowsHide: true,
+            shell: true,
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+          }
+        );
+      }
+
       const jsonStart = stdout.indexOf('{');
       const jsonEnd = stdout.lastIndexOf('}');
       if (jsonStart !== -1 && jsonEnd !== -1) {
         const data = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
-        const status = data.result?.connectedStatus || '';
-        if (status === 'Connected' && !status.includes('Unable to refresh') && data.result?.accessToken) {
-          return data.result?.accessToken || null;
+        const res = data.result;
+        if (res?.accessToken && (!res.connectedStatus || res.connectedStatus === 'Connected')) {
+          const uname = res.username || username;
+          if (uname) {
+            const authAfter = this.getAuthFileFromDisk(uname);
+            if (authAfter?.refreshToken && tokenData) {
+              tokenData.refresh_token = authAfter.refreshToken;
+            }
+          }
+          return res.accessToken;
         }
       }
       return null;
@@ -94,28 +177,49 @@ export class SalesforceService {
       if (is401) {
         console.warn('[Salesforce] 检测到 Access Token 失效 (401)，正在启动自动无感静默续期与重试...');
 
-        // 1. 优先尝试从本地 sf CLI 提取最新已被 CLI 自动刷新的 token
-        let newAccessToken = this.getLatestTokenFromCli();
+        // 1. 优先尝试从本地 sf CLI 或磁盘提取最新已被 CLI 自动刷新的 token
+        let newAccessToken = this.getLatestTokenFromCli(env, tokenData);
 
-        // 2. 若 CLI 提取不到，尝试向 tokenURL 发送 refresh_token 请求
-        if (!newAccessToken && tokenData.refresh_token && env.clientId) {
-          try {
-            const tokenUrl = `${baseUrl}/services/oauth2/token`;
-            const params = new URLSearchParams();
-            params.append('grant_type', 'refresh_token');
-            params.append('client_id', env.clientId);
-            if (env.clientSecret) params.append('client_secret', env.clientSecret);
-            params.append('refresh_token', tokenData.refresh_token);
+        // 2. 若 CLI 提取不到，自动使用 refresh_token 多端点尝试 OAuth 续期
+        if (!newAccessToken) {
+          const diskAuth = this.getAuthFileFromDisk(tokenData.userInfo?.name, baseUrl);
+          const refreshToken = tokenData.refresh_token || diskAuth?.refreshToken;
+          const clientId = env.clientId || diskAuth?.clientId || '3MVG9xXFQGV9F.Wr9Z_1xbGt7Vq63R.tqieb_acTQQGYdprE5n0ogE.JkOqT5E4SoIs1YuRhbZjaXPEYTE3ap';
+          const clientSecret = env.clientSecret || diskAuth?.clientSecret;
 
-            const refreshRes = await axios.post(tokenUrl, params.toString(), {
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              timeout: 10000,
-            });
-            if (refreshRes.data?.access_token) {
-              newAccessToken = refreshRes.data.access_token;
+          if (refreshToken) {
+            const tokenEndpoints = [
+              `${baseUrl}/services/oauth2/token`,
+              env.tokenURL || '',
+              'https://login.salesforce.com/services/oauth2/token',
+              'https://test.sfcrmproducts.cn/services/oauth2/token',
+              'https://login.sfcrmproducts.cn/services/oauth2/token',
+            ].filter(Boolean);
+
+            for (const tUrl of tokenEndpoints) {
+              try {
+                const params = new URLSearchParams();
+                params.append('grant_type', 'refresh_token');
+                params.append('client_id', clientId);
+                if (clientSecret) params.append('client_secret', clientSecret);
+                params.append('refresh_token', refreshToken);
+
+                const refreshRes = await axios.post(tUrl, params.toString(), {
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  timeout: 10000,
+                });
+                if (refreshRes.data?.access_token) {
+                  newAccessToken = refreshRes.data.access_token;
+                  if (refreshRes.data.refresh_token) {
+                    tokenData.refresh_token = refreshRes.data.refresh_token;
+                  }
+                  console.log(`[Salesforce] 通过端点 [${tUrl}] 成功完成 OAuth 刷新！`);
+                  break;
+                }
+              } catch (rErr: any) {
+                console.warn(`[Salesforce] API 刷新失败 (${tUrl}):`, rErr.response?.data || rErr.message);
+              }
             }
-          } catch (rErr: any) {
-            console.warn('[Salesforce] API 刷新失败:', rErr.message);
           }
         }
 

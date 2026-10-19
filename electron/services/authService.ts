@@ -328,20 +328,42 @@ export class AuthService {
    * 解析本地 Salesforce CLI (sf v2) 的当前有效 Org 别名
    */
   public getSalesforceAlias(env?: NeoEnvironment): string {
+    // 1. 优先读取 ~/.sf/config.json 中的 target-org (sf v2 官方标准)
+    try {
+      const sfConfigPath = path.join(os.homedir(), '.sf', 'config.json');
+      if (fs.existsSync(sfConfigPath)) {
+        const sfConfig = JSON.parse(fs.readFileSync(sfConfigPath, 'utf-8'));
+        if (sfConfig['target-org']) return sfConfig['target-org'];
+      }
+    } catch {}
+
+    // 2. 读取 ~/.sfdx/sfdx-config.json 中的 defaultusername (sfdx 经典标准)
+    try {
+      const sfdxConfigPath = path.join(os.homedir(), '.sfdx', 'sfdx-config.json');
+      if (fs.existsSync(sfdxConfigPath)) {
+        const sfdxConfig = JSON.parse(fs.readFileSync(sfdxConfigPath, 'utf-8'));
+        if (sfdxConfig['defaultusername']) return sfdxConfig['defaultusername'];
+      }
+    } catch {}
+
+    // 3. 读取 ~/.sfdx/alias.json 中的别名映射
     const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
     if (fs.existsSync(aliasJsonPath)) {
       try {
         const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
         const orgs = aliasData.orgs || {};
+        const envName = (env?.name || '').toLowerCase();
         const found = Object.entries(orgs).find(([a, u]) => 
-          String(u).includes('stagefull') || String(u).includes('olympus')
+          (envName && a.toLowerCase().includes(envName)) ||
+          String(u).includes('stagefull') || 
+          String(u).includes('olympus')
         );
         if (found) return found[0];
         const keys = Object.keys(orgs);
         if (keys.length > 0) return keys[0];
       } catch {}
     }
-    return env?.id || 'aliNewStageFull';
+    return env?.id || 'DigitalDev';
   }
 
   /**
@@ -376,7 +398,14 @@ export class AuthService {
       let stdoutOutput = '';
 
       child.stdout?.on('data', (d) => {
-        stdoutOutput += d.toString();
+        const text = d.toString();
+        stdoutOutput += text;
+        // Windows 专项优化：当探测到 Salesforce CLI 输出的授权登录 URL 时，强制通过 Electron shell.openExternal 打开默认系统浏览器
+        const urlMatch = text.match(/https:\/\/[^\s"'<>]+/);
+        if (urlMatch && urlMatch[0].includes('/services/oauth2/authorize')) {
+          console.log('[Salesforce CLI Auth] 捕获到授权 URL，强制唤起系统默认浏览器:', urlMatch[0]);
+          shell.openExternal(urlMatch[0]).catch(() => {});
+        }
       });
 
       child.stderr?.on('data', (d) => {
@@ -411,16 +440,31 @@ export class AuthService {
     const alias = targetAlias || this.getSalesforceAlias(env);
 
     try {
-      const stdout = execSync(
-        `SF_TEMP_SHOW_SECRETS=true "${cmd}" org display --target-org "${alias}" --json`,
-        {
-          encoding: 'utf-8',
-          timeout: 15000,
-          shell: true,
-          env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-          windowsHide: true,
-        }
-      );
+      // 关键修复：移除 Windows cmd.exe 无法识别的 'SF_TEMP_SHOW_SECRETS=true ' 前缀，通过 env 选项安全注入环境变量
+      let stdout = '';
+      try {
+        stdout = execSync(
+          `"${cmd}" org display --target-org "${alias}" --json`,
+          {
+            encoding: 'utf-8',
+            timeout: 15000,
+            shell: true,
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+            windowsHide: true,
+          }
+        );
+      } catch {
+        stdout = execSync(
+          `"${cmd}" org display --json`,
+          {
+            encoding: 'utf-8',
+            timeout: 15000,
+            shell: true,
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+            windowsHide: true,
+          }
+        );
+      }
 
       const jsonStart = stdout.indexOf('{');
       const jsonEnd = stdout.lastIndexOf('}');
@@ -438,8 +482,21 @@ export class AuthService {
       const orgId = res.id || 'salesforce_org';
       const username = res.username || 'Salesforce 用户';
 
+      // 关键补齐：从本地 ~/.sfdx/<username>.json 中提取 refreshToken 与 clientId
+      let refreshToken = '';
+      try {
+        const userJsonPath = path.join(os.homedir(), '.sfdx', `${username}.json`);
+        if (fs.existsSync(userJsonPath)) {
+          const authFile = JSON.parse(fs.readFileSync(userJsonPath, 'utf-8'));
+          refreshToken = authFile.refreshToken || '';
+          if (!env.clientId && authFile.clientId) env.clientId = authFile.clientId;
+          if (!env.clientSecret && authFile.clientSecret) env.clientSecret = authFile.clientSecret;
+        }
+      } catch {}
+
       const tokenData: TokenData = {
         access_token: res.accessToken,
+        refresh_token: refreshToken || undefined,
         expires_in: 7200,
         instance_uri: instanceUri,
         tenant_id: orgId,
@@ -471,34 +528,64 @@ export class AuthService {
     const cmd = isWin ? 'sf.cmd' : 'sf';
     const alias = this.getSalesforceAlias(env);
 
-    // 1. 优先尝试从 sf CLI 读取已刷新的有效凭据
+    // 1. 优先尝试从 sf CLI 执行 org display（触发 CLI 自带的云端 token 刷新）
     try {
-      const stdout = execSync(
-        `SF_TEMP_SHOW_SECRETS=true "${cmd}" org display --target-org "${alias}" --json`,
-        {
-          encoding: 'utf-8',
-          timeout: 12000,
-          shell: true,
-          env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-          windowsHide: true,
-        }
-      );
+      let stdout = '';
+      try {
+        stdout = execSync(
+          `"${cmd}" org display --target-org "${alias}" --json`,
+          {
+            encoding: 'utf-8',
+            timeout: 15000,
+            shell: true,
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+            windowsHide: true,
+          }
+        );
+      } catch {
+        stdout = execSync(
+          `"${cmd}" org display --json`,
+          {
+            encoding: 'utf-8',
+            timeout: 15000,
+            shell: true,
+            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+            windowsHide: true,
+          }
+        );
+      }
+
       const jsonStart = stdout.indexOf('{');
       const jsonEnd = stdout.lastIndexOf('}');
       if (jsonStart !== -1 && jsonEnd !== -1) {
         const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
         const res = parsed.result;
-        if (res && res.accessToken && res.connectedStatus === 'Connected') {
-          console.log(`[Salesforce] 从本地 CLI (${alias}) 成功获取有效 Connected 凭据`);
+        if (res && res.accessToken && (!res.connectedStatus || res.connectedStatus === 'Connected')) {
+          console.log(`[Salesforce] 从本地 CLI (${alias}) 成功获取有效凭据`);
+
+          let refreshToken = currentTokenData?.refresh_token || '';
+          const username = res.username || currentTokenData?.userInfo?.name;
+          if (username) {
+            try {
+              const uPath = path.join(os.homedir(), '.sfdx', `${username}.json`);
+              if (fs.existsSync(uPath)) {
+                const uData = JSON.parse(fs.readFileSync(uPath, 'utf-8'));
+                if (uData.refreshToken) refreshToken = uData.refreshToken;
+                if (!env.clientId && uData.clientId) env.clientId = uData.clientId;
+              }
+            } catch {}
+          }
+
           return {
             access_token: res.accessToken,
+            refresh_token: refreshToken || undefined,
             expires_in: 7200,
             instance_uri: res.instanceUrl || env.neoBaseURL,
-            tenant_id: res.id || 'salesforce_org',
+            tenant_id: res.id || currentTokenData?.tenant_id || 'salesforce_org',
             userInfo: {
-              userId: res.id || 'salesforce_org',
-              name: res.username || 'Salesforce 用户',
-              tenant_id: res.id || 'salesforce_org',
+              userId: res.id || currentTokenData?.userInfo?.userId || 'salesforce_org',
+              name: res.username || currentTokenData?.userInfo?.name || 'Salesforce 用户',
+              tenant_id: res.id || currentTokenData?.tenant_id || 'salesforce_org',
               tenantName: `Salesforce 组织 (${res.id || 'salesforce_org'})`,
             },
             savedAt: Date.now(),
@@ -506,15 +593,46 @@ export class AuthService {
           };
         }
       }
+    } catch (e: any) {
+      console.warn(`[Salesforce] sf org display 刷新提示:`, e.message);
+    }
+
+    // 2. 若 CLI display 未能刷新，尝试直接从本地磁盘 ~/.sfdx/*.json 中提取是否有刚刷新的 token
+    try {
+      const username = currentTokenData?.userInfo?.name;
+      if (username) {
+        const uPath = path.join(os.homedir(), '.sfdx', `${username}.json`);
+        if (fs.existsSync(uPath)) {
+          const uData = JSON.parse(fs.readFileSync(uPath, 'utf-8'));
+          if (uData.accessToken && uData.accessToken !== currentTokenData?.access_token) {
+            console.log(`[Salesforce] 从磁盘 auth 缓存直接提取到新 Access Token`);
+            return {
+              access_token: uData.accessToken,
+              refresh_token: uData.refreshToken || currentTokenData?.refresh_token,
+              expires_in: 7200,
+              instance_uri: uData.instanceUrl || env.neoBaseURL,
+              tenant_id: uData.orgId || currentTokenData?.tenant_id || 'salesforce_org',
+              userInfo: currentTokenData?.userInfo || {
+                userId: uData.orgId,
+                name: uData.username,
+                tenant_id: uData.orgId,
+                tenantName: `Salesforce 组织 (${uData.orgId})`,
+              },
+              savedAt: Date.now(),
+              expiresAt: Date.now() + 7200 * 1000,
+            };
+          }
+        }
+      }
     } catch {}
 
-    // 2. 如果属于用户主动触发的交互式操作（点击重新登录/手动续期），唤起 sf 官方网页认证
+    // 3. 如果属于用户主动触发的交互式操作（点击重新登录/手动续期），唤起 sf 官方网页认证
     if (isInteractive) {
       console.log('[Salesforce] 正在遵循 salesforce-cli skill 规范启动 sf org login web 重新认证...');
       return await this.loginWithSalesforceCli(env);
     }
 
-    // 3. 后台定时轮询静默模式下：不弹窗骚扰用户，抛出明确错误提示
+    // 4. 后台静默模式抛出明确错误提示
     throw new Error('Salesforce CLI 授权会话已失效，请在连接器详情中点击「重新登录」重新授权');
   }
 
@@ -1005,10 +1123,20 @@ export class AuthService {
       if (env.authMode === 'client_credentials' || (env.clientId && env.clientSecret && !currentTokenData?.refresh_token)) {
         return await this.loginWithSalesforceClientCredentials(env);
       }
+      // 优先尝试使用 refresh_token 走云端 OAuth 续期
       if (currentTokenData?.refresh_token) {
-        return await this.refreshToken(env, currentTokenData.refresh_token);
+        try {
+          return await this.refreshToken(env, currentTokenData.refresh_token);
+        } catch (rErr: any) {
+          console.warn('[Salesforce] OAuth2 refresh_token 换新失败，自动回退至本地 sf CLI 刷新:', rErr.message);
+        }
       }
-      throw new Error('Salesforce 续期需要 Client Credentials 凭证或有效 refresh_token，请在连接器详情点击「重新登录」');
+      // 若无 refresh_token 或云端 OAuth 换新异常，自动回退走本地 sf CLI 静默换新
+      try {
+        return await this.refreshSalesforceTokenViaCli(env, currentTokenData, false);
+      } catch (cliErr: any) {
+        throw new Error(`Salesforce 自动续期未成功: ${cliErr.message}，请在连接器详情中重新登录`);
+      }
     }
 
     // 3. 销售易 NeoCRM 续期
