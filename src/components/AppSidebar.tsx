@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { CURRENT_APP_VERSION } from '../../shared/constants';
 import { 
   SquarePen,
+  PanelLeftClose,
   LayoutTemplate, 
   Search, 
   Trash2, 
@@ -75,6 +77,8 @@ interface AppSidebarProps {
   onEditProject?: (project: WorkspaceProject) => void;
   onDeleteProject?: (projectId: string) => void;
   onOpenFolderInExplorer?: (folderPath: string) => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -108,7 +112,18 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onEditProject,
   onDeleteProject,
   onOpenFolderInExplorer,
+  collapsed = false,
+  onToggleCollapse,
 }) => {
+  const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
+
+  useEffect(() => {
+    if (window.neoApi?.getAppVersion) {
+      window.neoApi.getAppVersion().then((v) => {
+        if (v) setAppVersion(`v${v.replace(/^v/, '')}`);
+      }).catch(() => {});
+    }
+  }, []);
   const isMac = platform === 'darwin';
   const [keyword, setKeyword] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -178,7 +193,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const activeUserName = session.tokenData?.userInfo?.name || (session.isLoggedIn ? '已登录' : '未登录');
 
   return (
-    <div className="w-64 bg-slate-50 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30">
+    <aside className={`${
+  collapsed ? 'w-0 opacity-0 -translate-x-full border-r-0 pointer-events-none' : 'w-64 opacity-100 translate-x-0'
+} transition-all duration-200 ease-in-out bg-slate-50 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative`}>
       {/* 1. 顶部 Header (Codex 样式红绿灯安全边距、品牌下拉与搜索) */}
       <div className={`border-b border-slate-200/60 flex items-center justify-between shrink-0 px-3 ${
         isMac ? 'pt-8 pb-2.5 window-drag' : 'py-2.5'
@@ -284,13 +301,24 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           )}
         </div>
 
-        <button
-          onClick={() => setSearchOpen(!searchOpen)}
-          title="搜索会话"
-          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition-colors cursor-pointer window-no-drag"
-        >
-          <Search className="w-4 h-4" />
-        </button>
+        <div className="flex items-center space-x-0.5 window-no-drag">
+          <button
+            onClick={() => setSearchOpen(!searchOpen)}
+            title="搜索会话"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition-colors cursor-pointer"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+          {onToggleCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              title="折叠隐藏侧边栏 (Cmd+B / Ctrl+B)"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition-colors cursor-pointer"
+            >
+              <PanelLeftClose className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 2. 搜索条 (展开态) */}
@@ -636,7 +664,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             title="检查软件更新"
             className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white hover:bg-slate-200/80 text-slate-600 border border-slate-200/80 transition-colors flex items-center space-x-0.5 cursor-pointer"
           >
-            <span>v1.7.9</span>
+            <span>{appVersion}</span>
             {hasUpdate && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />}
           </button>
 
@@ -668,6 +696,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </aside>
   );
 };

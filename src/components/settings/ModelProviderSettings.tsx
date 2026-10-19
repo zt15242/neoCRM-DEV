@@ -567,7 +567,7 @@ const ThirdPartyProviderCard: React.FC<{
               <span>{wbAccount ? '切换账号' : '扫码登录'}</span>
             </button>
           )}
-          {provider.website && (
+          {!isWorkBuddy && provider.website && (
             <button
               onClick={(e) => {
                 e.stopPropagation();

@@ -162,13 +162,13 @@ export class UpdateService {
           : downloadUrl;
 
       try {
-        console.log(`[Updater] 正在尝试通过节点下载: ${candidateUrl}`);
+        console.log(`[Updater] 正在尝试通过节点下载更新包 (${fileName})`);
         await this.downloadFromSingleUrl(candidateUrl, targetPath, win);
         this.downloadedFilePath = targetPath;
         return { success: true, filePath: targetPath };
       } catch (err: any) {
         lastError = err.message || '节点连接失败';
-        console.warn(`[Updater] 节点下载失败 (${candidateUrl}): ${lastError}，正在自动切换备用节点...`);
+        console.warn(`[Updater] 当前节点下载失败 (${lastError})，正在自动切换备用节点...`);
         // 清理未完成的半截临时文件
         try {
           if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
@@ -244,15 +244,19 @@ export class UpdateService {
   public async gitPullUpdate(): Promise<{ success: boolean; output: string }> {
     return new Promise((resolve) => {
       exec('git pull origin main', { cwd: process.cwd() }, (error, stdout, stderr) => {
+        const raw = (error ? (stderr || error.message) : (stdout || '代码已更新至最新版本')).toString();
+        const clean = raw
+          .replace(/(?:From\s+)?(?:ssh:\/\/|git@|https?:\/\/)[\S]+(?:\.git)?/gi, '[REDACTED_GIT_URL]')
+          .trim();
         if (error) {
           resolve({
             success: false,
-            output: stderr || error.message,
+            output: clean || '代码更新失败',
           });
         } else {
           resolve({
             success: true,
-            output: stdout || '代码已更新至最新版本',
+            output: clean || '代码已更新至最新版本',
           });
         }
       });

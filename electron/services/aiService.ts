@@ -76,8 +76,13 @@ export class AiService {
     private sessionStore: SessionStore,
     private metadataService: MetadataService,
     private dataService: DataService,
-    private envService?: EnvService
-  ) {}
+    private envService?: EnvService,
+    dshToolService?: DshToolService
+  ) {
+    if (dshToolService) {
+      this.dshToolService = dshToolService;
+    }
+  }
 
   // ================= 技能包 ZIP 导入与导出 =================
 
@@ -2984,7 +2989,9 @@ ${toolDataContext}
     }
 
     if (name === "list_flows") {
-      licenseService.assertAuthorized();
+      if (!env || env.productType === 'neocrm' || !env.productType) {
+        licenseService.assertAuthorized();
+      }
       const res = await this.workflowService.listTenantFlows(env, tokenData, {
         procType: args.procType,
         keyword: args.keyword,
@@ -3029,7 +3036,9 @@ ${toolDataContext}
     }
 
     if (name === "get_flow_detail") {
-      licenseService.assertAuthorized();
+      if (!env || env.productType === 'neocrm' || !env.productType) {
+        licenseService.assertAuthorized();
+      }
       const pt = args.procType === 2 ? 2 : 1;
       const res = await this.workflowService.getFlowDetail(env, tokenData, args.procdefId, pt);
       if (!res.success) throw new Error(res.error || "获取流程定义详情失败");
@@ -3057,7 +3066,9 @@ ${toolDataContext}
     }
 
     if (name === "list_autoflows") {
-      licenseService.assertAuthorized();
+      if (!env || env.productType === 'neocrm' || !env.productType) {
+        licenseService.assertAuthorized();
+      }
       const res = await this.workflowService.listAutoFlows(env, tokenData, { keyword: args.keyword });
       if (!res.success) throw new Error(res.error || "获取自动流程失败");
       const list = res.data?.rows || res.data?.data || (Array.isArray(res.data) ? res.data : []);
@@ -3079,7 +3090,9 @@ ${toolDataContext}
     }
 
     if (name === "inspect_autoflow") {
-      licenseService.assertAuthorized();
+      if (!env || env.productType === 'neocrm' || !env.productType) {
+        licenseService.assertAuthorized();
+      }
       const res = await this.workflowService.getFlowDetail(env, tokenData, args.procdefId);
       if (!res.success) throw new Error(res.error || "获取流程定义失败");
       return {

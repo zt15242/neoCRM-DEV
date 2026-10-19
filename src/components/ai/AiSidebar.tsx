@@ -50,6 +50,7 @@ interface AiSidebarProps {
   onOpenData?: () => void;
   onOpenSettings?: () => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
+  streamingSessionIds?: string[];
 }
 
 export const AiSidebar: React.FC<AiSidebarProps> = ({
@@ -70,6 +71,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   onOpenData,
   onOpenSettings,
   workflowLicenseStatus,
+  streamingSessionIds = [],
 }) => {
   const [keyword, setKeyword] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -346,7 +348,15 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
                             </button>
                           </form>
                         ) : (
-                          <span className="truncate">{session.title}</span>
+                          <>
+                            <span className="truncate flex-1">{session.title}</span>
+                            {streamingSessionIds.includes(session.id) && (
+                              <span className="flex items-center space-x-1 shrink-0 px-1.5 py-0.2 rounded-full bg-sky-100 text-sky-700 text-[10px] font-medium border border-sky-200" title="该对话正在后台自主执行推进中">
+                                <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse" />
+                                <span>推进中</span>
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
 

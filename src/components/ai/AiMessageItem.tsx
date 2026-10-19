@@ -3,6 +3,7 @@ import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan, ApprovalDeployPla
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBox } from './ReasoningBox';
 import { ToolCallCard } from './ToolCallCard';
+import { ToolCallsGroup } from './ToolCallsGroup';
 import { InlineSqlResultTable } from './InlineSqlResultTable';
 import { extractSchemaPlanFromText } from './schemaPlanHelper';
 import { SchemaPlanCard } from './SchemaPlanCard';
@@ -12,7 +13,7 @@ import { InlineDecisionCard } from "./InlineDecisionCard";
 import { MessageArtifactsCard } from "./MessageArtifactsCard";
 import { extractDecisionsFromText, extractDecisionsFromToolCalls, DecisionRequestPayload } from "./decisionHelper";
 import { PlanReviewCard } from "./PlanReviewCard";
-import { Copy, Check, CheckCircle2, Sparkles, Box, AlertTriangle, Paperclip } from 'lucide-react';
+import { Copy, Check, CheckCircle2, Sparkles, Box, AlertTriangle, Paperclip, Loader2 } from 'lucide-react';
 
 interface AiMessageItemProps {
   message: AiChatMessage;
@@ -72,14 +73,17 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
       } catch {}
     }
     setCopied(true);
+    showToast?.('success', '已复制内容到剪贴板');
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const hasRunningTools = Boolean(message.toolCalls?.some((t) => t.status === 'running'));
+  const isActivelyWorking = Boolean(isStreamingCurrent || hasRunningTools);
   const isUser = message.role === 'user';
 
   if (isUser) {
     return (
-      <div className="flex justify-end my-4 pl-12">
+      <div className="group flex justify-end my-4 pl-12">
         <div className="max-w-[85%] md:max-w-[75%] space-y-1.5">
           {((message.entityRefs && message.entityRefs.length > 0) || (message.attachments && message.attachments.length > 0)) && (
             <div className="flex flex-wrap gap-1.5 justify-end">
@@ -105,11 +109,45 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
             </div>
           )}
 
-          <div className="bg-sky-600 text-white rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs text-xs md:text-sm leading-relaxed whitespace-pre-wrap selection:bg-sky-400">
-            {message.content}
+          <div className="relative group/bubble flex items-center justify-end space-x-1.5">
+            {/* 气泡左侧悬停复制按钮 */}
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="opacity-0 group-hover/bubble:opacity-100 p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-opacity shadow-2xs cursor-pointer shrink-0"
+              title="复制消息内容"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+
+            {/* 用户消息气泡 (支持鼠标拖拽划选复制与 select-text) */}
+            <div className="bg-sky-600 text-white rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs text-xs md:text-sm leading-relaxed whitespace-pre-wrap select-text selection:bg-sky-800 selection:text-white">
+              {message.content}
+            </div>
           </div>
-          <div className="text-[10px] text-slate-400 text-right pr-1">
-            {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+
+          {/* 底部信息与复制按钮 */}
+          <div className="flex items-center justify-end space-x-2 text-[10px] text-slate-400 pr-1">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="opacity-0 group-hover:opacity-100 hover:text-slate-600 flex items-center space-x-1 transition-all cursor-pointer"
+              title="复制消息"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-500" />
+                  <span className="text-emerald-600 font-medium">已复制</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3" />
+                  <span>复制</span>
+                </>
+              )}
+            </button>
+            <span className="opacity-0 group-hover:opacity-100 transition-opacity">·</span>
+            <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
         </div>
       </div>
@@ -193,13 +231,13 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
           />
         )}
 
-        {/* Harness Tool Calls 轨迹 */}
+        {/* Harness Tool Calls 轨迹 (支持折叠收起，彻底防止大批量工具占据过多屏幕空间) */}
         {message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="space-y-1.5 my-2">
-            {message.toolCalls.map((tc) => (
-              <ToolCallCard key={tc.id} toolCall={tc} />
-            ))}
-          </div>
+          <ToolCallsGroup
+            toolCalls={message.toolCalls}
+            isStreaming={isStreamingCurrent}
+            hasContent={Boolean(message.content)}
+          />
         )}
 
         {/* 正文 Markdown 渲染 */}
@@ -214,8 +252,16 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
                 suppressDeploymentCards={hasPendingDecisions}
               />
 
+              {/* 流程进行中指示 (正文已有部分输出，但工具仍在推进中) */}
+              {isActivelyWorking && (
+                <div className="flex items-center space-x-2 pt-2 text-sky-700 text-xs font-medium animate-in fade-in">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-sky-600" />
+                  <span>{hasRunningTools ? '智能体正在自主调用工具推进流程...' : '正在继续生成回答...'}</span>
+                </div>
+              )}
+
               {/* DSH 实施方案规划评审卡片 (exit_plan_mode) */}
-              {planMarkdown && (
+              {planMarkdown && !isActivelyWorking && (
                 <PlanReviewCard
                   plan={planMarkdown}
                   isAnswered={!isLastMessage}
@@ -225,7 +271,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
               )}
 
               {/* 当存在待决策确认项时，直接内联渲染交互式选项卡片（完全非弹窗式），并在确认前严格抑制部署卡片 */}
-              {hasPendingDecisions && detectedDecisions && (
+              {hasPendingDecisions && detectedDecisions && !isActivelyWorking && (
                 <InlineDecisionCard
                   decisionData={detectedDecisions}
                   isAnswered={!isLastMessage}
@@ -238,7 +284,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
               )}
 
               {/* 智能提取并展示生成的产物文件卡片 (完全对齐用户截图设计) */}
-              {!isStreamingCurrent && (
+              {!isActivelyWorking && (
                 <MessageArtifactsCard
                   content={message.content}
                   toolCalls={message.toolCalls}
@@ -248,10 +294,10 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
                 />
               )}
             </>
-          ) : isStreamingCurrent ? (
-            <div className="flex items-center space-x-2 py-1 text-slate-400 text-xs">
-              <span className="inline-block w-2 h-2 rounded-full bg-sky-500 animate-ping" />
-              <span>正在组织语言生成中...</span>
+          ) : isActivelyWorking ? (
+            <div className="flex items-center space-x-2 py-1.5 text-sky-700 text-xs font-medium">
+              <Loader2 className="w-4 h-4 animate-spin shrink-0 text-sky-600" />
+              <span>{hasRunningTools ? '智能体正在执行工具推进流程中...' : '正在组织语言生成中...'}</span>
             </div>
           ) : message.toolCalls && message.toolCalls.length > 0 ? (
             <div className="flex items-center justify-between py-1 text-xs text-slate-600">
@@ -274,7 +320,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
           )}
 
           {/* 打字机光标 */}
-          {isStreamingCurrent && message.content && (
+          {isActivelyWorking && message.content && (
             <span className="inline-block w-2 h-4 ml-1 bg-sky-500 animate-pulse align-middle" />
           )}
 
@@ -302,8 +348,9 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
 };
 
 export const AiMessageItem = React.memo(AiMessageItemComponent, (prevProps, nextProps) => {
-  // 关键渲染优化：只要消息状态未发生变化，彻底跳过历史消息的无谓重绘
-  if (prevProps.isStreamingCurrent !== nextProps.isStreamingCurrent) return false;
+  // 当前处于流式生成中的消息，必须实时响应增量与工具更新
+  if (nextProps.isStreamingCurrent || prevProps.isStreamingCurrent) return false;
+  // 关键渲染优化：历史已完成消息，只要核心内容与状态不变，彻底跳过无谓重绘
   if (prevProps.isLastMessage !== nextProps.isLastMessage) return false;
   if (prevProps.message.id !== nextProps.message.id) return false;
   if (prevProps.message.content !== nextProps.message.content) return false;

@@ -162,10 +162,14 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 3. 【SOQL 查询规范】：
    - 跨对象关联遵循关系命名规则（标准关系如 Contact.Account.Name，自定义关系如 Order__r.Name）；
    - 严禁未带 LIMIT 的全表盲查，必须显式指定目标字段并指定 LIMIT，调用 execute_sql_query 工具执行查询。
-4. 【生产安全分级与确认拦截】：
-   - 只读查询（Query / Describe）自动执行；
-   - 任何涉及数据写入、修改、删除或元数据部署（Deploy）的操作，必须通过 ask_user_question 提前向用户展示影响范围并等待确认，严禁静默执行破坏性操作。
-5. 【方案确认后的自动执行铁律 - 绝不允许要求用户手动敲终端】：
+4. 【生产环境只读铁律与沙盒环境自由写操作】：
+   - 【生产环境绝对只读】：当连接到 Salesforce 生产正式环境（Production）时，系统已在内核开启强安全保护，严禁执行任何数据新建（create_record）、修改（update_record）、删除（delete_record），以及自定义对象/字段元数据创建部署操作，只允许进行只读查询（SOQL/Describe）与流程扫描；
+   - 【沙盒/测试环境自由操作】：处于沙盒或测试环境（Sandbox / Test）时完全开放写操作权限，在用户确认方案后可自由新建、更新、删除记录或创建字段；
+   - 任何涉及破坏性或批量操作，必须提前向用户展示影响范围并等待确认。
+5. 【Salesforce 流程资产 (Flow / Process Builder) 零门槛扫描铁律】：
+   - 当前工作台的设备安全锁【仅针对销售易 (NeoCRM) 平台内部流程】，【绝对不限制 Salesforce 的流程】！
+   - 当需要排查或扫描 Salesforce 的 Flow、Process Builder 或触发器赋值逻辑时，必须直接调用 list_flows 工具获取 FlowDefinitionView 列表，绝对严禁向用户提示“流程功能需授权密码”或以此为由中断排查！
+6. 【方案确认后的自动执行铁律 - 绝不允许要求用户手动敲终端】：
    - 当用户已经确认了方案（如回复“确认”、“同意”、“按方式一执行”、“不能自动执行吗”等），工作台具备全套的 bash 命令行工具与 pull_crm_project_code 工具；
    - 绝对严禁只输出 Markdown 格式的代码块并附带“请在终端按顺序执行以下命令”！
    - 你必须立即在当前工程目录下调用 bash 工具（或 pull_crm_project_code）自动执行命令，并在回复中直接向用户汇报真实的执行状态与产物文件！

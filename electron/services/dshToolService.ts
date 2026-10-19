@@ -31,9 +31,19 @@ interface DshJobProcess {
 }
 
 export class DshToolService {
-  private currentGoal: DshGoalItem | null = null;
-  private currentTodos: DshTodoItem[] = [];
-  private backgroundJobs = new Map<string, DshJobProcess>();
+  private static currentGoal: DshGoalItem | null = null;
+  private static currentTodos: DshTodoItem[] = [];
+  private static backgroundJobs = new Map<string, DshJobProcess>();
+
+  private static registerJob(job: DshJobProcess) {
+    if (DshToolService.backgroundJobs.size > 80) {
+      const keys = Array.from(DshToolService.backgroundJobs.keys());
+      for (let i = 0; i < 20; i++) {
+        DshToolService.backgroundJobs.delete(keys[i]);
+      }
+    }
+    DshToolService.backgroundJobs.set(job.id, job);
+  }
 
   public resolveWorkspaceDir(customWorkdir?: string): string {
     if (customWorkdir && typeof customWorkdir === 'string' && fs.existsSync(customWorkdir)) {
@@ -208,10 +218,11 @@ export class DshToolService {
       }
     }
 
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const isWin = process.platform === 'win32';
+
     // 如果指定了 background: true，在后台启动长进程并立即返回 jobId
     if (params.background) {
-      const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const isWin = process.platform === 'win32';
       const child = spawn(params.command, {
         cwd,
         shell: isWin ? 'cmd.exe' : '/bin/bash',
@@ -233,7 +244,7 @@ export class DshToolService {
         unreadOutput: '',
         process: child,
       };
-      this.backgroundJobs.set(jobId, job);
+      DshToolService.registerJob(job);
 
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString();
@@ -270,8 +281,20 @@ export class DshToolService {
 
     const timeout = Math.min(params.timeoutMs || 30000, 180000); // 允许最长3分钟
 
+    // 前台同步命令同样完整注册到后台任务列表，方便用户在“后台任务”面板中全程可见与查阅输出
+    const job: DshJobProcess = {
+      id: jobId,
+      command: params.command,
+      workdir: cwd,
+      status: 'running',
+      startTime: Date.now(),
+      outputBuffer: '',
+      unreadOutput: '',
+    };
+    DshToolService.registerJob(job);
+
     return new Promise((resolve) => {
-      exec(
+      const child = exec(
         params.command,
         {
           cwd,
@@ -283,7 +306,7 @@ export class DshToolService {
             SF_USE_PROGRESS_BAR: 'false',
             FORCE_COLOR: '0',
           },
-          shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/bash',
+          shell: isWin ? 'cmd.exe' : '/bin/bash',
         },
         (error, stdout, stderr) => {
           const rawStdout = stdout ? stdout.toString() : '';
@@ -292,13 +315,20 @@ export class DshToolService {
           const cleanStdout = this.cleanAndTruncateTerminalOutput(rawStdout, 20000);
           const cleanStderr = this.cleanAndTruncateTerminalOutput(rawStderr, 10000);
 
+          job.status = error ? 'error' : 'completed';
+          job.exitCode = error ? error.code || 1 : 0;
+          job.endTime = Date.now();
+          job.outputBuffer = (rawStdout + (rawStderr ? `\n[Stderr]: ${rawStderr}` : '')).slice(-100000);
+
           resolve({
             stdout: cleanStdout,
             stderr: cleanStderr,
             exitCode: error ? error.code || 1 : 0,
+            jobId,
           });
         }
       );
+      job.process = child;
     });
   }
 
@@ -723,14 +753,14 @@ export class DshToolService {
     todos: DshTodoItem[];
     counts: { pending: number; inProgress: number; completed: number };
   } {
-    this.currentTodos = params.todos || [];
+    DshToolService.currentTodos = params.todos || [];
     const counts = {
-      pending: this.currentTodos.filter((t) => t.status === 'pending').length,
-      inProgress: this.currentTodos.filter((t) => t.status === 'in_progress').length,
-      completed: this.currentTodos.filter((t) => t.status === 'completed').length,
+      pending: DshToolService.currentTodos.filter((t) => t.status === 'pending').length,
+      inProgress: DshToolService.currentTodos.filter((t) => t.status === 'in_progress').length,
+      completed: DshToolService.currentTodos.filter((t) => t.status === 'completed').length,
     };
     return {
-      todos: this.currentTodos,
+      todos: DshToolService.currentTodos,
       counts,
     };
   }
@@ -738,35 +768,35 @@ export class DshToolService {
   // ================= 12. get_goal / create_goal / update_goal 目标管理 =================
   public getGoal(): { hasGoal: boolean; goal: DshGoalItem | null } {
     return {
-      hasGoal: Boolean(this.currentGoal),
-      goal: this.currentGoal,
+      hasGoal: Boolean(DshToolService.currentGoal),
+      goal: DshToolService.currentGoal,
     };
   }
 
   public createGoal(params: { objective: string; token_budget?: number }): DshGoalItem {
-    this.currentGoal = {
+    DshToolService.currentGoal = {
       objective: params.objective,
       token_budget: params.token_budget,
       status: 'active',
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    return this.currentGoal;
+    return DshToolService.currentGoal;
   }
 
   public updateGoal(params: { status: 'complete' | 'blocked' | 'paused' }): DshGoalItem {
-    if (!this.currentGoal) {
-      this.currentGoal = {
+    if (!DshToolService.currentGoal) {
+      DshToolService.currentGoal = {
         objective: '当前会话目标',
         status: params.status,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
     } else {
-      this.currentGoal.status = params.status;
-      this.currentGoal.updatedAt = Date.now();
+      DshToolService.currentGoal.status = params.status;
+      DshToolService.currentGoal.updatedAt = Date.now();
     }
-    return this.currentGoal;
+    return DshToolService.currentGoal;
   }
 
   // ================= 13. ask_user_question 用户确认 =================
@@ -785,14 +815,16 @@ export class DshToolService {
 
   // ================= 14. job_list / job_output / job_kill (DSH 官方后台任务系统) =================
   public listJobs(): { total: number; jobs: Array<{ id: string; command: string; status: string; durationMs: number; exitCode?: number; hasUnread: boolean }> } {
-    const jobs = Array.from(this.backgroundJobs.values()).map((j) => ({
-      id: j.id,
-      command: j.command,
-      status: j.status,
-      durationMs: (j.endTime || Date.now()) - j.startTime,
-      exitCode: j.exitCode,
-      hasUnread: j.unreadOutput.length > 0,
-    }));
+    const jobs = Array.from(DshToolService.backgroundJobs.values())
+      .reverse()
+      .map((j) => ({
+        id: j.id,
+        command: j.command,
+        status: j.status,
+        durationMs: (j.endTime || Date.now()) - j.startTime,
+        exitCode: j.exitCode,
+        hasUnread: j.unreadOutput.length > 0,
+      }));
     return {
       total: jobs.length,
       jobs,
@@ -806,7 +838,7 @@ export class DshToolService {
     output: string;
     isFinished: boolean;
   }> {
-    const job = this.backgroundJobs.get(params.job_id);
+    const job = DshToolService.backgroundJobs.get(params.job_id);
     if (!job) {
       throw new Error(`未找到 ID 为 ${params.job_id} 的后台长任务`);
     }
@@ -835,7 +867,7 @@ export class DshToolService {
   }
 
   public killJob(params: { job_id: string; reason?: string }): { success: boolean; job_id: string; status: string } {
-    const job = this.backgroundJobs.get(params.job_id);
+    const job = DshToolService.backgroundJobs.get(params.job_id);
     if (!job) {
       throw new Error(`未找到 ID 为 ${params.job_id} 的后台任务`);
     }
@@ -962,6 +994,17 @@ export class DshToolService {
   ): Promise<{ value: any; logs: string[]; executionTimeMs: number; error?: string }> {
     const startTime = Date.now();
     const logs: string[] = [];
+    const ptcJobId = `ptc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const ptcJob: DshJobProcess = {
+      id: ptcJobId,
+      command: params.description || `PTC 代码执行: ${(params.code || '').slice(0, 45).replace(/\s+/g, ' ')}...`,
+      workdir: process.cwd(),
+      status: 'running',
+      startTime,
+      outputBuffer: '',
+      unreadOutput: '',
+    };
+    DshToolService.registerJob(ptcJob);
     const customConsole = {
       log: (...args: any[]) =>
         logs.push(args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')),
@@ -1000,6 +1043,10 @@ export class DshToolService {
 
       const result = await Promise.race([execPromise, timeoutPromise]);
       const duration = Date.now() - startTime;
+      ptcJob.status = 'completed';
+      ptcJob.exitCode = 0;
+      ptcJob.endTime = Date.now();
+      ptcJob.outputBuffer = logs.join('\n');
 
       return {
         value: result !== undefined ? result : null,
@@ -1007,6 +1054,11 @@ export class DshToolService {
         executionTimeMs: duration,
       };
     } catch (err: any) {
+      ptcJob.status = 'error';
+      ptcJob.exitCode = 1;
+      ptcJob.endTime = Date.now();
+      ptcJob.outputBuffer = logs.join('\n') + `\n[Error]: ${err.message}`;
+
       return {
         value: null,
         logs: logs.slice(-200),

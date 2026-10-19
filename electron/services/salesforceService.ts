@@ -12,6 +12,42 @@ export class SalesforceService {
     this.tokenRefreshCallback = cb;
   }
 
+  /**
+   * 判断当前是否为 Salesforce 生产正式环境 (Production)
+   * 生产环境严格禁止任何数据新建/修改/删除及元数据创建操作；测试/沙盒环境 (Sandbox/Test) 则不限制。
+   */
+  public isProductionEnvironment(env: NeoEnvironment, tokenData?: TokenData): boolean {
+    if (env.productType !== 'salesforce') return false;
+
+    // 1. 显式标记为 sandbox 或 test 的连接器放行 (不限制)
+    if (env.envType === 'sandbox' || env.envType === 'test') {
+      return false;
+    }
+
+    // 2. 检查实例域名或访问地址特征 (是否包含沙盒/测试标识)
+    const url = (tokenData?.instance_uri || env.neoBaseURL || '').toLowerCase();
+    if (
+      url.includes('test.salesforce.com') ||
+      url.includes('test.sfcrmproducts.cn') ||
+      url.includes('.sandbox.') ||
+      url.includes('--') ||
+      /cs\d+\./.test(url)
+    ) {
+      return false;
+    }
+
+    // 3. 生产域名标识
+    if (
+      env.envType === 'production' ||
+      url.includes('login.salesforce.com') ||
+      url.includes('login.sfcrmproducts.cn')
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
   private getBaseUrl(env: NeoEnvironment, tokenData: TokenData): string {
     const raw = tokenData.instance_uri || env.neoBaseURL || 'https://login.salesforce.com';
     return raw.endsWith('/') ? raw.slice(0, -1) : raw;
@@ -419,6 +455,9 @@ export class SalesforceService {
     sObjectName: string,
     recordData: Record<string, any>
   ): Promise<{ id: string; success: boolean }> {
+    if (this.isProductionEnvironment(env, tokenData)) {
+      throw new Error(`【安全生产红线拦截】当前连接的是 Salesforce 生产正式环境 (${env.name})，系统已强制开启生产写保护，严禁执行新建记录操作！沙盒测试环境 (Sandbox/Test) 不受限制。`);
+    }
     const data = await this.requestWithAuth(env, tokenData, {
       method: 'POST',
       url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}`,
@@ -437,6 +476,9 @@ export class SalesforceService {
     recordId: string | number,
     recordData: Record<string, any>
   ): Promise<{ success: boolean }> {
+    if (this.isProductionEnvironment(env, tokenData)) {
+      throw new Error(`【安全生产红线拦截】当前连接的是 Salesforce 生产正式环境 (${env.name})，系统已强制开启生产写保护，严禁执行更改/更新记录操作！沙盒测试环境 (Sandbox/Test) 不受限制。`);
+    }
     await this.requestWithAuth(env, tokenData, {
       method: 'PATCH',
       url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/${encodeURIComponent(String(recordId))}`,
@@ -454,6 +496,9 @@ export class SalesforceService {
     sObjectName: string,
     recordId: string | number
   ): Promise<{ success: boolean }> {
+    if (this.isProductionEnvironment(env, tokenData)) {
+      throw new Error(`【安全生产红线拦截】当前连接的是 Salesforce 生产正式环境 (${env.name})，系统已强制开启生产写保护，严禁执行删除记录操作！沙盒测试环境 (Sandbox/Test) 不受限制。`);
+    }
     await this.requestWithAuth(env, tokenData, {
       method: 'DELETE',
       url: `/services/data/v59.0/sobjects/${encodeURIComponent(sObjectName)}/${encodeURIComponent(String(recordId))}`,

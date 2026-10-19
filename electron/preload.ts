@@ -63,6 +63,7 @@ export const neoApi = {
   // 图片操作
   fetchImageDataUrl: (fileId: string | number) => ipcRenderer.invoke('image:fetchDataUrl', fileId),
   uploadImage: (base64Data: string, fileName: string, mimeType?: string) => ipcRenderer.invoke('image:upload', base64Data, fileName, mimeType),
+  getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
   // 自动更新
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   downloadUpdate: (downloadUrl: string, fileName: string) => ipcRenderer.invoke('updater:download', downloadUrl, fileName),

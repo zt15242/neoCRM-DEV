@@ -1,3 +1,6 @@
+declare const __APP_VERSION__: string | undefined;
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.5';
+
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
   clientSecret: '370817d1336a3737f95c671eea39a23b',
@@ -95,7 +98,6 @@ export const BUILTIN_AI_PROVIDERS: AiProviderConfig[] = [
     baseUrl: "http://127.0.0.1:8788/v1",
     apiKey: "",
     enabled: true,
-    website: "https://github.com/ardeyouxipianyi/workbuddy2api-hub",
     description: "WorkBuddy2API-Hub 多账号网关中枢：聚合腾讯 WorkBuddy (国际版 workbuddy.ai) 与 CodeBuddy (国内版 codebuddy.cn)，提供标准 OpenAI 兼容接口，支持 DeepSeek-V4.1-Flash、GPT-6-Astra、GPT-5.3-Codex、GLM-5.3 等全量官方模型与智能调度。",
     models: [
       {

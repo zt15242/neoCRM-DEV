@@ -276,6 +276,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     refreshTimerRef.current = setTimeout(() => {
       loadDirTree();
       loadRecentArtifacts();
+      loadJobs();
     }, 1000);
 
     return () => {
@@ -663,7 +664,18 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
             }`}
           >
             <Activity className="w-3.5 h-3.5 text-amber-500" />
-            <span>后台任务{jobsList.some(j => j.status === 'running') ? ` (${jobsList.filter(j => j.status === 'running').length})` : ''}</span>
+            <span className="flex items-center">
+              后台任务
+              {jobsList.some((j) => j.status === 'running') ? (
+                <span className="ml-1 px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 text-[10px] font-mono animate-pulse">
+                  {jobsList.filter((j) => j.status === 'running').length} 运行中
+                </span>
+              ) : jobsList.length > 0 ? (
+                <span className="ml-1 text-[10px] text-slate-400 font-mono">
+                  ({jobsList.length})
+                </span>
+              ) : ''}
+            </span>
           </button>
 
           <button

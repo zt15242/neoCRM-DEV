@@ -50,6 +50,7 @@ import {
   Printer,
   Workflow,
   PanelRight,
+  PanelLeftOpen,
   MoreHorizontal,
   Folder,
   RotateCcw
@@ -72,6 +73,9 @@ interface AiHarnessStudioProps {
   onOpenFlowManager?: () => void;
   onOpenPrintManager?: () => void;
   onOpenLicenseModal?: () => void;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  platform?: string;
 }
 
 export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
@@ -91,6 +95,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   onOpenFlowManager,
   onOpenPrintManager,
   onOpenLicenseModal,
+  sidebarCollapsed = false,
+  onToggleSidebar,
+  platform = 'darwin',
 }) => {
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
@@ -124,7 +131,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   // 严格在挂载或外部非流式更新时同步 sessions
   useEffect(() => {
-    if (propSessions && propSessions.length > 0 && !streamingRequestId) {
+    if (propSessions && propSessions.length > 0 && Object.keys(activeStreams).length === 0) {
       setSessionsState(propSessions);
       sessionsRef.current = propSessions;
     }
@@ -214,9 +221,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [quickApiKey, setQuickApiKey] = useState<string>('');
   const [savingQuickKey, setSavingQuickKey] = useState<boolean>(false);
 
-  // 流式生成状态
-  const [streamingRequestId, setStreamingRequestId] = useState<string | null>(null);
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  // 多会话并发安全与流式状态字典：按 sessionId 独立记录正在生成的 { requestId, messageId }
+  const [activeStreams, setActiveStreams] = useState<Record<string, { requestId: string; messageId: string }>>({});
+  const currentSessionStream = activeSessionId ? activeStreams[activeSessionId] : null;
+  const isCurrentSessionStreaming = Boolean(currentSessionStream);
+  const streamingMessageId = currentSessionStream?.messageId || null;
   const reasoningStartTimeRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -318,19 +327,24 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     }
   }, [activeSessionId, activeSession?.mode]);
 
-  // 关键修复：当切换会话时，将滚动位置重置到顶部 (scrollTop = 0)，保证用户从头完整阅读提问与回答！
+  // 切换会话时，根据当前会话是否处于后台流式执行中，智能定位滚动位置
   useEffect(() => {
-    if (messagesContainerRef.current) {
+    if (!messagesContainerRef.current) return;
+    if (activeSessionId && activeStreams[activeSessionId]) {
+      // 正在流式推进中的会话，切回时平滑跟随到底部最新进展
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    } else {
+      // 静态历史会话，重置到顶部方便从头阅读
       messagesContainerRef.current.scrollTop = 0;
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, activeStreams]);
 
-  // 仅在发送新消息或流式输出新增量时，平滑跟随到底部
+  // 处于当前会话流式输出新增量时，平滑跟随到底部
   useEffect(() => {
-    if (streamingMessageId && messagesContainerRef.current) {
+    if (isCurrentSessionStreaming && messagesContainerRef.current) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
-  }, [streamingMessageId]);
+  }, [isCurrentSessionStreaming]);
 
   // 订阅流式事件
   useEffect(() => {
@@ -426,8 +440,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       });
 
       if (type === 'done' || type === 'error') {
-        setStreamingRequestId(null);
-        setStreamingMessageId(null);
+        setActiveStreams((prev) => {
+          if (!prev[sessionId]) return prev;
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        });
         reasoningStartTimeRef.current = null;
       }
     });
@@ -612,8 +630,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     setActiveSessionId(updatedSession.id);
 
     const requestId = `req_${Date.now()}`;
-    setStreamingRequestId(requestId);
-    setStreamingMessageId(assistantMsgId);
+    setActiveStreams((prev) => ({
+      ...prev,
+      [updatedSession.id]: { requestId, messageId: assistantMsgId },
+    }));
     reasoningStartTimeRef.current = null;
 
     const effectiveMcpIds = mcpIds !== undefined ? mcpIds : activeMcpServerIds;
@@ -635,11 +655,16 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   };
 
   // 停止生成
-  const handleStopStream = async () => {
-    if (streamingRequestId) {
-      await window.neoApi.aiAbortChatStream(streamingRequestId);
-      setStreamingRequestId(null);
-      setStreamingMessageId(null);
+  const handleStopStream = async (targetSessionId?: string) => {
+    const sId = targetSessionId || activeSessionId;
+    const stream = sId ? activeStreams[sId] : null;
+    if (stream) {
+      await window.neoApi.aiAbortChatStream(stream.requestId);
+      setActiveStreams((prev) => {
+        const next = { ...prev };
+        if (sId) delete next[sId];
+        return next;
+      });
     }
   };
 
@@ -693,8 +718,20 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
       <div className="flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden">
         {/* 顶部 Codex 风格标题与分栏控制栏 */}
-        <div className="h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-2 min-w-0">
+        <div className={`h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0 select-none ${
+          platform === 'darwin' && sidebarCollapsed ? 'pl-20 window-drag' : ''
+        }`}>
+          <div className="flex items-center space-x-2 min-w-0 window-no-drag">
+            {sidebarCollapsed && onToggleSidebar && (
+              <button
+                type="button"
+                onClick={onToggleSidebar}
+                className="p-1.5 -ml-1 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer mr-1 transition-colors shrink-0"
+                title="展开左侧工具栏 (Cmd+B / Ctrl+B)"
+              >
+                <PanelLeftOpen className="w-4 h-4 text-slate-700" />
+              </button>
+            )}
             <Folder className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <h2 className="text-xs font-semibold text-slate-800 truncate">
               {activeSession ? activeSession.title : currentPreset.name}
@@ -731,7 +768,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           </div>
 
           {/* 右侧动作控制区 (流程库、模板库、更多选项、分栏展开切换) */}
-          <div className="flex items-center space-x-1.5 shrink-0">
+          <div className="flex items-center space-x-1.5 shrink-0 window-no-drag">
             <button
               type="button"
               onClick={() => onOpenFlowManager ? onOpenFlowManager() : setIsFlowManagerOpen(true)}
@@ -819,7 +856,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         </div>
 
         {/* 中部消息流展示区 (严格受限于视口，具备独立滚轮滚动与自适应高度) */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-4 min-h-0">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-4 min-h-0 select-text">
           {/* 未配置 API Key 时的极速激活横幅 */}
           {!isCurrentProviderConfigured && (
             <div className="mb-6 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-sky-50 p-4 shadow-xs">
@@ -983,7 +1020,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         <div className="p-3.5 bg-transparent shrink-0">
           <div className="max-w-3xl mx-auto">
             <AiInputComposer
-              isStreaming={!!streamingRequestId}
+              isStreaming={isCurrentSessionStreaming}
               onSend={handleSendMessage}
               onStop={handleStopStream}
               entityRefs={entityRefs}

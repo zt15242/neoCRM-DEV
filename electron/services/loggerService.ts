@@ -53,6 +53,18 @@ export class LoggerService {
     return path.join(this.logDir, `app-${this.getTodayDateStr()}.log`);
   }
 
+  /**
+   * 自动脱敏过滤：彻底擦除所有内部/业务 Git 仓库地址、SSH/HTTP 凭据，防止泄露到运行日志
+   */
+  private sanitizeLogString(str: string): string {
+    if (!str || typeof str !== 'string') return '';
+    return str
+      .replace(/(?:ssh:\/\/|git@|https?:\/\/[^/\s:@]+(?::[^/\s:@]+)?@)[\w.-]+(?::\d+)?(?:\/|:)[\w.-]+\/[\w.-]+(?:\.git)?/gi, '[REDACTED_GIT_URL]')
+      .replace(/https?:\/\/[^\s"'<>]+\.git\b/gi, '[REDACTED_GIT_URL]')
+      .replace(/From\s+(?:https?:\/\/|ssh:\/\/|git@)[^\s\n]+/gi, 'From [REDACTED_GIT_URL]')
+      .replace(/([?&](?:token|key|secret|password|bearer)=)[^&\s]+/gi, '$1[REDACTED]');
+  }
+
   private formatTime(d = new Date()): string {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -86,9 +98,10 @@ export class LoggerService {
       }
     }
 
-    const cleanMsg = String(message || '').replace(/\r?\n/g, ' ');
-    const logLine = detailStr
-      ? `[${timeStr}] [${level}] [${module}] ${cleanMsg} | Details: ${detailStr}\n`
+    const cleanMsg = this.sanitizeLogString(String(message || '').replace(/\r?\n/g, ' '));
+    const cleanDetails = this.sanitizeLogString(detailStr);
+    const logLine = cleanDetails
+      ? `[${timeStr}] [${level}] [${module}] ${cleanMsg} | Details: ${cleanDetails}\n`
       : `[${timeStr}] [${level}] [${module}] ${cleanMsg}\n`;
 
     try {

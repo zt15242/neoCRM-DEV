@@ -18,7 +18,7 @@ import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
 import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
-import { ShieldAlert, LogIn } from 'lucide-react';
+import { ShieldAlert, LogIn, PanelLeftOpen } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [platform, setPlatform] = useState<string>('darwin');
@@ -26,6 +26,22 @@ export const App: React.FC = () => {
   const [selectedEnvId, setSelectedEnvId] = useState<string>('production');
   const [session, setSession] = useState<SessionState>({ isLoggedIn: false });
   const [accountHistory, setAccountHistory] = useState<AccountRecord[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+
+  // 快捷键 Cmd+B / Ctrl+B 一键折叠/展开左侧工具栏 (对齐 Codex / VSCode 经典交互)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+        e.preventDefault();
+        setSidebarCollapsed((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
 
   // 自动更新状态
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -544,10 +560,43 @@ export const App: React.FC = () => {
         }}
         onDeleteProject={handleDeleteProject}
         onOpenFolderInExplorer={handleOpenFolderInExplorer}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
 
       {/* 右侧无缝主工作区 */}
       <main className="flex-1 h-full min-h-0 overflow-hidden flex flex-col min-w-0 bg-white relative">
+        {/* 当侧边栏折叠时，为非 AI 页面提供顶部统一标题栏与展开操作 (安全避开 macOS 红绿灯窗口控制按钮，杜绝重叠覆盖) */}
+        {sidebarCollapsed && activeTab !== 'ai' && (
+          <header className={`h-11 px-4 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 select-none z-30 ${
+            platform === 'darwin' ? 'pl-20 window-drag' : 'window-drag'
+          }`}>
+            <div className="flex items-center space-x-2 window-no-drag min-w-0">
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed(false)}
+                className="p-1.5 -ml-1 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer mr-1 transition-colors flex items-center space-x-1.5 shrink-0"
+                title="展开左侧工具栏 (Cmd+B / Ctrl+B)"
+              >
+                <PanelLeftOpen className="w-4 h-4 text-slate-700" />
+                <span className="text-xs font-semibold text-slate-800">展开侧边栏</span>
+              </button>
+              <span className="text-slate-300">/</span>
+              <span className="text-xs font-medium text-slate-500 truncate">
+                {activeTab === 'dashboard'
+                  ? (activeDetailEnvId ? '连接器详情' : 'CRM 连接器中心')
+                  : activeTab === 'metadata'
+                  ? '对象与字段管理'
+                  : '数据中心 (DML/SQL)'}
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 window-no-drag shrink-0">
+              <span className="text-[11px] text-slate-400 font-mono">
+                {platform === 'darwin' ? '⌘B 折叠/展开' : 'Ctrl+B 折叠/展开'}
+              </span>
+            </div>
+          </header>
+        )}
         {/* Tab 1: CRM 连接器中心 与 连接器详情页 */}
         {activeTab === 'dashboard' && (
           <div className="flex-1 h-full overflow-y-auto p-4 md:p-6 max-w-[1400px] w-full mx-auto space-y-6">
@@ -657,8 +706,8 @@ export const App: React.FC = () => {
           )
         )}
 
-        {/* Tab 4: AI 对话平台 (Codex 极简三栏全能工作台) */}
-        {activeTab === 'ai' && (
+        {/* Tab 4: AI 对话平台 (Codex 极简三栏全能工作台 · 保持常驻挂载以支持后台流式持续生成与零断点切回) */}
+        <div className={`flex-1 h-full w-full min-h-0 flex flex-col ${activeTab === 'ai' ? 'flex' : 'hidden'}`}>
           <AiHarnessStudio
             crmSession={session}
             activeSessionId={activeSessionId}
@@ -675,9 +724,12 @@ export const App: React.FC = () => {
             onNavigateToSettings={(tab) => handleOpenSettings((tab as SettingsSubTab) || 'models')}
             onNavigateToMetadata={() => setActiveTab('metadata')}
             onNavigateToData={() => setActiveTab('data')}
+            platform={platform}
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
             showToast={showToast}
           />
-        )}
+        </div>
 
 
       </main>

@@ -379,6 +379,34 @@ export class WorkflowService {
     procdefId: string | number,
     procType: 1 | 2 = 1
   ): Promise<{ success: boolean; definition?: any; property?: any; error?: string }> {
+    if (env.productType === 'salesforce') {
+      try {
+        const soql = `SELECT Id, ApiName, Label, ProcessType, Description, IsActive, VersionNumber FROM FlowDefinitionView WHERE Id = '${procdefId}' OR ApiName = '${procdefId}' LIMIT 1`;
+        const qRes = await this.dataService.executeQuery(env, tokenData, soql);
+        const record = qRes.data?.records?.[0];
+        if (record) {
+          return {
+            success: true,
+            definition: {
+              baseInfo: {
+                procdefId: record.Id,
+                name: record.Label || record.ApiName,
+                apiName: record.ApiName,
+                processType: record.ProcessType,
+                isActive: record.IsActive,
+                version: record.VersionNumber,
+                description: record.Description || '',
+              },
+              nodeInfo: {},
+            },
+            property: record,
+          };
+        }
+        return { success: false, error: `未找到 Salesforce 流程: ${procdefId}` };
+      } catch (sfErr: any) {
+        return { success: false, error: sfErr.message };
+      }
+    }
     const baseUrl = this.resolveBaseUrl(env, tokenData);
     const headers = this.buildAdminHeaders(baseUrl, tokenData);
 

@@ -56,7 +56,7 @@ const handleTokenRefresh = (env: any, newToken: any) => {
 metadataService.setTokenRefreshCallback(handleTokenRefresh);
 dataService.setTokenRefreshCallback(handleTokenRefresh);
 
-const aiService = new AiService(sessionStore, metadataService, dataService, envService);
+const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
@@ -586,8 +586,10 @@ ipcMain.handle("workflow:deployApprovalPlan", async (_, plan: any, options?: { a
 });
 
 ipcMain.handle("workflow:listTenantFlows", async (_, params) => {
-  licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
+  if (current.environment?.productType === 'neocrm' || !current.environment?.productType) {
+    licenseService.assertAuthorized();
+  }
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
   }
@@ -613,8 +615,10 @@ ipcMain.handle("workflow:deleteFlow", async (_, procdefId: string | number, proc
 });
 
 ipcMain.handle("workflow:listFlows" , async (_, params) => {
-  licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
+  if (current.environment?.productType === 'neocrm' || !current.environment?.productType) {
+    licenseService.assertAuthorized();
+  }
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
   }
@@ -622,8 +626,10 @@ ipcMain.handle("workflow:listFlows" , async (_, params) => {
 });
 
 ipcMain.handle("workflow:getFlowDetail", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
-  licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
+  if (current.environment?.productType === 'neocrm' || !current.environment?.productType) {
+    licenseService.assertAuthorized();
+  }
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
   }

@@ -283,13 +283,26 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
   }, [externalAttachmentToAdd]);
 
-  // 3. 高度自适应
-  useEffect(() => {
+  // 3. 高度自适应 (严格保底 minHeight: 36px，彻底杜绝隐藏或切换 Tab 时 scrollHeight 为 0 导致输入框坍塌消失！)
+  const adjustTextareaHeight = () => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`;
+      const scrollH = textareaRef.current.scrollHeight;
+      const targetH = scrollH && scrollH > 32 ? Math.min(scrollH, 180) : 36;
+      textareaRef.current.style.height = `${targetH}px`;
     }
+  };
+
+  useEffect(() => {
+    adjustTextareaHeight();
   }, [text]);
+
+  useEffect(() => {
+    adjustTextareaHeight();
+    const handleResize = () => adjustTextareaHeight();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // ================= 4. 快捷指令清单 (Slash Commands - 仅选中工具，绝不填充冗余示例！) =================
   const ALL_SLASH_COMMANDS: SlashCommandItem[] = [
@@ -763,7 +776,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     setSlashMenuOpen(false);
     setMentionMenuOpen(false);
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = '36px';
     }
   };
 
@@ -837,7 +850,14 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     <div
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      className="bg-white rounded-2xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-all p-3 space-y-2 relative"
+      onClick={(e) => {
+        // 点击输入框外层空白区域时，自动聚焦到 textarea
+        const target = e.target as HTMLElement;
+        if (target.tagName !== 'BUTTON' && !target.closest('button') && target.tagName !== 'INPUT') {
+          focusTextarea();
+        }
+      }}
+      className="bg-white rounded-2xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-all p-3 space-y-2 relative cursor-text"
     >
       {/* ================= 浮层 A: 快捷指令自动匹配菜单 (/ Slash Commands) ================= */}
       {slashMenuOpen && filteredCommands.length > 0 && (
@@ -1029,15 +1049,17 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         </div>
       )}
 
-      {/* 主输入文本域 */}
+      {/* 主输入文本域 (强约束 min-h-[36px] 与 minHeight 样式，确保永远可见可点) */}
       <textarea
         ref={textareaRef}
         value={text}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
+        onFocus={adjustTextareaHeight}
         placeholder={activeCommand ? `已选中【${activeCommand.command} ${activeCommand.badge || activeCommand.name}】，请输入具体内容...` : placeholder}
         rows={1}
-        className="w-full resize-none border-none focus:outline-none text-[13px] md:text-sm text-slate-800 placeholder-slate-400 bg-transparent leading-relaxed max-h-44"
+        style={{ minHeight: '36px' }}
+        className="w-full min-h-[36px] resize-none border-none focus:outline-none text-[13px] md:text-sm text-slate-800 placeholder-slate-400 bg-transparent leading-relaxed max-h-44 block"
       />
 
       {/* 底部操作工具栏 (Codex 经典布局: 左侧 + 与权限药丸，右侧模型与黑圆箭头发送键) */}
