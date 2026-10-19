@@ -1,3 +1,22 @@
+### 🚀 版本更新说明 (v1.8.3)
+
+1. **彻底解决 Windows 系统下 Salesforce CLI 联通与自动续期失效缺陷**：
+   - **修复 Windows 命令执行语法冲突**：全面排查并彻底移除了在 Windows `cmd.exe` 终端下导致崩溃的 `SF_TEMP_SHOW_SECRETS=true` 行内环境变量语法，统一通过 Node.js 子进程 `options.env` 跨平台安全注入环境变量，确保 Windows 下 `sf.cmd` 执行 100% 顺畅；
+   - **多级组织别名解析与缺省回退**：适配 Salesforce CLI v2 最新规范，依次从 `~/.sf/config.json` (`target-org`)、`~/.sfdx/sfdx-config.json` (`defaultusername`) 与 `alias.json` 解析活跃组织；增加默认组织缺省回退，彻底消除因别名匹配失败导致的读取中断；
+   - **补齐 `refresh_token` 磁盘全自动读取与持久化**：解决通过 CLI 登录后会话对象中缺失 `refresh_token` 的历史问题，自动从本地磁盘 `~/.sfdx/<username>.json` 提取 `refreshToken`、`clientId` 与 `clientSecret`，使会话具备全生命周期自动续期能力。
+
+2. **Salesforce 三层 401 无感静默自愈与后台定时续期**：
+   - **API 401 故障无感重发机制**：在执行 SOQL 数据查询、Describe 元数据探测或 DML 记录操作过程中，一旦遇到 `INVALID_SESSION_ID`（会话过期），系统自动通过【磁盘缓存即时探测 -> 本地 sf CLI 自动联动刷新 -> 云端 OAuth2 多端点接口换新】三层自愈防线在后台完成 Token 轮转，并无感重新下发刚才失败的 API 请求，彻底告别“频繁提示过期需重新登录”；
+   - **后台 30 秒定时续期双通道**：优化后台静默保活引擎，支持 OAuth2 云端换新与本地 sf CLI 双向联动，维持组织会话长效稳定连接。
+
+3. **Windows 环境下 Salesforce 官方浏览器授权强制唤起保障**：
+   - 针对 Windows Electron 宿主子进程环境下调用 `sf.cmd org login web` 有时无法唤起系统默认浏览器的问题，实时捕获标准输出中的授权 URL 并主动调度 Electron 原生 `shell.openExternal` 强制唤起默认浏览器，保障登录流程 100% 顺畅。
+
+4. **UI 视觉与交互体验精简优化**：
+   - 针对内置的 **WorkBuddy / CodeBuddy 原生反向代理**卡片，彻底隐藏了冗余且易引起困惑的手动 API Key 与 Base URL 输入框，聚焦微信/客户端二维码扫码登录、在线账号状态展示、一键换号与动态模型探测同步。
+
+---
+
 ### 🚀 版本更新说明 (v1.8.2)
 
 1. **深度内置 WorkBuddy / CodeBuddy 原生反向代理与微信/网页扫码登录机制**：
