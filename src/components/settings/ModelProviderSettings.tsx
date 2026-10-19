@@ -419,6 +419,7 @@ const ThirdPartyProviderCard: React.FC<{
   const [fetching, setFetching] = useState(false);
 
   const isGemini = provider.id === 'gemini';
+  const isWorkBuddy = provider.id === 'workbuddy';
 
   const handleSave = async () => {
     setSaving(true);
@@ -427,7 +428,7 @@ const ThirdPartyProviderCard: React.FC<{
   };
 
   const handleFetchModels = async () => {
-    if (!localKey.trim() && !localUrl.includes('localhost')) {
+    if (!localKey.trim() && !localUrl.includes('localhost') && !localUrl.includes('127.0.0.1') && !isWorkBuddy) {
       showToast('error', `请先输入 ${provider.name} 的 API Key`);
       return;
     }
@@ -455,7 +456,7 @@ const ThirdPartyProviderCard: React.FC<{
   return (
     <div
       className={`rounded-xl border bg-white overflow-hidden shadow-2xs transition-all ${
-        isGemini ? 'border-indigo-200 ring-1 ring-indigo-50' : 'border-slate-200'
+        isGemini ? 'border-indigo-200 ring-1 ring-indigo-50' : isWorkBuddy ? 'border-cyan-300 ring-1 ring-cyan-50' : 'border-slate-200'
       }`}
     >
       <div
@@ -465,10 +466,10 @@ const ThirdPartyProviderCard: React.FC<{
         <div className="flex items-center space-x-2.5 truncate">
           <div
             className={`p-1.5 rounded-lg shrink-0 ${
-              isGemini ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'
+              isGemini ? 'bg-indigo-100 text-indigo-600' : isWorkBuddy ? 'bg-cyan-100 text-cyan-700' : 'bg-slate-100 text-slate-600'
             }`}
           >
-            {isGemini ? <Sparkles className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
+            {isGemini ? <Sparkles className="w-4 h-4" /> : isWorkBuddy ? <Cpu className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
           </div>
           <div className="truncate">
             <div className="flex items-center space-x-1.5">
@@ -478,9 +479,14 @@ const ThirdPartyProviderCard: React.FC<{
                   支持 2.5 Pro/Flash
                 </span>
               )}
-              {hasKey && (
+              {isWorkBuddy && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-50 text-cyan-700 border border-cyan-200 font-medium">
+                  腾讯双区域网关 · 默认8788
+                </span>
+              )}
+              {(hasKey || isWorkBuddy) && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  已配置
+                  {hasKey ? '已配置 Key' : '就绪 (本地网关)'}
                 </span>
               )}
             </div>
@@ -516,14 +522,14 @@ const ThirdPartyProviderCard: React.FC<{
         <div className="p-3.5 bg-slate-50/60 border-t border-slate-100 space-y-3 text-xs">
           <div>
             <label className="block text-slate-600 font-medium mb-1">
-              {isGemini ? 'Gemini API Key (AIzaSy...)' : 'API Key 访问密钥'}
+              {isGemini ? 'Gemini API Key (AIzaSy...)' : isWorkBuddy ? 'API Key (单机模式可留空，LAN或多Key模式填绑定的Key)' : 'API Key 访问密钥'}
             </label>
             <div className="relative">
               <input
                 type={isKeyVisible ? 'text' : 'password'}
                 value={localKey}
                 onChange={(e) => setLocalKey(e.target.value)}
-                placeholder={isGemini ? '粘贴 AIzaSy... 格式密钥' : '请输入 API 密钥...'}
+                placeholder={isGemini ? '粘贴 AIzaSy... 格式密钥' : isWorkBuddy ? '默认单机模式可留空；若在看板配置了多Key请输入' : '请输入 API 密钥...'}
                 className="w-full pl-2.5 pr-8 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono"
               />
               <button
@@ -547,6 +553,26 @@ const ThirdPartyProviderCard: React.FC<{
               className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono text-[11px]"
             />
           </div>
+
+
+          {isWorkBuddy && (
+            <div className="flex items-center justify-between bg-cyan-50/70 border border-cyan-200/80 rounded-lg p-2.5 text-[11px] text-cyan-900">
+              <div className="flex items-center space-x-1.5 truncate">
+                <Cpu className="w-3.5 h-3.5 text-cyan-700 shrink-0" />
+                <span className="truncate">双区域多账号聚合网关 (国际版 workbuddy.ai / 国内版 codebuddy.cn)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const dashUrl = localUrl.replace(/\/v1\/?$/, '') || 'http://127.0.0.1:8788';
+                  window.neoApi.openExternal(dashUrl);
+                }}
+                className="text-cyan-700 hover:text-cyan-900 underline font-semibold shrink-0 cursor-pointer ml-2"
+              >
+                打开网关看板
+              </button>
+            </div>
+          )}
 
           {/* 预置/探测模型标签展示 */}
           <div className="flex flex-wrap gap-1 pt-0.5">

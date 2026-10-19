@@ -1,3 +1,26 @@
+### 🚀 版本更新说明 (v1.8.1)
+
+1. **全新集成「WorkBuddy2API-Hub」多账号网关模型渠道**：
+   - **参考开源项目接入**：深度对接官方开源项目 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub.git)，将腾讯 **WorkBuddy**（国际版 `www.workbuddy.ai`）与 **CodeBuddy**（国内版 `codebuddy.cn`）多账号代理中枢无缝接入平台模型供应商体系；
+   - **双区域官方对齐模型库**：开箱预置 12 个官方高频前沿模型：
+     - `default-model` (Auto 智能自动调度)
+     - `deepseek-v4.1-flash` (全能编码·极速版)
+     - `deepseek-v4-pro` (国内旗舰·深度版)
+     - `deepseek-r1-0528` (深度推理版)
+     - `gpt-6-astra` (前沿预览)
+     - `gpt-5.3-codex` (代码专精)
+     - `glm-5.3` (智谱旗舰)
+     - `kimi-k3` (长文本推理)
+     - `hy4-preview` (腾讯混元 Hy4 Preview)
+     - `fast-model` (Fast 轻量速答)
+     - `primary-model` (Primary 主力编码)
+     - `deep-model` (Deep 深度思考)
+   - **一键动态模型探测与热切**：支持点击「探测可用模型」，实时调用网关 `GET /v1/models` 接口探测本地与远程已挂载的全量最新模型目录并自动同步；
+   - **无鉴权本地单机与多 Key 适配**：对本地代理 `127.0.0.1:8788/v1` 支持单机免 Key 自动接入，同时兼容看板设置中的多 Key 独立出口调度模式；
+   - **快捷看板联动**：供应商设置卡片提供一键跳转直达本地 `http://127.0.0.1:8788/` Web 管理看板，轻松管理账号 OAuth、每日任务签到与配额护栏。
+
+---
+
 ### 🚀 版本更新说明 (v1.8.0)
 
 1. **全新上线「Nex 页面扩展大师 (Nex Architect)」角色与全流程工程闭环**：

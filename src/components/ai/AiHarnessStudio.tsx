@@ -226,6 +226,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       p &&
         ((p.apiKey && p.apiKey.trim()) ||
           p.id === "ollama" ||
+          p.id === "workbuddy" ||
           p.baseUrl?.includes("localhost") ||
           p.baseUrl?.includes("127.0.0.1")) &&
         Array.isArray(p.models) &&

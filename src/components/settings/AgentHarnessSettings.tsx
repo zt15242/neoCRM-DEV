@@ -31,6 +31,7 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
       Boolean(
         (p.apiKey && p.apiKey.trim()) ||
           p.id === "ollama" ||
+          p.id === "workbuddy" ||
           p.baseUrl?.includes("localhost") ||
           p.baseUrl?.includes("127.0.0.1")
       ) &&

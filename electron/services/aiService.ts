@@ -536,7 +536,7 @@ ${dialogHistoryText}`;
         {
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${provider.apiKey}`,
+            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
           },
           timeout: 20000,
         }
@@ -669,7 +669,7 @@ ${dialogHistoryText}`;
       try {
         const modelsRes = await axios.get(`${baseUrl}/models`, {
           headers: {
-            Authorization: `Bearer ${provider.apiKey || ''}`,
+            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
           },
           timeout: 8000,
         });
@@ -769,7 +769,7 @@ ${dialogHistoryText}`;
       // OpenAI 兼容格式模型列表解析
       const res = await axios.get(`${baseUrl}/models`, {
         headers: {
-          Authorization: `Bearer ${provider.apiKey || ''}`,
+          ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
         },
         timeout: 10000,
       });
@@ -933,7 +933,7 @@ ${dialogHistoryText}`;
       return;
     }
 
-    if (!provider.apiKey && provider.id !== 'ollama' && !provider.baseUrl.includes('127.0.0.1') && !provider.baseUrl.includes('localhost')) {
+    if (!provider.apiKey && provider.id !== 'ollama' && provider.id !== 'workbuddy' && !provider.baseUrl.includes('127.0.0.1') && !provider.baseUrl.includes('localhost')) {
       sendEvent({
         requestId,
         sessionId,
@@ -1545,7 +1545,7 @@ ${mcpInfoText}
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${provider.apiKey}`,
+            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
           },
           body: JSON.stringify(requestBody),
           signal: controller.signal,
@@ -1881,7 +1881,7 @@ ${toolDataContext}
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${provider.apiKey}`,
+            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
           },
           body: JSON.stringify({
             model: modelId,
