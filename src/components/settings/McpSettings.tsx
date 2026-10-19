@@ -15,7 +15,10 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
-  Loader2
+  Loader2,
+  Code2,
+  SlidersHorizontal,
+  Key
 } from 'lucide-react';
 
 interface McpSettingsProps {
@@ -42,6 +45,10 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<McpServerConfig | null>(null);
 
+  // 表单与 JSON 模式切换
+  const [configMode, setConfigMode] = useState<'form' | 'json'>('form');
+  const [jsonInput, setJsonInput] = useState('');
+
   // 基础表单状态
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -50,17 +57,23 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
   const [argsStr, setArgsStr] = useState('-y @modelcontextprotocol/server-filesystem /path/to/dir');
   const [url, setUrl] = useState('http://localhost:3001/sse');
 
-  // 鉴权与请求头表单状态
+  // 核心鉴权与安全凭证状态
   const [authType, setAuthType] = useState<McpAuthType>('none');
   const [bearerToken, setBearerToken] = useState('');
   const [basicUsername, setBasicUsername] = useState('');
   const [basicPassword, setBasicPassword] = useState('');
+  const [customAuthHeaderKey, setCustomAuthHeaderKey] = useState('x-api-key');
+  const [customAuthHeaderVal, setCustomAuthHeaderVal] = useState('');
   const [showSecret, setShowSecret] = useState(false);
+
+  // 附加请求头与环境变量
   const [customHeaders, setCustomHeaders] = useState<KeyValuePair[]>([]);
   const [envVars, setEnvVars] = useState<KeyValuePair[]>([]);
 
   const handleOpenAdd = () => {
     setEditingServer(null);
+    setConfigMode('form');
+    setJsonInput('');
     setName('');
     setDescription('');
     setType('sse');
@@ -71,6 +84,8 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
     setBearerToken('');
     setBasicUsername('');
     setBasicPassword('');
+    setCustomAuthHeaderKey('x-api-key');
+    setCustomAuthHeaderVal('');
     setShowSecret(false);
     setCustomHeaders([]);
     setEnvVars([]);
@@ -83,6 +98,8 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
       return;
     }
     setEditingServer(srv);
+    setConfigMode('form');
+    setJsonInput('');
     setName(srv.name);
     setDescription(srv.description || '');
     setType(srv.type === 'sse' ? 'sse' : 'stdio');
@@ -90,18 +107,27 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
     setArgsStr((srv.args || []).join(' '));
     setUrl(srv.url || 'http://localhost:3001/sse');
 
-    // 还原鉴权与请求头
-    setAuthType(srv.authType || 'none');
+    // 还原鉴权凭证
+    setAuthType(srv.authType || (srv.bearerToken ? 'bearer' : srv.basicUsername ? 'basic' : 'none'));
     setBearerToken(srv.bearerToken || '');
     setBasicUsername(srv.basicUsername || '');
     setBasicPassword(srv.basicPassword || '');
     setShowSecret(false);
 
-    // 还原除自动生成的 Authorization 之外的自定义请求头
+    // 还原请求头
     const headerEntries: KeyValuePair[] = [];
+    let customHeaderFound = false;
     if (srv.headers) {
       for (const [k, v] of Object.entries(srv.headers)) {
-        if ((srv.authType === 'bearer' || srv.authType === 'basic') && k.toLowerCase() === 'authorization') {
+        const lowerK = k.toLowerCase();
+        if (lowerK === 'authorization' && srv.authType === 'bearer') {
+          // 已经存在于 bearerToken 中，无需重复填入 Headers 列表
+          continue;
+        }
+        if (srv.authType === 'custom' && !customHeaderFound) {
+          setCustomAuthHeaderKey(k);
+          setCustomAuthHeaderVal(v);
+          customHeaderFound = true;
           continue;
         }
         headerEntries.push({ key: k, value: v });
@@ -184,6 +210,53 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
     setEnvVars((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  // 从 JSON 快速解析并导入
+  const handleApplyJson = () => {
+    try {
+      const parsed = JSON.parse(jsonInput.trim());
+      let targetObj = parsed;
+      if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+        const firstKey = Object.keys(parsed.mcpServers)[0];
+        if (firstKey) {
+          setName(firstKey);
+          targetObj = parsed.mcpServers[firstKey];
+        }
+      }
+
+      if (targetObj.command) {
+        setType('stdio');
+        setCommand(targetObj.command);
+        if (Array.isArray(targetObj.args)) {
+          setArgsStr(targetObj.args.join(' '));
+        }
+        if (targetObj.env && typeof targetObj.env === 'object') {
+          const envs = Object.entries(targetObj.env).map(([k, v]) => ({ key: k, value: String(v) }));
+          setEnvVars(envs);
+        }
+      } else if (targetObj.url) {
+        setType('sse');
+        setUrl(targetObj.url);
+        if (targetObj.headers && typeof targetObj.headers === 'object') {
+          const hds: KeyValuePair[] = [];
+          for (const [k, v] of Object.entries(targetObj.headers)) {
+            const valStr = String(v);
+            if (k.toLowerCase() === 'authorization' && valStr.toLowerCase().startsWith('bearer ')) {
+              setAuthType('bearer');
+              setBearerToken(valStr.slice(7).trim());
+            } else {
+              hds.push({ key: k, value: valStr });
+            }
+          }
+          setCustomHeaders(hds);
+        }
+      }
+      setConfigMode('form');
+      showToast('success', '已成功解析并导入 MCP 配置！');
+    } catch (e: any) {
+      showToast('error', `JSON 格式错误: ${e.message}`);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -191,22 +264,23 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
       return;
     }
 
-    // 组装请求头字典
+    // 组装请求头字典与鉴权凭据
     const finalHeaders: Record<string, string> = {};
-    for (const h of customHeaders) {
-      if (h.key.trim()) {
-        finalHeaders[h.key.trim()] = h.value.trim();
-      }
-    }
-
     if (type === 'sse') {
       if (authType === 'bearer' && bearerToken.trim()) {
         const cleanToken = bearerToken.trim().replace(/^Bearer\s+/i, '');
         finalHeaders['Authorization'] = `Bearer ${cleanToken}`;
       } else if (authType === 'basic' && basicUsername.trim()) {
-        const rawCred = `${basicUsername.trim()}:${basicPassword}`;
-        const encoded = btoa(unescape(encodeURIComponent(rawCred)));
-        finalHeaders['Authorization'] = `Basic ${encoded}`;
+        const cred = `${basicUsername.trim()}:${basicPassword || ''}`;
+        finalHeaders['Authorization'] = `Basic ${btoa(unescape(encodeURIComponent(cred)))}`;
+      } else if (authType === 'custom' && customAuthHeaderKey.trim() && customAuthHeaderVal.trim()) {
+        finalHeaders[customAuthHeaderKey.trim()] = customAuthHeaderVal.trim();
+      }
+
+      for (const h of customHeaders) {
+        if (h.key.trim()) {
+          finalHeaders[h.key.trim()] = h.value.trim();
+        }
       }
     }
 
@@ -254,7 +328,7 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
         <div>
           <h3 className="text-base font-bold text-slate-800">MCP 扩展服务 (Model Context Protocol)</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            管理标准 MCP 扩展服务。内置 PaaS 驱动已受内核沙箱密封保护，支持接入外部 Stdio 进程与带鉴权请求头的远程 SSE 端点。
+            管理标准 MCP 扩展服务。支持完整的安全鉴权（Bearer Token、Basic 认证、自定义 Headers 及 Stdio 环境变量）。
           </p>
         </div>
         <button
@@ -317,21 +391,21 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
                         <span>{isBuiltin ? '内核沙箱保护 · 内置' : srv.type.toUpperCase()}</span>
                       </span>
 
-                      {/* 鉴权与请求头徽章 */}
-                      {!isBuiltin && srv.authType === 'bearer' && (
+                      {/* 鉴权与安全徽章 */}
+                      {!isBuiltin && (srv.authType === 'bearer' || srv.bearerToken) && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 flex items-center space-x-1 font-medium">
                           <KeyRound className="w-2.5 h-2.5" />
                           <span>Bearer Token 鉴权</span>
                         </span>
                       )}
-                      {!isBuiltin && srv.authType === 'basic' && (
+                      {!isBuiltin && (srv.authType === 'basic' || srv.basicUsername) && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 flex items-center space-x-1 font-medium">
                           <KeyRound className="w-2.5 h-2.5" />
-                          <span>账号密码 Basic 鉴权</span>
+                          <span>Basic 认证</span>
                         </span>
                       )}
                       {!isBuiltin && headerCount > 0 && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 font-mono">
                           Headers ({headerCount})
                         </span>
                       )}
@@ -381,23 +455,20 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
                       type="checkbox"
                       checked={srv.enabled}
                       onChange={() => handleToggleEnabled(srv)}
-                      className="w-4 h-4 rounded text-sky-600 cursor-pointer"
+                      className="sr-only peer"
                     />
+                    <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-600"></div>
                   </label>
 
-                  {!isBuiltin ? (
+                  {!isBuiltin && (
                     <>
                       <button
                         onClick={() => handleSyncTools(srv)}
                         disabled={syncingId === srv.id}
-                        className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg cursor-pointer transition-colors"
-                        title="连接并同步真实工具列表 (tools/list)"
+                        className="p-1.5 text-slate-400 hover:text-sky-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                        title="同步工具列表"
                       >
-                        {syncingId === srv.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-600" />
-                        ) : (
-                          <RefreshCw className="w-3.5 h-3.5" />
-                        )}
+                        <RefreshCw className={`w-3.5 h-3.5 ${syncingId === srv.id ? 'animate-spin text-sky-600' : ''}`} />
                       </button>
                       <button
                         onClick={() => handleOpenEdit(srv)}
@@ -409,13 +480,11 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
                       <button
                         onClick={() => handleDelete(srv)}
                         className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
-                        title="删除服务"
+                        title="移除服务"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </>
-                  ) : (
-                    <span className="text-[10px] text-slate-400 font-medium px-1">内核密封</span>
                   )}
                 </div>
               </div>
@@ -424,9 +493,9 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
         })}
       </div>
 
-      {/* 新建/编辑 MCP 服务模态框 */}
+      {/* 新增 / 编辑 MCP 服务模态框 */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
           <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/70 shrink-0">
               <div className="flex items-center space-x-2">
@@ -435,185 +504,348 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
                   {editingServer ? '编辑自定义 MCP 服务' : '添加自定义 MCP 服务'}
                 </h3>
               </div>
-              <button onClick={() => setModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+
+              {/* 表单与 JSON 模式切换 */}
+              <div className="flex items-center space-x-2">
+                <div className="flex bg-slate-200/80 p-0.5 rounded-lg text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setConfigMode('form')}
+                    className={`px-2 py-0.5 rounded-md font-medium transition-all cursor-pointer ${
+                      configMode === 'form' ? 'bg-white text-slate-800 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <SlidersHorizontal className="w-3 h-3 inline mr-1" />
+                    <span>表单</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfigMode('json')}
+                    className={`px-2 py-0.5 rounded-md font-medium transition-all cursor-pointer ${
+                      configMode === 'json' ? 'bg-white text-slate-800 shadow-2xs font-semibold' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Code2 className="w-3 h-3 inline mr-1" />
+                    <span>JSON 导入</span>
+                  </button>
+                </div>
+
+                <button onClick={() => setModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs overflow-y-auto flex-1">
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">
-                  服务名称 <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="例如：企业内部知识库 MCP / 本地文件系统 MCP"
-                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500"
-                />
+            {configMode === 'json' ? (
+              <div className="p-5 space-y-3 flex-1 flex flex-col">
+                <div>
+                  <label className="block text-slate-600 font-medium mb-1">
+                    粘贴标准 MCP 配置 (支持 Claude / Cursor / VSCode 格式)
+                  </label>
+                  <p className="text-[11px] text-slate-400 mb-2">
+                    支持粘贴包含 command、args、env 或 url、headers (含 Authorization) 的 JSON 片段。
+                  </p>
+                  <textarea
+                    rows={12}
+                    value={jsonInput}
+                    onChange={(e) => setJsonInput(e.target.value)}
+                    placeholder={`{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],\n      "env": { "API_KEY": "xxx" }\n    }\n  }\n}`}
+                    className="w-full p-3 font-mono text-xs rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:border-sky-500 focus:bg-white resize-none"
+                  />
+                </div>
+                <div className="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setConfigMode('form')}
+                    className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
+                  >
+                    返回表单
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleApplyJson}
+                    className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                  >
+                    解析并导入
+                  </button>
+                </div>
               </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs overflow-y-auto flex-1">
+                <div>
+                  <label className="block text-slate-600 font-medium mb-1">
+                    服务名称 <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="例如：企业内部知识库 MCP / 本地文件系统 MCP"
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">传输类型 (Transport)</label>
-                <select
-                  value={type}
-                  onChange={(e) => setType(e.target.value as 'stdio' | 'sse')}
-                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-sky-500"
-                >
-                  <option value="sse">SSE (HTTP Server-Sent Events 远程端点)</option>
-                  <option value="stdio">Stdio (本地命令行标准输入输出)</option>
-                </select>
-              </div>
+                <div>
+                  <label className="block text-slate-600 font-medium mb-1">传输类型 (Transport)</label>
+                  <select
+                    value={type}
+                    onChange={(e) => setType(e.target.value as 'stdio' | 'sse')}
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="sse">SSE (HTTP 远程服务端点 · 支持鉴权)</option>
+                    <option value="stdio">Stdio (本地命令行进程 · 支持环境变量鉴权)</option>
+                  </select>
+                </div>
 
-              {type === 'sse' ? (
-                <>
-                  <div>
-                    <label className="block text-slate-600 font-medium mb-1">SSE Endpoint URL</label>
-                    <input
-                      type="text"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      placeholder="http://localhost:3001/sse"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
-
-                  {/* 远程 SSE 鉴权与请求头区块 */}
-                  <div className="p-3.5 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700 flex items-center space-x-1.5">
-                        <KeyRound className="w-3.5 h-3.5 text-sky-600" />
-                        <span>鉴权方式与请求头 (Auth & Headers)</span>
-                      </span>
+                {type === 'sse' ? (
+                  <>
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1">SSE Endpoint URL <span className="text-rose-500">*</span></label>
+                      <input
+                        type="text"
+                        required
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        placeholder="http://localhost:3001/sse 或 https://..."
+                        className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono focus:outline-none focus:border-sky-500"
+                      />
                     </div>
 
-                    {/* 鉴权模式切换 */}
-                    <div className="grid grid-cols-4 gap-1.5 bg-white p-1 rounded-lg border border-slate-200">
-                      {[
-                        { id: 'none', label: '无鉴权' },
-                        { id: 'bearer', label: 'Bearer Token' },
-                        { id: 'basic', label: '账号密码' },
-                        { id: 'custom', label: '自定义头' },
-                      ].map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          onClick={() => {
-                            setAuthType(tab.id as McpAuthType);
-                            if (tab.id === 'custom' && customHeaders.length === 0) {
-                              setCustomHeaders([{ key: 'x-api-key', value: '' }]);
-                            }
-                          }}
-                          className={`py-1.5 px-2 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
-                            authType === tab.id
-                              ? 'bg-sky-600 text-white shadow-2xs font-semibold'
-                              : 'text-slate-600 hover:bg-slate-50'
-                          }`}
-                        >
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Bearer Token 模式 */}
-                    {authType === 'bearer' && (
-                      <div className="space-y-1">
-                        <label className="block text-[11px] text-slate-600 font-medium">
-                          鉴权 Token (自动生成 <code className="text-sky-700">Authorization: Bearer ...</code>)
-                        </label>
-                        <div className="relative">
-                          <input
-                            type={showSecret ? 'text' : 'password'}
-                            value={bearerToken}
-                            onChange={(e) => setBearerToken(e.target.value)}
-                            placeholder="输入 API Key 或 JWT 令牌 (如 sk-xxxx...)"
-                            className="w-full pl-3 pr-9 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowSecret(!showSecret)}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                          >
-                            {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
+                    {/* 远程 SSE 专属鉴权与安全凭证区块 */}
+                    <div className="p-3.5 rounded-xl bg-slate-50/90 border border-slate-200/90 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-700 flex items-center space-x-1.5">
+                          <KeyRound className="w-3.5 h-3.5 text-sky-600" />
+                          <span>身份认证与鉴权方式 (Authentication)</span>
+                        </span>
                       </div>
-                    )}
 
-                    {/* Basic Auth 账号密码模式 */}
-                    {authType === 'basic' && (
-                      <div className="grid grid-cols-2 gap-2.5">
-                        <div>
-                          <label className="block text-[11px] text-slate-600 font-medium mb-1">账号 / 用户名</label>
-                          <input
-                            type="text"
-                            value={basicUsername}
-                            onChange={(e) => setBasicUsername(e.target.value)}
-                            placeholder="Username"
-                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] text-slate-600 font-medium mb-1">密码 (Password)</label>
+                      {/* 鉴权模式切换 Tabs */}
+                      <div className="grid grid-cols-4 gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                        {[
+                          { id: 'none', label: '无认证' },
+                          { id: 'bearer', label: 'Bearer Token' },
+                          { id: 'basic', label: '账号密码' },
+                          { id: 'custom', label: '自定义 Header' },
+                        ].map((tab) => (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setAuthType(tab.id as McpAuthType)}
+                            className={`py-1 px-1.5 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
+                              authType === tab.id
+                                ? 'bg-sky-600 text-white shadow-2xs font-semibold'
+                                : 'text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Bearer Token 模式 */}
+                      {authType === 'bearer' && (
+                        <div className="space-y-1 animate-in fade-in duration-100">
+                          <label className="block text-[11px] text-slate-600 font-medium">
+                            API 令牌 Token (自动注入 <code className="text-sky-700 font-mono">Authorization: Bearer ...</code>)
+                          </label>
                           <div className="relative">
                             <input
                               type={showSecret ? 'text' : 'password'}
-                              value={basicPassword}
-                              onChange={(e) => setBasicPassword(e.target.value)}
-                              placeholder="Password"
-                              className="w-full pl-2.5 pr-8 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
+                              value={bearerToken}
+                              onChange={(e) => setBearerToken(e.target.value)}
+                              placeholder="粘贴 API Key 或 JWT 访问令牌 (如 sk-xxxx / ghp_xxxx)"
+                              className="w-full pl-3 pr-9 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
                             />
                             <button
                               type="button"
                               onClick={() => setShowSecret(!showSecret)}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                             >
                               {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                             </button>
                           </div>
                         </div>
-                      </div>
-                    )}
+                      )}
 
-                    {/* 自定义请求头键值对列表 */}
-                    <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                      {/* Basic Auth 账号密码模式 */}
+                      {authType === 'basic' && (
+                        <div className="grid grid-cols-2 gap-2.5 animate-in fade-in duration-100">
+                          <div>
+                            <label className="block text-[11px] text-slate-600 font-medium mb-1">用户名 (Username)</label>
+                            <input
+                              type="text"
+                              value={basicUsername}
+                              onChange={(e) => setBasicUsername(e.target.value)}
+                              placeholder="Username"
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-600 font-medium mb-1">密码 (Password)</label>
+                            <div className="relative">
+                              <input
+                                type={showSecret ? 'text' : 'password'}
+                                value={basicPassword}
+                                onChange={(e) => setBasicPassword(e.target.value)}
+                                placeholder="Password"
+                                className="w-full pl-2.5 pr-8 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowSecret(!showSecret)}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                              >
+                                {showSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 自定义 Header 鉴权模式 */}
+                      {authType === 'custom' && (
+                        <div className="grid grid-cols-2 gap-2 animate-in fade-in duration-100">
+                          <div>
+                            <label className="block text-[11px] text-slate-600 font-medium mb-1">Header 鉴权字段名</label>
+                            <input
+                              type="text"
+                              value={customAuthHeaderKey}
+                              onChange={(e) => setCustomAuthHeaderKey(e.target.value)}
+                              placeholder="如: x-api-key 或 token"
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] text-slate-600 font-medium mb-1">Header 鉴权值</label>
+                            <input
+                              type="text"
+                              value={customAuthHeaderVal}
+                              onChange={(e) => setCustomAuthHeaderVal(e.target.value)}
+                              placeholder="鉴权密钥值"
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-mono focus:outline-none focus:border-sky-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 附加自定义请求头键值对列表 */}
+                      <div className="space-y-2 pt-2 border-t border-slate-200/60">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-slate-600 font-medium">
+                            附加 HTTP 请求头 (Extra Headers)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleAddHeader}
+                            className="text-[11px] text-sky-600 hover:text-sky-700 font-semibold flex items-center space-x-1 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>添加请求头</span>
+                          </button>
+                        </div>
+
+                        {customHeaders.length > 0 ? (
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
+                            {customHeaders.map((item, idx) => (
+                              <div key={idx} className="flex items-center space-x-1.5">
+                                <input
+                                  type="text"
+                                  value={item.key}
+                                  onChange={(e) => handleUpdateHeader(idx, 'key', e.target.value)}
+                                  placeholder="Header 名 (如 X-Tenant-Id)"
+                                  className="w-2/5 px-2.5 py-1 rounded-lg border border-slate-200 bg-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
+                                />
+                                <input
+                                  type="text"
+                                  value={item.value}
+                                  onChange={(e) => handleUpdateHeader(idx, 'value', e.target.value)}
+                                  placeholder="Header 值"
+                                  className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveHeader(idx)}
+                                  className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
+                                  title="移除"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-400 italic">
+                            可选。点击「+ 添加请求头」附加 Cookie 或自定义参数。
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1">启动命令 (Command)</label>
+                      <input
+                        type="text"
+                        value={command}
+                        onChange={(e) => setCommand(e.target.value)}
+                        placeholder="npx / node / python3 / uvx"
+                        className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-600 font-medium mb-1">命令参数 (Arguments)</label>
+                      <input
+                        type="text"
+                        value={argsStr}
+                        onChange={(e) => setArgsStr(e.target.value)}
+                        placeholder="-y @modelcontextprotocol/server-memory"
+                        className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+
+                    {/* Stdio 环境变量管理 (包含 API Key 凭据注入) */}
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-slate-500 font-medium">
-                          自定义 HTTP 请求头 (Headers)
-                        </span>
+                        <div>
+                          <span className="text-[11px] text-slate-700 font-bold flex items-center space-x-1">
+                            <Key className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>环境变量与 API 鉴权密钥 (Environment)</span>
+                          </span>
+                        </div>
                         <button
                           type="button"
-                          onClick={handleAddHeader}
+                          onClick={handleAddEnv}
                           className="text-[11px] text-sky-600 hover:text-sky-700 font-semibold flex items-center space-x-1 cursor-pointer"
                         >
                           <Plus className="w-3 h-3" />
-                          <span>添加请求头</span>
+                          <span>添加环境变量</span>
                         </button>
                       </div>
 
-                      {customHeaders.length > 0 ? (
+                      {envVars.length > 0 ? (
                         <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                          {customHeaders.map((item, idx) => (
+                          {envVars.map((item, idx) => (
                             <div key={idx} className="flex items-center space-x-1.5">
                               <input
                                 type="text"
                                 value={item.key}
-                                onChange={(e) => handleUpdateHeader(idx, 'key', e.target.value)}
-                                placeholder="Header名 (如 x-api-key)"
+                                onChange={(e) => handleUpdateEnv(idx, 'key', e.target.value)}
+                                placeholder="变量名 (如 GITHUB_TOKEN)"
                                 className="w-2/5 px-2.5 py-1 rounded-lg border border-slate-200 bg-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
                               />
                               <input
                                 type="text"
                                 value={item.value}
-                                onChange={(e) => handleUpdateHeader(idx, 'value', e.target.value)}
-                                placeholder="Header值 (Value)"
+                                onChange={(e) => handleUpdateEnv(idx, 'value', e.target.value)}
+                                placeholder="密钥或变量值"
                                 className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
                               />
                               <button
                                 type="button"
-                                onClick={() => handleRemoveHeader(idx)}
+                                onClick={() => handleRemoveEnv(idx)}
                                 className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
                                 title="移除"
                               >
@@ -624,117 +856,41 @@ export const McpSettings: React.FC<McpSettingsProps> = ({
                         </div>
                       ) : (
                         <p className="text-[11px] text-slate-400 italic">
-                          可点击右上角「+ 添加请求头」附加自定义 Header（如 x-api-key、Cookie、X-Tenant-Id 等）
+                          可选。点击「+ 添加环境变量」为子进程注入 API Key 密钥或数据库连接串。
                         </p>
                       )}
                     </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label className="block text-slate-600 font-medium mb-1">启动命令 (Command)</label>
-                    <input
-                      type="text"
-                      value={command}
-                      onChange={(e) => setCommand(e.target.value)}
-                      placeholder="npx / node / python3"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-600 font-medium mb-1">命令参数 (Arguments)</label>
-                    <input
-                      type="text"
-                      value={argsStr}
-                      onChange={(e) => setArgsStr(e.target.value)}
-                      placeholder="-y @modelcontextprotocol/server-xxx"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono focus:outline-none focus:border-sky-500"
-                    />
-                  </div>
+                  </>
+                )}
 
-                  {/* Stdio 环境变量与鉴权凭据区块 */}
-                  <div className="p-3.5 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-600 font-semibold flex items-center space-x-1.5">
-                        <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>环境变量与鉴权凭据 (Environment Variables)</span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleAddEnv}
-                        className="text-[11px] text-sky-600 hover:text-sky-700 font-semibold flex items-center space-x-1 cursor-pointer"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>添加变量</span>
-                      </button>
-                    </div>
+                <div>
+                  <label className="block text-slate-600 font-medium mb-1">功能描述 (可选)</label>
+                  <input
+                    type="text"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="简要说明该 MCP 提供的工具能力"
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
 
-                    {envVars.length > 0 ? (
-                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                        {envVars.map((item, idx) => (
-                          <div key={idx} className="flex items-center space-x-1.5">
-                            <input
-                              type="text"
-                              value={item.key}
-                              onChange={(e) => handleUpdateEnv(idx, 'key', e.target.value)}
-                              placeholder="变量名 (如 API_KEY)"
-                              className="w-2/5 px-2.5 py-1 rounded-lg border border-slate-200 bg-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
-                            />
-                            <input
-                              type="text"
-                              value={item.value}
-                              onChange={(e) => handleUpdateEnv(idx, 'value', e.target.value)}
-                              placeholder="变量值 (Token / 密钥)"
-                              className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveEnv(idx)}
-                              className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
-                              title="移除"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-400 italic">
-                        可注入进程所需的鉴权环境变量（如 API_KEY、GITHUB_TOKEN、DB_PASSWORD 等）
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
-
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">功能描述 (选填)</label>
-                <input
-                  type="text"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="简要说明该 MCP 服务提供的能力..."
-                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 focus:outline-none focus:border-sky-500"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="px-4 py-1.5 rounded-xl border border-slate-200 text-slate-600 cursor-pointer"
-                >
-                  取消
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold cursor-pointer"
-                >
-                  保存配置
-                </button>
-              </div>
-            </form>
+                <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setModalOpen(false)}
+                    className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium cursor-pointer"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs cursor-pointer"
+                  >
+                    保存服务
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

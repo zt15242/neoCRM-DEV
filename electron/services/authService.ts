@@ -434,20 +434,91 @@ export class AuthService {
   /**
    * 从 Salesforce CLI (sf) 中提取当前 Org 的最新有效 Access Token 与实例元数据
    */
+  /**
+   * 极速无开销提取本地已认证的 Salesforce 凭据（0ms 响应，杜绝进程阻塞）
+   */
+  private getAuthFromDiskByAlias(alias: string, env?: NeoEnvironment): any | null {
+    try {
+      const sfdxDir = path.join(os.homedir(), '.sfdx');
+      if (!fs.existsSync(sfdxDir)) return null;
+
+      let targetUsername = alias;
+      const aliasJsonPath = path.join(sfdxDir, 'alias.json');
+      if (fs.existsSync(aliasJsonPath)) {
+        try {
+          const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
+          const orgs = aliasData.orgs || {};
+          if (orgs[alias]) targetUsername = orgs[alias];
+        } catch {}
+      }
+
+      const candidatePath = path.join(sfdxDir, `${targetUsername}.json`);
+      if (fs.existsSync(candidatePath)) {
+        const data = JSON.parse(fs.readFileSync(candidatePath, 'utf-8'));
+        if (data.accessToken) return data;
+      }
+
+      // 若别名未直接命中，遍历匹配包含当前组织或实例的最新文件
+      const files = fs.readdirSync(sfdxDir).filter(
+        (f) => f.endsWith('.json') && f !== 'alias.json' && f !== 'sfdx-config.json' && f !== 'key.json'
+      );
+      for (const f of files) {
+        try {
+          const d = JSON.parse(fs.readFileSync(path.join(sfdxDir, f), 'utf-8'));
+          if (d.accessToken && (d.orgId || d.instanceUrl)) {
+            return d;
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * 从 Salesforce CLI (sf) 中提取当前 Org 的最新有效 Access Token 与实例元数据
+   */
   public getSalesforceTokenFromCli(env: NeoEnvironment, targetAlias?: string): TokenData {
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'sf.cmd' : 'sf';
     const alias = targetAlias || this.getSalesforceAlias(env);
 
+    // 1. 优先尝试直接从磁盘提取（0ms 瞬间完成，绝不阻塞主进程引起假死）
+    const diskData = this.getAuthFromDiskByAlias(alias, env);
+    if (diskData && diskData.accessToken) {
+      const orgId = diskData.orgId || 'salesforce_org';
+      const username = diskData.username || 'Salesforce 用户';
+      const instanceUri = diskData.instanceUrl || env.neoBaseURL;
+      if (!env.clientId && diskData.clientId) env.clientId = diskData.clientId;
+      if (!env.clientSecret && diskData.clientSecret) env.clientSecret = diskData.clientSecret;
+
+      console.log(`[Salesforce] 极速命中本地磁盘凭证: ${username} (OrgId: ${orgId})`);
+      return {
+        access_token: diskData.accessToken,
+        refresh_token: diskData.refreshToken || undefined,
+        expires_in: 7200,
+        instance_uri: instanceUri,
+        tenant_id: orgId,
+        userInfo: {
+          userId: orgId,
+          name: username,
+          tenant_id: orgId,
+          tenantName: `Salesforce 组织 (${orgId})`,
+        },
+        savedAt: Date.now(),
+        expiresAt: Date.now() + 7200 * 1000,
+      };
+    }
+
+    // 2. 磁盘未找到时，安全回退至 CLI 命令读取
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'sf.cmd' : 'sf';
+
     try {
-      // 关键修复：移除 Windows cmd.exe 无法识别的 'SF_TEMP_SHOW_SECRETS=true ' 前缀，通过 env 选项安全注入环境变量
       let stdout = '';
       try {
         stdout = execSync(
           `"${cmd}" org display --target-org "${alias}" --json`,
           {
             encoding: 'utf-8',
-            timeout: 15000,
+            timeout: 12000,
             shell: true,
             env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
             windowsHide: true,
@@ -458,7 +529,7 @@ export class AuthService {
           `"${cmd}" org display --json`,
           {
             encoding: 'utf-8',
-            timeout: 15000,
+            timeout: 12000,
             shell: true,
             env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
             windowsHide: true,
@@ -482,7 +553,6 @@ export class AuthService {
       const orgId = res.id || 'salesforce_org';
       const username = res.username || 'Salesforce 用户';
 
-      // 关键补齐：从本地 ~/.sfdx/<username>.json 中提取 refreshToken 与 clientId
       let refreshToken = '';
       try {
         const userJsonPath = path.join(os.homedir(), '.sfdx', `${username}.json`);

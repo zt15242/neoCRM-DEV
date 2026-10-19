@@ -123,6 +123,17 @@ export class ProjectService {
     }
     return resolved;
   }
+  // 快速缓存，防止大任务工具连环触发造成瞬时万次磁盘扫描把主进程卡死
+  private treeCache = new Map<string, { time: number; tree: any[] }>();
+  private artifactsCache = new Map<string, { time: number; list: any[] }>();
+
+  // 强化过滤清单：彻底屏蔽现代工程常见海量噪音目录
+  private static readonly IGNORE_DIRS = new Set([
+    '.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', 
+    '.vscode', '.idea', 'coverage', '.next', '.nuxt', '.turbo', '.cache', 
+    'target', 'bin', 'obj', '.gradle', '.cargo', 'vendor', '__pycache__', '.pytest_cache'
+  ]);
+
   public listFiles(params?: { folderPath?: string; query?: string; maxFiles?: number }): Array<{
     name: string;
     relativePath: string;
@@ -135,14 +146,13 @@ export class ProjectService {
     const maxFiles = params?.maxFiles || 200;
     const query = (params?.query || '').trim().toLowerCase();
     const results: Array<{ name: string; relativePath: string; fullPath: string; ext: string; size: number }> = [];
-    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.vscode', '.idea']);
 
     const walk = (dir: string, depth = 0) => {
-      if (depth > 6 || results.length >= maxFiles) return;
+      if (depth > 5 || results.length >= maxFiles) return;
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
+          if (entry.name.startsWith('.') || ProjectService.IGNORE_DIRS.has(entry.name)) continue;
           const full = path.join(dir, entry.name);
           const rel = path.relative(baseDir, full);
 
@@ -170,7 +180,7 @@ export class ProjectService {
     return results;
   }
 
-  public getDirTree(folderPath?: string, maxDepth = 10): Array<{
+  public getDirTree(folderPath?: string, maxDepth = 6): Array<{
     name: string;
     path: string;
     relativePath: string;
@@ -180,10 +190,19 @@ export class ProjectService {
     children?: any[];
   }> {
     const baseDir = this.validateProjectFolder(folderPath);
-    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
+
+    // 2.5 秒极速缓存守护：高频工具调用期间直接命中内存，消除万次同步 IO
+    const now = Date.now();
+    const cached = this.treeCache.get(baseDir);
+    if (cached && now - cached.time < 2500) {
+      return cached.tree;
+    }
+
+    let totalNodes = 0;
+    const maxNodesCap = 1500; // 树节点安全熔断硬上限，防止海量文件打死前端渲染和主线程
 
     const scan = (dir: string, depth: number): any[] => {
-      if (depth > maxDepth) return [];
+      if (depth > maxDepth || totalNodes >= maxNodesCap) return [];
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         entries.sort((a, b) => {
@@ -194,9 +213,10 @@ export class ProjectService {
 
         const items: any[] = [];
         for (const entry of entries) {
-          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
+          if (entry.name.startsWith('.') || ProjectService.IGNORE_DIRS.has(entry.name)) continue;
           const full = path.join(dir, entry.name);
           const rel = path.relative(baseDir, full);
+          totalNodes++;
 
           if (entry.isDirectory()) {
             items.push({
@@ -218,6 +238,7 @@ export class ProjectService {
               size,
             });
           }
+          if (totalNodes >= maxNodesCap) break;
         }
         return items;
       } catch {
@@ -225,7 +246,9 @@ export class ProjectService {
       }
     };
 
-    return scan(baseDir, 1);
+    const result = scan(baseDir, 1);
+    this.treeCache.set(baseDir, { time: now, tree: result });
+    return result;
   }
 
   public getRecentArtifacts(folderPath?: string, limit = 30): Array<{
@@ -237,19 +260,29 @@ export class ProjectService {
     mtime: number;
   }> {
     const baseDir = this.validateProjectFolder(folderPath);
-    const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', '.idea', '.vscode']);
+
+    // 2.5 秒缓存守护
+    const now = Date.now();
+    const cached = this.artifactsCache.get(baseDir);
+    if (cached && now - cached.time < 2500) {
+      return cached.list;
+    }
+
     const list: Array<{ name: string; relativePath: string; fullPath: string; ext: string; size: number; mtime: number }> = [];
+    let scannedFiles = 0;
+    const maxScanCap = 800; // 最多扫描 800 个文件，绝不进行全盘无节制递归
 
     const walk = (dir: string, depth = 0) => {
-      if (depth > 5) return;
+      if (depth > 4 || scannedFiles >= maxScanCap) return;
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.name.startsWith('.') || ignoreDirs.has(entry.name)) continue;
+          if (entry.name.startsWith('.') || ProjectService.IGNORE_DIRS.has(entry.name)) continue;
           const full = path.join(dir, entry.name);
           const rel = path.relative(baseDir, full);
 
           if (entry.isFile()) {
+            scannedFiles++;
             const ext = path.extname(entry.name).toLowerCase();
             try {
               const stat = fs.statSync(full);
@@ -265,13 +298,16 @@ export class ProjectService {
           } else if (entry.isDirectory()) {
             walk(full, depth + 1);
           }
+          if (scannedFiles >= maxScanCap) break;
         }
       } catch {}
     };
 
     walk(baseDir);
     list.sort((a, b) => b.mtime - a.mtime);
-    return list.slice(0, limit);
+    const sliced = list.slice(0, limit);
+    this.artifactsCache.set(baseDir, { time: now, list: sliced });
+    return sliced;
   }
 
   public async openFolder(folderPath: string): Promise<string> {

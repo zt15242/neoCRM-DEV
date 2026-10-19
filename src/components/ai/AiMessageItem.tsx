@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan, ApprovalDeployPlan } from '../../../shared/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ReasoningBox } from './ReasoningBox';
@@ -27,7 +27,7 @@ interface AiMessageItemProps {
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
-export const AiMessageItem: React.FC<AiMessageItemProps> = ({
+const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
   message,
   isStreamingCurrent = false,
   isLastMessage = false,
@@ -116,19 +116,32 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
     );
   }
 
-  // 检测是否包含待决策确认项 (优先从 toolCalls 中提取 ask_user_question，其次从 content 启发式提取)
-  const toolCallDecisions = !isStreamingCurrent ? extractDecisionsFromToolCalls(message.toolCalls) : null;
-  const textDecisions = !isStreamingCurrent && message.content ? extractDecisionsFromText(message.content) : null;
+  // 关键性能优化：使用 useMemo 缓存开销巨大的全文本正则表达式扫描
+  const toolCallDecisions = useMemo(() => {
+    return !isStreamingCurrent ? extractDecisionsFromToolCalls(message.toolCalls) : null;
+  }, [isStreamingCurrent, message.toolCalls]);
+
+  const textDecisions = useMemo(() => {
+    return !isStreamingCurrent && message.content ? extractDecisionsFromText(message.content) : null;
+  }, [isStreamingCurrent, message.content]);
+
   const detectedDecisions = toolCallDecisions || textDecisions;
   const hasPendingDecisions = Boolean(detectedDecisions && detectedDecisions.items.length > 0);
 
   // 检测是否包含 exit_plan_mode 呈交的实施方案
-  const exitPlanCall = !isStreamingCurrent ? message.toolCalls?.find((tc) => tc.name === 'exit_plan_mode') : null;
+  const exitPlanCall = useMemo(() => {
+    return !isStreamingCurrent ? message.toolCalls?.find((tc) => tc.name === 'exit_plan_mode') : null;
+  }, [isStreamingCurrent, message.toolCalls]);
   const planMarkdown = (exitPlanCall?.arguments?.plan as string) || null;
 
   // 检测是否包含可执行的数据建模方案
-  const detectedPlan = !isStreamingCurrent && message.content ? extractSchemaPlanFromText(message.content) : null;
-  const detectedWorkflowPlan = !isStreamingCurrent && message.content ? extractWorkflowPlanFromText(message.content) : null;
+  const detectedPlan = useMemo(() => {
+    return !isStreamingCurrent && message.content ? extractSchemaPlanFromText(message.content) : null;
+  }, [isStreamingCurrent, message.content]);
+
+  const detectedWorkflowPlan = useMemo(() => {
+    return !isStreamingCurrent && message.content ? extractWorkflowPlanFromText(message.content) : null;
+  }, [isStreamingCurrent, message.content]);
 
   return (
     <div className="flex items-start space-x-3 my-4 pr-12">
@@ -287,3 +300,15 @@ export const AiMessageItem: React.FC<AiMessageItemProps> = ({
     </div>
   );
 };
+
+export const AiMessageItem = React.memo(AiMessageItemComponent, (prevProps, nextProps) => {
+  // 关键渲染优化：只要消息状态未发生变化，彻底跳过历史消息的无谓重绘
+  if (prevProps.isStreamingCurrent !== nextProps.isStreamingCurrent) return false;
+  if (prevProps.isLastMessage !== nextProps.isLastMessage) return false;
+  if (prevProps.message.id !== nextProps.message.id) return false;
+  if (prevProps.message.content !== nextProps.message.content) return false;
+  if (prevProps.message.reasoningContent !== nextProps.message.reasoningContent) return false;
+  if (prevProps.message.error !== nextProps.message.error) return false;
+  if ((prevProps.message.toolCalls?.length || 0) !== (nextProps.message.toolCalls?.length || 0)) return false;
+  return true;
+});

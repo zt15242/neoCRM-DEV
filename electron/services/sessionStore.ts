@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { exec, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -68,9 +68,11 @@ export class SessionStore {
     data.history = history.slice(0, 20); // 最多保留20条历史
     this.writeStorage(data);
 
-    // 自动联动同步本地 CLI 工具链凭据
+    // 自动联动同步本地 CLI 工具链凭据 (关键优化：后台非阻塞异步执行，杜绝阻塞主线程引起界面假死)
     if (env.productType === 'salesforce') {
-      this.syncToSalesforceCli(env, tokenData);
+      setTimeout(() => {
+        this.syncToSalesforceCli(env, tokenData);
+      }, 50);
     } else {
       this.syncToNeoCli();
     }
@@ -198,72 +200,85 @@ export class SessionStore {
       fs.writeFileSync(tmpFile, sfdxAuthUrl, 'utf-8');
 
       // 提取现有别名或使用默认别名
-      let alias = 'aliNewStageFull';
-      const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
-      if (fs.existsSync(aliasJsonPath)) {
-        try {
-          const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
-          const found = Object.entries(aliasData.orgs || {}).find(([a, u]) => 
-            u === tokenData.userInfo?.userId || 
-            u === tokenData.userInfo?.name || 
-            String(u).includes('stagefull') ||
-            String(u).includes('olympus')
-          );
-          if (found) alias = found[0];
-        } catch {}
+      let alias = 'DigitalDev';
+      try {
+        const sfConfigPath = path.join(os.homedir(), '.sf', 'config.json');
+        if (fs.existsSync(sfConfigPath)) {
+          const sfConfig = JSON.parse(fs.readFileSync(sfConfigPath, 'utf-8'));
+          if (sfConfig['target-org']) alias = sfConfig['target-org'];
+        }
+      } catch {}
+
+      if (alias === 'DigitalDev') {
+        const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
+        if (fs.existsSync(aliasJsonPath)) {
+          try {
+            const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
+            const found = Object.entries(aliasData.orgs || {}).find(([a, u]) => 
+              u === tokenData.userInfo?.userId || 
+              u === tokenData.userInfo?.name || 
+              String(u).includes('stagefull') ||
+              String(u).includes('olympus')
+            );
+            if (found) alias = found[0];
+          } catch {}
+        }
       }
 
-      try {
-        const cmd = process.platform === 'win32' ? 'sf.cmd' : 'sf';
-        execSync(`"${cmd}" org login sfdx-url -f "${tmpFile}" --alias ${alias} --set-default`, {
-          encoding: 'utf-8',
-          stdio: 'ignore',
-          windowsHide: true,
-          shell: true,
-        });
+      const cmd = process.platform === 'win32' ? 'sf.cmd' : 'sf';
 
-        // 关键修复：sf org login sfdx-url 执行后，若 Salesforce 启用了 Refresh Token 轮转，会生成新 refresh_token
-        // 通过 sf org auth show-sfdx-auth-url 提取最新 refresh_token，同步写回当前会话，避免旧令牌作废
+      // 关键性能优化：使用非阻塞异步子进程在后台执行 CLI 同步，彻底消除主进程假死卡顿！
+      exec(`"${cmd}" org login sfdx-url -f "${tmpFile}" --alias "${alias}" --set-default`, {
+        windowsHide: true,
+        timeout: 25000,
+      }, (loginErr) => {
         try {
-          const authOut = execSync(`"${cmd}" org auth show-sfdx-auth-url --target-org "${alias}" --json`, {
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-            encoding: 'utf-8',
-            windowsHide: true,
-            shell: true,
-          });
-          const jsonStart = authOut.indexOf('{');
-          const jsonEnd = authOut.lastIndexOf('}');
-          if (jsonStart !== -1 && jsonEnd !== -1) {
-            const parsed = JSON.parse(authOut.slice(jsonStart, jsonEnd + 1));
-            const sfdxUrl = parsed.result?.sfdxAuthUrl;
-            if (sfdxUrl) {
-              const m = sfdxUrl.match(/^force:\/\/[^:]+:[^:]+:([^@]+)@/);
-              if (m && m[1] && m[1] !== tokenData.refresh_token) {
-                tokenData.refresh_token = m[1];
-                console.log("[Salesforce] 已从 CLI 提取最新轮转的 Refresh Token 并同步回会话");
-                try {
-                  const storage = this.readStorage();
-                  if (storage.current?.isLoggedIn && storage.current.tokenData) {
-                    storage.current.tokenData.refresh_token = m[1];
-                  }
-                  const accId = storage.current?.activeAccountId;
-                  if (accId) {
-                    const h = storage.history.find((item) => item.id === accId);
-                    if (h && h.tokenData) h.tokenData.refresh_token = m[1];
-                  }
-                  this.writeStorage(storage);
-                } catch {}
+          if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+        } catch {}
+
+        if (loginErr) {
+          console.warn('[Salesforce CLI 后台同步提示]:', loginErr.message);
+          return;
+        }
+
+        // 后台异步提取最新轮转的 Refresh Token
+        exec(`"${cmd}" org auth show-sfdx-auth-url --target-org "${alias}" --json`, {
+          env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+          windowsHide: true,
+          timeout: 20000,
+        }, (authErr, stdout) => {
+          if (authErr || !stdout) return;
+          try {
+            const jsonStart = stdout.indexOf('{');
+            const jsonEnd = stdout.lastIndexOf('}');
+            if (jsonStart !== -1 && jsonEnd !== -1) {
+              const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
+              const sfdxUrl = parsed.result?.sfdxAuthUrl;
+              if (sfdxUrl) {
+                const m = sfdxUrl.match(/^force:\/\/[^:]+:[^:]+:([^@]+)@/);
+                if (m && m[1] && m[1] !== tokenData.refresh_token) {
+                  tokenData.refresh_token = m[1];
+                  console.log("[Salesforce] 后台已从 CLI 成功提取最新轮转的 Refresh Token 并同步回会话");
+                  try {
+                    const storage = this.readStorage();
+                    if (storage.current?.isLoggedIn && storage.current.tokenData) {
+                      storage.current.tokenData.refresh_token = m[1];
+                    }
+                    const accId = storage.current?.activeAccountId;
+                    if (accId) {
+                      const h = storage.history.find((item) => item.id === accId);
+                      if (h && h.tokenData) h.tokenData.refresh_token = m[1];
+                    }
+                    this.writeStorage(storage);
+                  } catch {}
+                }
               }
             }
-          }
-        } catch {}
-      } catch (err: any) {
-        console.warn('sf org login sfdx-url 同步提示:', err.message);
-      } finally {
-        if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
-      }
+          } catch {}
+        });
+      });
 
-      return { success: true, message: `已自动同步凭据到本地 Salesforce CLI (别名: ${alias})` };
+      return { success: true, message: `后台已触发同步凭据到本地 Salesforce CLI (别名: ${alias})` };
     } catch (e: any) {
       return { success: false, message: `同步 Salesforce CLI 失败: ${e.message}` };
     }

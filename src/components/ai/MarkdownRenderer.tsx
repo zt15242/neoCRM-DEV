@@ -15,7 +15,7 @@ interface MarkdownRendererProps {
   suppressDeploymentCards?: boolean;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
+const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = async (copyText: string, id: string) => {
@@ -564,3 +564,7 @@ function parseInline(text: string): React.ReactNode[] {
 
   return parts;
 }
+
+export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps, nextProps) => {
+  return prevProps.content === nextProps.content && prevProps.suppressDeploymentCards === nextProps.suppressDeploymentCards;
+});

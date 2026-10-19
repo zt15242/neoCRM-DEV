@@ -65,6 +65,9 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
   const [installType, setInstallType] = useState<'npm' | 'mcp' | 'git'>('mcp');
   const [installName, setInstallName] = useState('');
   const [installUrl, setInstallUrl] = useState('');
+  const [installAuthType, setInstallAuthType] = useState<'none' | 'bearer' | 'apiKey'>('none');
+  const [installToken, setInstallToken] = useState('');
+  const [installApiKeyHeader, setInstallApiKeyHeader] = useState('x-api-key');
   const [isInstalling, setIsInstalling] = useState(false);
 
   // 过滤插件
@@ -107,19 +110,30 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
     }
   };
 
-  // 新增外部自定义 MCP / DSH 插件
+  // 新增外部自定义 MCP / DSH 插件 (支持安全鉴权)
   const handleCreateCustomMcp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!installName.trim()) return;
 
     setIsInstalling(true);
     try {
+      const headers: Record<string, string> = {};
+      if (installAuthType === 'bearer' && installToken.trim()) {
+        const clean = installToken.trim().replace(/^Bearer\s+/i, '');
+        headers['Authorization'] = `Bearer ${clean}`;
+      } else if (installAuthType === 'apiKey' && installToken.trim()) {
+        headers[installApiKeyHeader.trim() || 'x-api-key'] = installToken.trim();
+      }
+
       const newMcp: McpServerConfig = {
         id: `mcp_${Date.now()}`,
         name: installName.trim(),
         description: '用户自定义添加的 MCP 插件服务',
         type: 'sse',
         url: installUrl.trim() || 'http://localhost:3000/sse',
+        authType: installAuthType === 'bearer' ? 'bearer' : installAuthType === 'apiKey' ? 'custom' : 'none',
+        bearerToken: installAuthType === 'bearer' ? installToken.trim() : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         enabled: true,
         tools: [],
       };
@@ -128,6 +142,8 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
       setIsInstallModalOpen(false);
       setInstallName('');
       setInstallUrl('');
+      setInstallAuthType('none');
+      setInstallToken('');
     } catch (err: any) {
       showToast('error', `添加插件失败: ${err.message}`);
     } finally {
@@ -449,9 +465,74 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
                   required
                   value={installUrl}
                   onChange={(e) => setInstallUrl(e.target.value)}
-                  placeholder="http://localhost:3000/sse"
+                  placeholder="http://localhost:3000/sse 或 https://..."
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-purple-500 focus:bg-white"
                 />
+              </div>
+
+              {/* 鉴权方式配置 */}
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2.5">
+                <label className="text-xs font-bold text-slate-700 block">身份认证与鉴权方式</label>
+                <div className="grid grid-cols-3 gap-1.5 bg-white p-1 rounded-xl border border-slate-200 text-xs">
+                  {[
+                    { id: 'none', label: '无认证' },
+                    { id: 'bearer', label: 'Bearer Token' },
+                    { id: 'apiKey', label: 'API Key Header' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setInstallAuthType(tab.id as any)}
+                      className={`py-1.5 px-2 rounded-lg font-medium transition-all cursor-pointer ${
+                        installAuthType === tab.id
+                          ? 'bg-purple-600 text-white shadow-2xs font-semibold'
+                          : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {installAuthType === 'bearer' && (
+                  <div className="space-y-1 pt-1">
+                    <label className="text-[11px] text-slate-600 font-medium block">
+                      Bearer Token (自动注入 Authorization: Bearer ...)
+                    </label>
+                    <input
+                      type="password"
+                      value={installToken}
+                      onChange={(e) => setInstallToken(e.target.value)}
+                      placeholder="粘贴访问密钥/令牌 (如 ghp_xxx / sk-xxx)"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                )}
+
+                {installAuthType === 'apiKey' && (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-medium block mb-1">Header 字段名</label>
+                      <input
+                        type="text"
+                        value={installApiKeyHeader}
+                        onChange={(e) => setInstallApiKeyHeader(e.target.value)}
+                        placeholder="x-api-key"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-medium block mb-1">API Key 密钥值</label>
+                      <input
+                        type="password"
+                        value={installToken}
+                        onChange={(e) => setInstallToken(e.target.value)}
+                        placeholder="Key 密钥值"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end space-x-2 pt-2">

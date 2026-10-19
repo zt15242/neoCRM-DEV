@@ -160,6 +160,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   // ================= 4. 文件内容实时预览 Modal =================
   const [previewFile, setPreviewFile] = useState<{ name: string; fullPath: string; content?: string } | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const refreshTimerRef = useRef<any>(null);
 
   const projectPath = activeProject?.localPath || "";
   const projectName = activeProject?.name || "neoCRM-DEV";
@@ -264,11 +265,24 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     }
   };
 
+  // 关键防抖优化：在大任务连续调用工具或文件频繁生成时，防抖 1000ms 刷新，消除高频同步遍历打死主进程
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen || !projectPath) return;
+
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+    }
+
+    refreshTimerRef.current = setTimeout(() => {
       loadDirTree();
       loadRecentArtifacts();
-    }
+    }, 1000);
+
+    return () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+    };
   }, [isOpen, projectPath, toolCalls.length, activeSessionAttachments.length]);
 
   // 终端命令历史随更新滚动

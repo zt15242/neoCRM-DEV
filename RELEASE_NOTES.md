@@ -1,3 +1,27 @@
+### 🚀 版本更新说明 (v1.8.4)
+
+1. **深度排查并彻底解决大任务/海量文件下软件卡死与 CPU 飙高**：
+   - **磁盘目录扫描 2.5 秒内存级缓存与防抖**：针对大任务中密集执行工具导致高频全量递归遍历磁盘的严重缺陷，在主进程 `projectService.ts` 中建立 `treeCache` 与 `artifactsCache` 短周期内存缓存；并在前端 `CodexTerminalPanel.tsx` 中引入 1000ms 防抖更新机制，彻底消除高频重复磁盘 IO 锁死主线程；
+   - **海量噪音目录过滤与节点硬上限熔断**：为 `getDirTree` 设置 6 层最大深度与 `maxNodesCap = 1500` 节点硬上限，全面屏蔽 `coverage`, `.next`, `.nuxt`, `.turbo`, `.cache`, `target`, `bin`, `obj`, `.gradle`, `.cargo`, `vendor` 等现代工程高频构建目录，杜绝无节制递归扩散；
+   - **前端消息列表与全文本正则扫描极致记忆化**：使用 `React.memo` 深度包裹 `AiMessageItem` 与 `MarkdownRenderer`，将 `extractDecisionsFromText`、`extractSchemaPlanFromText`、`extractWorkflowPlanFromText` 等开销巨大的全文本正则扫描全部改为 `useMemo`，使历史几十条长文本消息在流式吐字期间保持 0 重绘，前端 CPU 消耗大幅降低。
+
+2. **彻底解决 Salesforce 认证后主进程卡死 15 秒与自动续期失效**：
+   - **保存会话后台非阻塞异步化**：将 `sessionStore.saveSession` 中的 `syncToSalesforceCli` 改造为后台非阻塞异步执行（基于 `child_process.exec`），认证完成后前端界面 0ms 瞬间显示“已连接”，完全消除由于同步 `execSync` 引起的窗口假死与未响应；
+   - **本地磁盘凭据 0ms 极速命中**：新增 `getAuthFromDiskByAlias`，优先直接读取本地磁盘已认证的 `~/.sfdx/<username>.json` 缓存文件（耗时 0.2ms），彻底避免在每次换号或切换环境时重复唤起重量级 CLI 子进程；
+   - **全生命周期持久化与三层 401 静默自愈**：补齐 `refresh_token` 磁盘全自动提取，建立【磁盘缓存即时探测 -> 本地 sf CLI 自动联动 -> 云端 OAuth2 多端点接口换新】三层自愈防线。
+
+3. **MCP 扩展服务安全鉴权与认证体系全面强化与升级**：
+   - **全方位身份认证与凭据配置 (Authentication)**：
+     - **Bearer Token 认证**：支持配置 API Key / JWT 令牌，出站请求自动规范组装 `Authorization: Bearer <token>`（带明文/密文小眼睛切换）；
+     - **Basic 认证**：用户名与密码独立输入，自动 RFC 7617 Base64 编码并注入 `Authorization: Basic <base64>`；
+     - **自定义 Header 鉴权**：支持自由指定鉴权 Header 键名（如 `x-api-key`、`Private-Token`）与密钥值；
+     - **附加自定义 Headers**：支持动态扩展任意数量的自定义 Header（如 `Cookie`、`X-Tenant-Id` 等）；
+     - **Stdio 环境变量鉴权注入**：支持为 Stdio 本地进程注入 `GITHUB_TOKEN`、`API_KEY` 等环境变量；
+   - **支持标准 JSON 快速导入/粘贴**：弹窗支持一键粘贴 Claude Desktop 或 Cursor 格式的 `mcpServers` JSON 配置并自动解析填表；
+   - **插件中心与设置中心能力对齐**：在【插件与扩展中心】的新增 MCP 弹窗中同步补齐了完整的鉴权配置选项。
+
+---
+
 ### 🚀 版本更新说明 (v1.8.3)
 
 1. **彻底解决 Windows 系统下 Salesforce CLI 联通与自动续期失效缺陷**：
