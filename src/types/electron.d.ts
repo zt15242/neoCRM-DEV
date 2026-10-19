@@ -224,6 +224,11 @@ declare global {
       printToggleStatus: (templatePrintId: string | number, enable: boolean) => Promise<{ success: boolean; status?: number; error?: string }>;
       printDeleteTemplate: (templatePrintId: string | number) => Promise<{ success: boolean; error?: string }>;
       printRenderDocument: (params: { entityApiKey: string; recordId: string | number; templateId: string | number; exportType?: 1 | 2 | 3 }) => Promise<{ success: boolean; data?: any; error?: string }>;
+      // WorkBuddy 反代与扫码登录
+      workbuddyGetStatus: () => Promise<{ loggedIn: boolean; account?: any; proxyPort: number; proxyUrl: string }>;
+      workbuddyStartLogin: (realm?: "intl" | "cn") => Promise<{ state: string; authUrl: string; qrDataUrl: string; realm: "intl" | "cn" }>;
+      workbuddyPollLogin: (state: string, realm?: "intl" | "cn") => Promise<{ status: "pending" | "ok" | "expired" | "error"; message?: string; account?: any }>;
+      workbuddyLogout: () => Promise<boolean>;
       // 软件运行日志管理
       loggerGetLogs?: (options?: any) => Promise<{
         total: number;

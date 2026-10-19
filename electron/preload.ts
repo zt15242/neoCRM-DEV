@@ -151,6 +151,11 @@ export const neoApi = {
   printToggleStatus: (templatePrintId: string | number, enable: boolean) => ipcRenderer.invoke("print:toggleStatus", { templatePrintId, enable }),
   printDeleteTemplate: (templatePrintId: string | number) => ipcRenderer.invoke("print:deleteTemplate", { templatePrintId }),
   printRenderDocument: (params: any) => ipcRenderer.invoke("print:renderDocument", params),
+  // WorkBuddy 反代与扫码登录
+  workbuddyGetStatus: () => ipcRenderer.invoke("workbuddy:getStatus"),
+  workbuddyStartLogin: (realm?: "intl" | "cn") => ipcRenderer.invoke("workbuddy:startLogin", realm),
+  workbuddyPollLogin: (state: string, realm?: "intl" | "cn") => ipcRenderer.invoke("workbuddy:pollLogin", state, realm),
+  workbuddyLogout: () => ipcRenderer.invoke("workbuddy:logout"),
   // 软件运行日志管理 (Logger)
   loggerGetLogs: (options?: any) => ipcRenderer.invoke('logger:getLogs', options),
   loggerGetLogFiles: () => ipcRenderer.invoke('logger:getLogFiles'),

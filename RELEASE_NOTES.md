@@ -1,3 +1,22 @@
+### 🚀 版本更新说明 (v1.8.2)
+
+1. **深度内置 WorkBuddy / CodeBuddy 原生反向代理与微信/网页扫码登录机制**：
+   - **完全自研原生内联集成**：直接在 Electron 主进程中实现 WorkBuddy 完整反向代理机制，彻底摆脱对外部独立 Python 运行时或 Docker 容器的依赖，应用开箱即用；
+   - **一键二维码扫码授权 (`WorkBuddyAuthModal`)**：
+     - 支持 **🇨🇳 国内版 (`codebuddy.cn`)** 与 **🌐 国际版 (`workbuddy.ai`)** 双区域一键切换；
+     - 自动调用官方微服务获取安全授权会话，直接生成高清登录二维码，支持使用手机微信扫一扫、腾讯微伴客户端扫码，或一键跳转默认浏览器确认授权；
+     - 毫秒级轮询鉴权状态，成功后自动解析并保存用户 Token、UID、昵称及有效期；
+   - **全生命周期 Token 静默保活与续期**：
+     - 内置 Refresh Token 自动轮转与静默续期守护程序，临近过期前 5 分钟自动换取最新凭证，用户扫码一次长期稳定使用；
+   - **官方客户端级请求指纹与 Header 对齐**：
+     - 精准对齐官方桌面端 15+ 项请求指纹与通信标头（`X-IDE-Name: WorkBuddy`、`X-IDE-Version`、`X-Agent-Intent`、`X-Conversation-ID`、`X-Request-ID`、`X-Domain` 等）；
+     - 自动优化思维链（`thinking`）与 `max_tokens` 参数，原生支持流式（SSE）与非流式响应；
+   - **内置本地标准 OpenAI 代理服务 (`http://127.0.0.1:8788/v1`)**：
+     - 主进程自动在本地端口 8788 启动轻量级 HTTP 代理网关，提供 `GET /v1/models`、`POST /v1/chat/completions` 及 `GET /health` 端点；
+     - 不仅供应用内部 AI 智能体流畅调度，还支持外部工具（如 Codex CLI、Cursor、Aider 等）无缝连接使用已登录的 WorkBuddy 账号模型！
+
+---
+
 ### 🚀 版本更新说明 (v1.8.1)
 
 1. **全新集成「WorkBuddy2API-Hub」多账号网关模型渠道**：

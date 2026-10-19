@@ -17,6 +17,7 @@ import { FileService } from './services/fileService';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
 import { NexService } from './services/nexService';
+import { WorkBuddyService } from './services/workbuddyService';
 import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { licenseService } from './security/licenseService';
@@ -60,6 +61,7 @@ const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
 const nexService = new NexService(metadataService);
+const workbuddyService = new WorkBuddyService();
 const projectService = new ProjectService();
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
@@ -741,7 +743,26 @@ ipcMain.handle("nex:deployExtension", async (_, options) => {
   return nexService.deployNexExtension(current.environment, current.tokenData, options);
 });
 
+// ================= WorkBuddy 反代与扫码登录 =================
+
+ipcMain.handle("workbuddy:getStatus", async () => {
+  return workbuddyService.getStatus();
+});
+
+ipcMain.handle("workbuddy:startLogin", async (_, realm?: "intl" | "cn") => {
+  return workbuddyService.startLogin(realm);
+});
+
+ipcMain.handle("workbuddy:pollLogin", async (_, state: string, realm?: "intl" | "cn") => {
+  return workbuddyService.pollLogin(state, realm);
+});
+
+ipcMain.handle("workbuddy:logout", async () => {
+  return workbuddyService.logout();
+});
+
 // ================= 本地工作区项目 (Workspace Projects) =================
+
 
 ipcMain.handle("project:getProjects", async () => projectService.getProjects());
 ipcMain.handle("project:saveProject", async (_, payload) => projectService.saveProject(payload));

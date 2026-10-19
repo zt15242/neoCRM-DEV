@@ -1,6 +1,6 @@
 {
   "name": "neocrm-desktop",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "NeoCRM 桌面端开发者工具，支持多环境切换、OAuth2 授权登录与会话管理",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -23,12 +23,14 @@
   "author": "NeoCRM Team",
   "license": "MIT",
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "axios": "^1.20.0",
     "docx": "^9.11.0",
     "electron-updater": "^6.8.9",
     "form-data": "^4.0.6",
     "jszip": "^3.10.2",
     "lucide-react": "^1.54.0",
+    "qrcode": "^1.5.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "semver": "^7.8.5",

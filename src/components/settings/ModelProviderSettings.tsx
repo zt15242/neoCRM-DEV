@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AiProviderConfig, AiModelItem } from '../../../shared/types';
 import { CustomProviderModal } from './CustomProviderModal';
+import { WorkBuddyAuthModal } from './WorkBuddyAuthModal';
 import { 
   Bot, 
   KeyRound, 
@@ -19,7 +20,9 @@ import {
   Cpu, 
   ChevronDown, 
   ChevronRight,
-  Search
+  Search,
+  QrCode,
+  Smartphone
 } from 'lucide-react';
 
 interface ModelProviderSettingsProps {
@@ -55,6 +58,27 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
 
   // 密码显示状态表
   const [showKeysMap, setShowKeysMap] = useState<Record<string, boolean>>({});
+  // WorkBuddy 扫码模态框与账号状态
+  const [wbAuthModalOpen, setWbAuthModalOpen] = useState(false);
+  const [wbAccount, setWbAccount] = useState<any>(null);
+
+  const fetchWbStatus = async () => {
+    try {
+      if (window.neoApi?.workbuddyGetStatus) {
+        const res = await window.neoApi.workbuddyGetStatus();
+        if (res.loggedIn && res.account) {
+          setWbAccount(res.account);
+        } else {
+          setWbAccount(null);
+        }
+      }
+    } catch {}
+  };
+
+  React.useEffect(() => {
+    fetchWbStatus();
+  }, []);
+
 
   const handleSaveDeepSeek = async () => {
     setSavingDs(true);
@@ -304,6 +328,8 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
                 onSave={handleSaveThirdParty}
                 onTest={handleTestProvider}
                 showToast={showToast}
+                wbAccount={provider.id === 'workbuddy' ? wbAccount : undefined}
+                onOpenWbAuth={() => setWbAuthModalOpen(true)}
               />
             );
           })}
@@ -366,6 +392,17 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         </div>
       )}
 
+
+      {/* WorkBuddy 扫码登录模态框 */}
+      <WorkBuddyAuthModal
+        isOpen={wbAuthModalOpen}
+        onClose={() => setWbAuthModalOpen(false)}
+        onSuccess={() => {
+          fetchWbStatus();
+        }}
+        showToast={showToast}
+      />
+
       {/* 自定义 Provider 模态框 */}
       <CustomProviderModal
         isOpen={modalOpen}
@@ -399,6 +436,8 @@ const ThirdPartyProviderCard: React.FC<{
   onSave: (provider: AiProviderConfig, key: string, url: string, customModels?: AiModelItem[]) => Promise<void>;
   onTest: (provider: AiProviderConfig, key: string, url: string) => Promise<void>;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
+  wbAccount?: any;
+  onOpenWbAuth?: () => void;
 }> = ({
   provider,
   isExpanded,
@@ -411,6 +450,8 @@ const ThirdPartyProviderCard: React.FC<{
   onSave,
   onTest,
   showToast,
+  wbAccount,
+  onOpenWbAuth,
 }) => {
   const [localKey, setLocalKey] = useState(provider.apiKey || '');
   const [localUrl, setLocalUrl] = useState(provider.baseUrl || '');
@@ -484,9 +525,19 @@ const ThirdPartyProviderCard: React.FC<{
                   腾讯双区域网关 · 默认8788
                 </span>
               )}
-              {(hasKey || isWorkBuddy) && (
+              {isWorkBuddy ? (
+                wbAccount ? (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                    已登录: {wbAccount.nickname || wbAccount.uid?.slice(0, 8)}
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium">
+                    未登录 · 需扫码
+                  </span>
+                )
+              ) : hasKey && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {hasKey ? '已配置 Key' : '就绪 (本地网关)'}
+                  已配置
                 </span>
               )}
             </div>
@@ -496,7 +547,21 @@ const ThirdPartyProviderCard: React.FC<{
           </div>
         </div>
 
+
         <div className="flex items-center space-x-2 shrink-0 ml-2">
+          {isWorkBuddy && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenWbAuth?.();
+              }}
+              className="px-2 py-0.5 text-[10px] font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white flex items-center space-x-1 shadow-2xs transition-all cursor-pointer"
+            >
+              <QrCode className="w-3 h-3" />
+              <span>{wbAccount ? '切换账号' : '扫码登录'}</span>
+            </button>
+          )}
           {provider.website && (
             <button
               onClick={(e) => {
@@ -555,24 +620,61 @@ const ThirdPartyProviderCard: React.FC<{
           </div>
 
 
+
           {isWorkBuddy && (
-            <div className="flex items-center justify-between bg-cyan-50/70 border border-cyan-200/80 rounded-lg p-2.5 text-[11px] text-cyan-900">
-              <div className="flex items-center space-x-1.5 truncate">
-                <Cpu className="w-3.5 h-3.5 text-cyan-700 shrink-0" />
-                <span className="truncate">双区域多账号聚合网关 (国际版 workbuddy.ai / 国内版 codebuddy.cn)</span>
+            <div className="bg-gradient-to-r from-cyan-50/90 to-sky-50/90 border border-cyan-200/90 rounded-xl p-3 text-xs space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center text-white shrink-0 shadow-2xs">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-1.5">
+                      <span className="font-bold text-slate-800">腾讯 WorkBuddy / CodeBuddy 原生反代</span>
+                      {wbAccount ? (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-semibold">
+                          已授权 ({wbAccount.realm === 'cn' ? '国内版' : '国际版'})
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 font-semibold">
+                          未登录
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {wbAccount
+                        ? `当前用户: ${wbAccount.nickname || wbAccount.uid} · 自动保活与静默续期已生效`
+                        : '点击右侧按钮即可使用微信或手机扫码快速登录，无需配置 Python 环境！'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onOpenWbAuth}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white flex items-center space-x-1.5 shadow-2xs transition-all cursor-pointer shrink-0"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>{wbAccount ? '重新扫码 / 换号' : '扫码登录'}</span>
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const dashUrl = localUrl.replace(/\/v1\/?$/, '') || 'http://127.0.0.1:8788';
-                  window.neoApi.openExternal(dashUrl);
-                }}
-                className="text-cyan-700 hover:text-cyan-900 underline font-semibold shrink-0 cursor-pointer ml-2"
-              >
-                打开网关看板
-              </button>
+
+              <div className="flex items-center justify-between pt-1 border-t border-cyan-200/50 text-[11px] text-cyan-800">
+                <span>内置本地代理监听: <strong>http://127.0.0.1:8788/v1</strong> (支持外部应用接入)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const dashUrl = localUrl.replace(/\/v1\/?$/, '') || 'http://127.0.0.1:8788';
+                    window.neoApi.openExternal(dashUrl);
+                  }}
+                  className="hover:underline font-semibold cursor-pointer"
+                >
+                  检查网关状态
+                </button>
+              </div>
             </div>
           )}
+
 
           {/* 预置/探测模型标签展示 */}
           <div className="flex flex-wrap gap-1 pt-0.5">
