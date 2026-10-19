@@ -483,7 +483,12 @@ const ThirdPartyProviderCard: React.FC<{
       const res = await window.neoApi.aiFetchModels(temp);
       if (res.success && res.models.length > 0) {
         setLocalModels(res.models);
-        showToast('success', `成功从 ${provider.name} 探测到 ${res.models.length} 个模型！请点击保存生效。`);
+        if (isWorkBuddy) {
+          await onSave(provider, localKey, localUrl, res.models);
+          showToast('success', `成功从 ${provider.name} 同步并保存了 ${res.models.length} 个模型！`);
+        } else {
+          showToast('success', `成功从 ${provider.name} 探测到 ${res.models.length} 个模型！请点击保存生效。`);
+        }
       } else {
         showToast('error', res.error || '未能探测到可用模型');
       }
@@ -585,39 +590,43 @@ const ThirdPartyProviderCard: React.FC<{
       {/* 展开的表单区域 */}
       {isExpanded && (
         <div className="p-3.5 bg-slate-50/60 border-t border-slate-100 space-y-3 text-xs">
-          <div>
-            <label className="block text-slate-600 font-medium mb-1">
-              {isGemini ? 'Gemini API Key (AIzaSy...)' : isWorkBuddy ? 'API Key (单机模式可留空，LAN或多Key模式填绑定的Key)' : 'API Key 访问密钥'}
-            </label>
-            <div className="relative">
-              <input
-                type={isKeyVisible ? 'text' : 'password'}
-                value={localKey}
-                onChange={(e) => setLocalKey(e.target.value)}
-                placeholder={isGemini ? '粘贴 AIzaSy... 格式密钥' : isWorkBuddy ? '默认单机模式可留空；若在看板配置了多Key请输入' : '请输入 API 密钥...'}
-                className="w-full pl-2.5 pr-8 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono"
-              />
-              <button
-                type="button"
-                onClick={onToggleKeyVisible}
-                className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
-              >
-                {isKeyVisible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-              </button>
-            </div>
-          </div>
+          {!isWorkBuddy && (
+            <>
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">
+                  {isGemini ? 'Gemini API Key (AIzaSy...)' : 'API Key 访问密钥'}
+                </label>
+                <div className="relative">
+                  <input
+                    type={isKeyVisible ? 'text' : 'password'}
+                    value={localKey}
+                    onChange={(e) => setLocalKey(e.target.value)}
+                    placeholder={isGemini ? '粘贴 AIzaSy... 格式密钥' : '请输入 API 密钥...'}
+                    className="w-full pl-2.5 pr-8 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={onToggleKeyVisible}
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                  >
+                    {isKeyVisible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  </button>
+                </div>
+              </div>
 
-          <div>
-            <label className="block text-slate-600 font-medium mb-1">
-              Base URL 接口地址
-            </label>
-            <input
-              type="text"
-              value={localUrl}
-              onChange={(e) => setLocalUrl(e.target.value)}
-              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono text-[11px]"
-            />
-          </div>
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">
+                  Base URL 接口地址
+                </label>
+                <input
+                  type="text"
+                  value={localUrl}
+                  onChange={(e) => setLocalUrl(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono text-[11px]"
+                />
+              </div>
+            </>
+          )}
 
 
 
@@ -730,14 +739,16 @@ const ThirdPartyProviderCard: React.FC<{
               >
                 {isTesting ? '测试中...' : '测试连接'}
               </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="px-3 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium"
-              >
-                {saving ? '保存中...' : '保存'}
-              </button>
+              {!isWorkBuddy && (
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="px-3 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium cursor-pointer"
+                >
+                  {saving ? '保存中...' : '保存'}
+                </button>
+              )}
             </div>
           </div>
         </div>
