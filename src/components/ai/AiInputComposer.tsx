@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ArrowUp,
+  LayoutTemplate,
   Cloud,
   Flame,
   Plug,
@@ -327,6 +328,19 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       iconColor: 'text-emerald-600 bg-emerald-50 border-emerald-200',
       badge: 'XOQL 查询',
       action: (ctx) => {
+        ctx.focusTextarea();
+      },
+    },
+    {
+      id: 'nex',
+      command: '/nex',
+      name: 'Nex页面扩展开发',
+      description: '销售易 Nex 2.0 页面扩展代码生成、作用域联动与自动编译发布',
+      icon: LayoutTemplate,
+      iconColor: 'text-violet-600 bg-violet-50 border-violet-200',
+      badge: 'Nex扩展',
+      action: (ctx) => {
+        ctx.onSelectPreset?.('nex-architect');
         ctx.focusTextarea();
       },
     },
@@ -1188,7 +1202,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           )}
 
           {/* 自动流程与审批流角色设备锁状态胶囊 (直观可见剩余天数与锁状态) */}
-          {(currentPresetName?.includes('流程') || currentPresetName?.includes('审批')) && (
+          {(currentPresetName?.includes('流程') || currentPresetName?.includes('审批') || currentPresetName?.includes('BI') || currentPresetName?.includes('Nex')) && (
             <button
               type="button"
               onClick={onOpenLicenseModal}

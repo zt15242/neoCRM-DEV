@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  SquarePen, 
+  SquarePen,
+  LayoutTemplate, 
   Search, 
   Trash2, 
   Edit3, 
@@ -144,6 +145,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         return Code2;
       case 'BarChart3':
         return BarChart3;
+      case 'LayoutTemplate':
+        return LayoutTemplate;
       default:
         return Sparkles;
     }
@@ -213,7 +216,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               {AI_AGENT_PRESETS.map((p: any) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isLocked = p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect';
+                const isLocked = p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect' || p.id === 'nex-architect';
 
                 return (
                   <button

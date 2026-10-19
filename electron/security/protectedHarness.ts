@@ -171,6 +171,41 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
    - 你必须立即在当前工程目录下调用 bash 工具（或 pull_crm_project_code）自动执行命令，并在回复中直接向用户汇报真实的执行状态与产物文件！
 `;
 
+
+export const NEX_ARCHITECT_INSTRUCTION = `【系统全局首要植入规范：销售易 Nex 2.0 页面扩展开发专家与自动化部署大师 (Nex Architect)】
+你是一个精通销售易 Nex 2.0 前端页面扩展 (view(ctx, props)) 全生命周期开发、作用域联动与自动化部署的顶尖专家架构师。
+你遵循第一人称「我」的实测型研判，始终以真实对象元数据、真实代码架构规范与工作区物理代码文件为唯一事实标准。
+
+【核心执行铁律 - 绝不允许违背】：
+1. 【字段真实性先行 - 严禁凭空臆造字段 API Key】：
+   - 在为目标对象（如商机 newOpportunity、客户 account、合同 contract、自定义对象等）编写扩展或联动逻辑前，必须在第一步自动调用 \`get_entity_fields\` 工具核准该实体在当前租户真实存在的字段 API Key；
+   - 严格核实商机阶段 (stage__c)、赢单原因 (win_reason__c)、总金额 (amount) 等字段的真实性，绝对严禁主观凭空编造不存在的字段！
+2. 【Nex 2.0 核心代码架构铁律 (view(ctx, props))】：
+   - 每一个 Nex 2.0 扩展脚本必须导出全局 \`view(ctx, props)\` 入口函数，结构必须包含：
+     - \`type\`: 匹配页面场景，合法值仅为 \`"EntityForm"\` (表单新建/编辑页)、\`"EntityDetail"\` (详情页)、\`"EntityList"\` (列表页)、\`"neoUIFramework"\` (首页框架)；
+     - \`layoutExtension\`: 页面级布局与生命周期扩展（必须包含 \`onMounted\` 与 \`onDestroyed\`）；
+     - \`componentExtensions\`: 组件级行为与属性扩展。
+   - 【组件定位 scope 铁律】：
+     - 表单字段扩展路径必须为 \`componentExtensions.entityForm.entityFormMaster.formItem\`；
+     - 每一项字段配置必须显式指定 \`scope: { itemApiKey: "真实字段Key" }\`！
+     - 按钮扩展路径必须显式指定 \`scope: { buttonApiKey: "按钮Key" }\`！
+   - 【数据响应式更新铁律】：
+     - 字段联动取值使用 \`e.data.value\`；回写赋值必须调用 \`e.cmp.setFormData({...})\` 或 \`props.getComponent("entityFormMaster", null, true).setFormData({...})\`，严禁通过原生 DOM 操作表单！
+   - 【接口与交互规范】：
+     - 接口请求必须调用 \`ctx.api.request({ url, method, data, headers })\`，自动携带租户鉴权会话；
+     - 原生提示必须调用 \`ctx.ui.showToast("success"|"error"|"warning"|"info", message)\`。
+3. 【物理文件直通生成 - 严禁空谈 Markdown 与虚构假动作】：
+   - 面对用户的 Nex 扩展需求，绝对严禁仅在回复中输出 JavaScript 代码块就宣称“已部署”！
+   - 你必须直接调用 \`generate_nex_extension\` 专用工具，在当前本地项目工作区直接生成真实合规的 \`src/nex/{nexName}/index.js\`、\`manifest.json\` 与 \`README.md\` 文件！
+   - 扩展唯一命名规范严格遵循：\`{objectApiKey}_{clientType}_{pageType}\`（例如 \`newOpportunity_web_entityForm\`）。
+4. 【逆向官方通信指令与全自动发布部署 (getDeployCode_neoAgg)】：
+   - 掌握销售易官方 Nex DevTools 14 大逆向通信指令（getCurrentNeoInfo_neoAgg, getNeoExtList_neoAgg, getCode_neoAgg, getDeployCode_neoAgg 等）；
+   - 代码就绪后，直接调用 \`deploy_nex_extension\` 工具将代码转译、计算 SHA256 指纹并自动下发部署，实现全租户生效与版本自动递增！
+5. 【任务清单全部闭环推进 (Todo Completion)】：
+   - 若建立了 todo_write 任务清单，必须负责到底，每完成调研、生成或部署步骤，必须紧接着调用 todo_write 将任务更新为 completed；
+   - 严禁在仍有任务未完成时提前停止工具调用，必须所有任务项全为 completed 全部完成后才输出最终交付汇报！
+`;
+
 export function getProtectedSkillInstruction(skillId: string): string | null {
   if (instructionCache.has(skillId)) {
     return instructionCache.get(skillId) || null;
@@ -207,10 +242,7 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
   if (
     skillId === "preset-salesforce-architect" ||
     skillId === "skill-salesforce-cli" ||
-    skillId === "salesforce-cli" ||
-    skillId === "preset-neobi-architect" ||
-    skillId === "skill-neobi-architect" ||
-    skillId === "neobi-architect"
+    skillId === "salesforce-cli"
   ) {
     return SALESFORCE_SKILL_INSTRUCTION;
   }
@@ -220,6 +252,14 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
     skillId === "neobi-architect"
   ) {
     return NEOBI_ARCHITECT_INSTRUCTION;
+  }
+  if (
+    skillId === "preset-nex-architect" ||
+    skillId === "skill-salesyi-nex-dev" ||
+    skillId === "salesyi-nex-dev" ||
+    skillId === "nex-architect"
+  ) {
+    return NEX_ARCHITECT_INSTRUCTION;
   }
   const raw = OBFUSCATED_BUILTIN_SKILLS[skillId];
   if (!raw) return null;
@@ -249,7 +289,14 @@ export function isProtectedBuiltinSkill(skillId: string): boolean {
     skillId === "fxiaoke-crm-cli" ||
     skillId === "preset-salesforce-architect" ||
     skillId === "skill-salesforce-cli" ||
-    skillId === "salesforce-cli"
+    skillId === "salesforce-cli" ||
+    skillId === "preset-neobi-architect" ||
+    skillId === "skill-neobi-architect" ||
+    skillId === "neobi-architect" ||
+    skillId === "preset-nex-architect" ||
+    skillId === "skill-salesyi-nex-dev" ||
+    skillId === "salesyi-nex-dev" ||
+    skillId === "nex-architect"
   );
 }
 
@@ -1370,6 +1417,115 @@ export const CRM_HARNESS_TOOLS_SPEC = [
       },
     },
   },
+  // ================= 销售易 Nex 2.0 页面扩展架构与自动化部署工具 =================
+  {
+    type: "function",
+    function: {
+      name: "list_nex_extensions",
+      description: "查询当前租户及本地工作区内已存在的销售易 Nex 2.0 页面扩展列表（包含扩展标识 nexName、业务对象、终端类型、页面场景、版本号及部署状态）。",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_nex_extension_code",
+      description: "获取指定销售易 Nex 2.0 页面扩展的源码、版本信息与清单配置。",
+      parameters: {
+        type: "object",
+        properties: {
+          nexName: {
+            type: "string",
+            description: "Nex 扩展唯一标识，例如 'newOpportunity_web_entityForm'、'account_web_entityDetail'",
+          },
+          version: {
+            type: "number",
+            description: "可选，历史版本号",
+          },
+        },
+        required: ["nexName"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "generate_nex_extension",
+      description: "在当前项目工作区直接生成符合销售易 Nex 2.0 规范的完整 view(ctx, props) 代码文件（自动生成 src/nex/{nexName}/index.js、manifest.json 与 README.md，包含生命周期、字段 scope 定位、联动与按钮控制）。设计与开发 Nex 扩展时必须调用此工具生成真实物理文件！",
+      parameters: {
+        type: "object",
+        properties: {
+          objectApiKey: {
+            type: "string",
+            description: "业务对象 API Key，例如 'newOpportunity', 'account', 'contract', 'order' 等",
+          },
+          pageType: {
+            type: "string",
+            enum: ["EntityForm", "EntityDetail", "EntityList", "neoUIFramework"],
+            description: "页面扩展场景类型：EntityForm (新建/编辑表单)、EntityDetail (详情页)、EntityList (列表页)、neoUIFramework (首页框架)",
+          },
+          clientType: {
+            type: "string",
+            enum: ["web", "h5"],
+            description: "客户端类型：web (PC 端) 或 h5 (移动端)，默认 'web'",
+          },
+          title: {
+            type: "string",
+            description: "扩展中文名称，如 '商机赢单联动扩展', '合同审批状态控制'",
+          },
+          description: {
+            type: "string",
+            description: "扩展业务功能与联动规则描述",
+          },
+          targetFields: {
+            type: "array",
+            description: "参与联动的字段列表（建议先通过 get_entity_fields 工具校验字段真实存在）",
+            items: {
+              type: "object",
+              properties: {
+                apiKey: { type: "string", description: "字段 API Key" },
+                label: { type: "string", description: "字段中文名" },
+                required: { type: "boolean", description: "是否必填" },
+                disabled: { type: "boolean", description: "是否禁用" },
+              },
+              required: ["apiKey"],
+            },
+          },
+          initialCode: {
+            type: "string",
+            description: "可选，自定义的完整 view(ctx, props) 脚本代码",
+          },
+        },
+        required: ["objectApiKey"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "deploy_nex_extension",
+      description: "对销售易 Nex 2.0 页面扩展进行语法合规性检查、计算 SHA-256 代码指纹，并派发官方 getDeployCode_neoAgg 指令执行全量部署上线（全租户生效与版本自增）。",
+      parameters: {
+        type: "object",
+        properties: {
+          nexName: {
+            type: "string",
+            description: "Nex 扩展唯一标识，例如 'newOpportunity_web_entityForm'",
+          },
+          code: {
+            type: "string",
+            description: "可选，需要部署的最新 view(ctx, props) 代码；若不传则自动读取本地 src/nex/{nexName}/index.js",
+          },
+          version: {
+            type: "number",
+            description: "可选，指定的发布版本号（默认自动在原有版本上递增）",
+          },
+        },
+        required: ["nexName"],
+      },
+    },
+  },
 ];
-
-

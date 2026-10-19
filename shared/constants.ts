@@ -379,6 +379,22 @@ export const DEFAULT_AI_SETTINGS: AiHarnessSettings = {
  */
 export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
+    id: "nex-architect",
+    name: "Nex页面扩展大师 (Nex Architect)",
+    description: "销售易 Nex 2.0 页面扩展 (view(ctx, props)) 全生命周期专家：精通多端场景 (EntityForm/EntityDetail/EntityList/neoUIFramework)、作用域 scope 联动、DevTools 14 大逆向通信协议与代码自动编译部署",
+    iconName: "LayoutTemplate",
+    badge: "Nex部署大师",
+    enableCrmTools: true,
+    recommendedModel: "deepseek-chat",
+    systemPrompt: `[PROTECTED_PRESET::nex-architect]`,
+    quickPrompts: [
+      "请为【商机】(newOpportunity) 的新建/编辑表单设计一套当阶段变更为赢单时必填赢单原因的 Nex 2.0 扩展代码",
+      "为【客户】(account) 详情页设计一个调用自定义 REST 接口并弹出 Toast 确认的 Nex 按钮扩展",
+      "如何用代码配置包含组件定位 scope、字段联动与数据校验的销售易 Nex 2.0 完整 view(ctx, props) 架构？",
+      "查询当前租户已部署的 Nex 页面扩展资产列表，并在本地生成增量升级代码与部署方案",
+    ],
+  },
+  {
     id: "neobi-architect",
     name: "BI分析部署大师 (NeoBI Architect)",
     description: "销售易智能分析 (NeoBI / v2.0) 全生命周期代码级部署大师：精通数据源建模、21类图表配置、双套配置 (web.dataConfig + server)、多看板布局、联动下钻、指标计算、外部对象及代码级部署与独立查询验收",
@@ -711,6 +727,15 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     category: "builtin",
     iconName: "Flame",
     triggerKeywords: ["纷享销客", "纷享", "sharecrm", "fxiaoke", "AccountObj", "ContractObj"],
+    enabled: true,
+  },
+  {
+    id: "skill-salesyi-nex-dev",
+    name: "销售易 Nex 2.0 页面扩展与部署规范",
+    description: "销售易 Nex 2.0 页面扩展 (view(ctx, props)) 开发标准：页面场景适配、字段联动控制、组件作用域通信与 getDeployCode_neoAgg 自动部署协议。",
+    category: "builtin",
+    iconName: "LayoutTemplate",
+    triggerKeywords: ["Nex", "页面扩展", "view(ctx, props)", "EntityForm", "EntityDetail", "EntityList", "getDeployCode_neoAgg", "DevTools"],
     enabled: true,
   },
 ];

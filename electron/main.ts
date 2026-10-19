@@ -16,6 +16,7 @@ import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
+import { NexService } from './services/nexService';
 import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { licenseService } from './security/licenseService';
@@ -58,6 +59,7 @@ const aiService = new AiService(sessionStore, metadataService, dataService, envS
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
+const nexService = new NexService(metadataService);
 const projectService = new ProjectService();
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
@@ -713,6 +715,30 @@ ipcMain.handle("print:renderDocument", async (_, params) => {
     throw new Error("请先登录租户");
   }
   return printTemplateService.renderPrintDocument(current.environment, current.tokenData, params);
+});
+
+// ================= 销售易 Nex 2.0 页面扩展管理 (Nex 2.0) =================
+
+ipcMain.handle("nex:listExtensions", async (_, projectDir?: string) => {
+  const current = sessionStore.getCurrentSession();
+  return nexService.listExtensions(current.environment || {} as any, current.tokenData || {} as any, projectDir);
+});
+
+ipcMain.handle("nex:getExtensionDetail", async (_, params) => {
+  const current = sessionStore.getCurrentSession();
+  return nexService.getExtensionDetail(current.environment || {} as any, current.tokenData || {} as any, params);
+});
+
+ipcMain.handle("nex:generateExtension", async (_, options) => {
+  return nexService.generateNexExtension(options);
+});
+
+ipcMain.handle("nex:deployExtension", async (_, options) => {
+  const current = sessionStore.getCurrentSession();
+  if (!current.isLoggedIn || !current.environment || !current.tokenData) {
+    throw new Error("请先登录租户环境");
+  }
+  return nexService.deployNexExtension(current.environment, current.tokenData, options);
 });
 
 // ================= 本地工作区项目 (Workspace Projects) =================

@@ -1,7 +1,7 @@
 {
   "name": "neocrm-desktop",
-  "version": "1.7.9",
-  "description": "NeoCRM \u684c\u9762\u7aef\u5f00\u53d1\u8005\u5de5\u5177\uff0c\u652f\u6301\u591a\u73af\u5883\u5207\u6362\u3001OAuth2 \u6388\u6743\u767b\u5f55\u4e0e\u4f1a\u8bdd\u7ba1\u7406",
+  "version": "1.8.0",
+  "description": "NeoCRM 桌面端开发者工具，支持多环境切换、OAuth2 授权登录与会话管理",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",

@@ -204,7 +204,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   >(null);
 
   const isFlowEnginePreset = (id?: string) =>
-    id === "autoflow-architect" || id === "approval-architect" || id === "neobi-architect";
+    id === "autoflow-architect" || id === "approval-architect" || id === "neobi-architect" || id === "nex-architect";
 
   // 上下文压缩状态
   const [isCompacting, setIsCompacting] = useState(false);
@@ -538,7 +538,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       if (latestLic) setWorkflowLicenseStatus(latestLic);
       if (!latestLic?.isAuthorized) {
         setIsLicenseModalOpen(true);
-        const featureName = preset.id === "neobi-architect" ? "BI分析部署大师" : "流程引擎";
+        const pId = preset.id as string;
+        const featureName = pId === "neobi-architect" ? "BI分析部署大师" : pId === "nex-architect" ? "Nex页面扩展大师" : "流程引擎";
         showToast("info", `🔒 ${featureName}高级功能已上锁，请先输入绑定本机的加密密码完成设备激活`);
         return;
       }

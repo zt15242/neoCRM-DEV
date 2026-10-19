@@ -20,6 +20,7 @@ import { McpClientService } from "./mcpClientService";
 import { SkillPackageService } from "./skillPackageService";
 import { WorkflowService } from "./workflowService";
 import { PrintTemplateService } from "./printTemplateService";
+import { NexService } from "./nexService";
 import { DshToolService } from "./dshToolService";
 import { licenseService } from "../security/licenseService";
 import fs from 'node:fs';
@@ -67,6 +68,7 @@ export class AiService {
   private mcpClientService = new McpClientService();
   private workflowService = new WorkflowService(this.metadataService);
   private printTemplateService = new PrintTemplateService(this.metadataService);
+  private nexService = new NexService(this.metadataService);
   private dshToolService = new DshToolService();
   private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
 
@@ -1156,6 +1158,11 @@ declare const tools: {
           }
         } else if (presetPrompt.includes("[PROTECTED_PRESET::print-template-architect]")) {
           const decodedPreset = getProtectedSkillInstruction("preset-print-template-architect");
+          if (decodedPreset) {
+            systemParts.push(decodedPreset);
+          }
+        } else if (presetPrompt.includes("[PROTECTED_PRESET::nex-architect]")) {
+          const decodedPreset = getProtectedSkillInstruction("preset-nex-architect");
           if (decodedPreset) {
             systemParts.push(decodedPreset);
           }
@@ -3222,6 +3229,51 @@ ${toolDataContext}
           fileName: res.data?.fileName,
         },
         summary: `成功调用打印运行接口生成预览 (格式: ${res.data?.exportType === 2 ? "Word" : res.data?.exportType === 3 ? "Excel" : "PDF"})`,
+      };
+    }
+
+    if (name === "list_nex_extensions") {
+      const res = await this.nexService.listExtensions(env, tokenData, projectPath);
+      return {
+        data: res.data,
+        summary: res.summary,
+      };
+    }
+
+    if (name === "get_nex_extension_code") {
+      const res = await this.nexService.getExtensionDetail(env, tokenData, {
+        nexName: args.nexName,
+        projectDir: projectPath,
+        version: args.version,
+      });
+      if (!res.success) throw new Error(res.error || "获取 Nex 扩展代码失败");
+      return {
+        data: res.data,
+        summary: `成功获取 Nex 扩展【${args.nexName}】代码`,
+      };
+    }
+
+    if (name === "generate_nex_extension") {
+      const targetWorkdir = this.dshToolService.assertPathWithinProject(args.workdir || projectPath || "", projectPath);
+      const res = await this.nexService.generateNexExtension({
+        ...args,
+        workdir: targetWorkdir,
+      });
+      return {
+        data: res,
+        summary: res.message,
+      };
+    }
+
+    if (name === "deploy_nex_extension") {
+      const targetWorkdir = this.dshToolService.assertPathWithinProject(args.workdir || projectPath || "", projectPath);
+      const res = await this.nexService.deployNexExtension(env, tokenData, {
+        ...args,
+        workdir: targetWorkdir,
+      });
+      return {
+        data: res,
+        summary: res.summary,
       };
     }
 

@@ -137,6 +137,11 @@ export const neoApi = {
   workflowToggleStatus: (procdefId: string | number, enable: boolean, procType?: number) => ipcRenderer.invoke("workflow:toggleStatus", procdefId, enable, procType),
   workflowReviseVersion: (procdefId: string | number, procType?: number) => ipcRenderer.invoke("workflow:reviseVersion", procdefId, procType),
   workflowTriggerInstance: (payload: any) => ipcRenderer.invoke("workflow:triggerInstance", payload),
+  // 销售易 Nex 2.0 页面扩展 (Nex 2.0)
+  nexListExtensions: (projectDir?: string) => ipcRenderer.invoke("nex:listExtensions", projectDir),
+  nexGetExtensionDetail: (params: any) => ipcRenderer.invoke("nex:getExtensionDetail", params),
+  nexGenerateExtension: (options: any) => ipcRenderer.invoke("nex:generateExtension", options),
+  nexDeployExtension: (options: any) => ipcRenderer.invoke("nex:deployExtension", options),
   // 打印模板 (Print Template)
   printListObjects: () => ipcRenderer.invoke("print:listObjects"),
   printListTemplates: (params?: any) => ipcRenderer.invoke("print:listTemplates", params),

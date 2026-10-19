@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { AiChatSession, AiAgentPreset, WorkflowLicenseStatus, SessionState } from '../../../shared/types';
 import { 
-  SquarePen, 
+  SquarePen,
+  LayoutTemplate, 
   Search, 
   Trash2, 
   Edit3, 
@@ -93,6 +94,8 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
         return Code2;
       case 'BarChart3':
         return BarChart3;
+      case 'LayoutTemplate':
+        return LayoutTemplate;
       default:
         return Sparkles;
     }
@@ -146,7 +149,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
               {presets.map((p) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isLocked = (p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect') && !workflowLicenseStatus?.isAuthorized;
+                const isLocked = (p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect' || p.id === 'nex-architect') && !workflowLicenseStatus?.isAuthorized;
 
                 return (
                   <button
