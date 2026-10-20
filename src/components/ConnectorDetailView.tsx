@@ -325,6 +325,17 @@ export const ConnectorDetailView: React.FC<ConnectorDetailViewProps> = ({
             </div>
           </div>
 
+          {environment.productType === 'salesforce' && (
+            <div className="p-3 bg-cyan-50/70 rounded-xl border border-cyan-200/80 space-y-1">
+              <span className="text-cyan-800 font-sans block text-[11px] font-semibold">Salesforce CLI 组织专属别名 (sf alias):</span>
+              <div className="flex items-center space-x-1.5 text-cyan-950 font-bold font-mono">
+                <span>{environment.cliAlias || '自动按环境推导'}</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-100 text-cyan-800 font-sans font-normal border border-cyan-200">
+                  环境隔离
+                </span>
+              </div>
+            </div>
+          )}
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
             <span className="text-slate-400 font-sans block text-[11px]">认证模式 (Auth Mode):</span>
             <span className="text-slate-800 font-semibold font-sans">

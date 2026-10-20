@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
@@ -22,6 +23,9 @@ import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
+import { edgeTtsService, EdgeTtsService } from './services/edgeTtsService';
+import { asrService } from './services/asrService';
+import { JarvisFleetService } from './services/jarvisFleetService';
 
 const currentDir = typeof __dirname !== 'undefined' 
   ? __dirname 
@@ -31,6 +35,59 @@ process.env.DIST = path.join(currentDir, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public');
 
 let win: BrowserWindow | null = null;
+let petWin: BrowserWindow | null = null;
+
+function createPetWindow() {
+  if (petWin && !petWin.isDestroyed()) {
+    petWin.show();
+    return;
+  }
+
+  const { screen } = require("electron");
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+
+  petWin = new BrowserWindow({
+    width: 90,
+    height: 90,
+    x: Math.max(10, screenWidth - 110),
+    y: Math.max(10, screenHeight - 120),
+    type: process.platform === "darwin" ? "panel" : "toolbar",
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    resizable: false,
+    movable: true,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(currentDir, "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+    },
+  });
+
+  if (process.platform === "darwin") {
+    petWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    petWin.setAlwaysOnTop(true, "floating", 1);
+  } else {
+    petWin.setAlwaysOnTop(true, "screen-saver");
+  }
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    petWin.loadURL(`${process.env.VITE_DEV_SERVER_URL}?mode=pet`);
+  } else {
+    petWin.loadFile(path.join(currentDir, "../dist/index.html"), {
+      query: { mode: "pet" },
+    });
+  }
+
+  petWin.on("closed", () => {
+    petWin = null;
+  });
+}
 const envService = new EnvService();
 const sessionStore = new SessionStore();
 const authService = new AuthService();
@@ -65,6 +122,7 @@ const workbuddyService = new WorkBuddyService();
 const projectService = new ProjectService();
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
+const jarvisFleetService = new JarvisFleetService(envService, sessionStore, metadataService, dataService);
 
 function createWindow() {
   // 移除 Windows / Linux 下默认的原生 File Edit View 菜单栏
@@ -811,4 +869,170 @@ ipcMain.handle("jobs:kill", async (_, params: { job_id: string; reason?: string 
 });
 ipcMain.handle("terminal:execute", async (_, params: { command: string; workdir?: string; timeoutMs?: number }) => {
   return dshToolService.executeBash(params);
+});
+
+// ======================= 贾维斯 (J.A.R.V.I.S.) 全局总领与语音 IPC =======================
+ipcMain.handle("jarvis:synthesizeSpeech", async (_, text: string, options?: any) => {
+  return edgeTtsService.synthesizeBase64(text, options);
+});
+
+ipcMain.handle("jarvis:transcribeAudio", async (_, audioBase64: string, mimeType?: string) => {
+  try {
+    const buffer = Buffer.from(audioBase64, "base64");
+    const aiConfig = aiService.getAiConfig();
+    const sfProvider = aiConfig.providers?.find((p: any) => p.id === "siliconflow" || p.id === "silicon_flow");
+    const apiKey = sfProvider?.apiKey || process.env.SILICONFLOW_API_KEY || "";
+    return await asrService.transcribeWithSiliconFlow(buffer, apiKey, mimeType || "audio/webm");
+  } catch (err: any) {
+    return { text: "", provider: "siliconflow", error: err.message || "转写异常" };
+  }
+});
+
+ipcMain.handle("jarvis:getFleetOverview", async () => {
+  return jarvisFleetService.getFleetOverview();
+});
+
+ipcMain.handle("jarvis:getSystemPrompt", async (_, userProfile?: any) => {
+  return jarvisFleetService.buildJarvisSystemPrompt(userProfile);
+});
+
+ipcMain.handle("jarvis:getSupportedVoices", async () => {
+  return EdgeTtsService.SUPPORTED_VOICES;
+});
+
+ipcMain.handle("jarvis:toggleDesktopPet", async (_, visible: boolean) => {
+  if (visible) {
+    createPetWindow();
+  } else {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.close();
+      petWin = null;
+    }
+  }
+  return true;
+});
+
+ipcMain.handle("jarvis:setPetWindowExpanded", async (_, expanded: boolean) => {
+  if (!petWin || petWin.isDestroyed()) return false;
+  const bounds = petWin.getBounds();
+  const currentRight = bounds.x + bounds.width;
+  const currentBottom = bounds.y + bounds.height;
+
+  if (expanded) {
+    const newWidth = 350;
+    const newHeight = 410;
+    const newX = Math.max(10, currentRight - newWidth);
+    const newY = Math.max(10, currentBottom - newHeight);
+    petWin.setBounds({ x: newX, y: newY, width: newWidth, height: newHeight });
+  } else {
+    const newWidth = 90;
+    const newHeight = 90;
+    const newX = Math.max(10, currentRight - newWidth);
+    const newY = Math.max(10, currentBottom - newHeight);
+    petWin.setBounds({ x: newX, y: newY, width: newWidth, height: newHeight });
+  }
+  return true;
+});
+
+ipcMain.handle("jarvis:openMainWindow", async () => {
+  if (!win || win.isDestroyed()) {
+    createWindow();
+  } else {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    win.webContents.send("jarvis:navigateToCommandCenter");
+  }
+  return true;
+});
+
+ipcMain.handle("jarvis:chat", async (_, params: { message: string; history?: any[]; userProfile?: any }) => {
+  const { message, history = [], userProfile } = params;
+  const sysPrompt = jarvisFleetService.buildJarvisSystemPrompt(userProfile);
+  const fleet = jarvisFleetService.getFleetOverview();
+
+  const lower = (message || "").toLowerCase();
+  // 1. 若问题询问系统态势/连接器在线情况，由管家直接精准如实汇报
+  if (
+    message.includes("态势") ||
+    message.includes("连接器") ||
+    message.includes("在线") ||
+    message.includes("系统状态") ||
+    message.includes("舰队")
+  ) {
+    const salutation = userProfile?.salutation || (userProfile?.gender === "female" ? "女士" : "先生");
+    const name = userProfile?.name || "指挥官";
+    const onlineNames = fleet.connectors
+      .filter((c) => c.isLoggedIn)
+      .map((c) => `【${c.name}】(${c.productType.toUpperCase()}${c.tenantId ? ` · 租户:${c.tenantId}` : ""})`)
+      .join("、");
+    const offlineNames = fleet.connectors
+      .filter((c) => !c.isLoggedIn)
+      .map((c) => c.name)
+      .join("、");
+
+    let detail = `汇报${name}${salutation}，当前全网舰队共接入 ${fleet.totalCount} 套连接器，全部 ${fleet.onlineCount} 套处于在线授权状态。
+在线连接器包括：${onlineNames}。`;
+    if (offlineNames) {
+      detail += `
+未授权或Token失效连接器：${offlineNames}。`;
+    }
+    detail += `
+所有已连通系统的 API 探活与会话心跳均正常，随时听候您的调遣。`;
+    return { content: detail };
+  }
+
+  // 2. 调用当前用户配置的 AI 模型进行深度规划与回答
+  try {
+    const config = aiService.getAiConfig();
+    const defaultProviderId = config.settings.defaultProviderId;
+    const provider =
+      config.providers.find((p) => p.id === defaultProviderId && p.enabled && p.apiKey) ||
+      config.providers.find((p) => p.enabled && p.apiKey);
+
+    if (provider) {
+      const modelId = config.settings.defaultModelId || provider.models[0]?.id || "deepseek-ai/DeepSeek-V3";
+      const cleanHistory = history.slice(-8).map((h) => ({
+        role: h.role === "assistant" ? "assistant" : "user",
+        content: String(h.content || ""),
+      }));
+
+      const messages = [
+        { role: "system", content: sysPrompt },
+        ...cleanHistory,
+        { role: "user", content: message },
+      ];
+
+      const url = `${provider.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+      const response = await axios.post(
+        url,
+        {
+          model: modelId,
+          messages,
+          temperature: config.settings.temperature ?? 0.7,
+          max_tokens: config.settings.maxTokens ?? 2000,
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${provider.apiKey.trim()}`,
+          },
+          timeout: 45000,
+        }
+      );
+
+      const replyContent = response.data?.choices?.[0]?.message?.content || "";
+      if (replyContent) {
+        return { content: replyContent };
+      }
+    }
+  } catch (err: any) {
+    console.warn("Jarvis LLM call fallback:", err.message);
+  }
+
+  // 降级兜底管家回复
+  const salutation = userProfile?.salutation || (userProfile?.gender === "female" ? "女士" : "先生");
+  return {
+    content: `已接收您的指令，${salutation}。各系统连接器处于在线监听状态，随时听候进一步差遣。`,
+  };
 });

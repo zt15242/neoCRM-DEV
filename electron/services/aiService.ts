@@ -1,4 +1,5 @@
 import { CodeSyncService } from './codeSyncService';
+import { resolveSalesforceAlias } from './salesforceService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
   const copy = JSON.parse(JSON.stringify(schema));
@@ -1207,7 +1208,7 @@ declare const tools: {
 - 组织 ID (Org ID): ${token?.tenant_id || '00DC6000001CNBZMA4'}
 - 认证用户: ${token?.userInfo?.name || 'Salesforce 用户'} (User ID: ${token?.userInfo?.userId || 'N/A'})
 - 实例 URL: ${token?.instance_uri || env.neoBaseURL}
-- 本地 CLI 会话状态: ✅ Connected (已实时同步至本地 sf CLI 工具链，CLI 别名: aliNewStageFull，凭据 100% 有效可用)
+- 本地 CLI 会话状态: ✅ Connected (已实时同步至本地 sf CLI 工具链，当前环境专属 CLI 别名: ${resolveSalesforceAlias(env, token)}，凭据 100% 有效可用)
 - 【极其重要 - 铁律】：
   当前环境已成功鉴权并连通 Salesforce 组织！本地 Salesforce CLI (sf) 的凭据已自动双向同步完成，状态为 Connected 有效就绪！
   绝对严禁向用户输出“凭据已过期”或要求用户在终端手动运行 \`sf org login web\` 命令！

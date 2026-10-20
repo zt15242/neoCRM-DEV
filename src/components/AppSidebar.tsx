@@ -41,10 +41,10 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame, BarChart3 } from 'lucide-react';
+import { Plus, Radio, ExternalLink, FolderPlus, Plug, Cloud, Flame, BarChart3 } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
-export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai';
+export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'jarvis';
 
 interface AppSidebarProps {
   platform: string;
@@ -345,6 +345,24 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
       {/* 3. Codex 快捷导航条目 (全部功能移至此处) */}
       <div className="px-2 py-2 space-y-0.5 border-b border-slate-200/60">
+        {/* J.A.R.V.I.S. 全息总领管家 */}
+        <button
+          onClick={() => onSelectTab('jarvis')}
+          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-between cursor-pointer border ${
+            activeTab === 'jarvis'
+              ? 'bg-slate-900 text-cyan-400 border-cyan-500 shadow-[0_0_12px_rgba(0,242,254,0.3)]'
+              : 'text-slate-800 border-transparent hover:bg-cyan-50 hover:text-cyan-800'
+          }`}
+        >
+          <div className="flex items-center space-x-2.5">
+            <Radio className="w-4 h-4 text-cyan-500 animate-pulse" />
+            <span className="font-mono">J.A.R.V.I.S. 贾维斯</span>
+          </div>
+          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+            HUD
+          </span>
+        </button>
+
         {/* New chat */}
         <button
           onClick={onNewChatDraft}

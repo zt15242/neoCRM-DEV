@@ -16,6 +16,10 @@ import { FlowManagerModal } from './components/ai/FlowManagerModal';
 import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
 import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
+import { JarvisCommandCenter } from './components/ai/JarvisCommandCenter';
+import { JarvisDesktopPet } from './components/ai/JarvisDesktopPet';
+import { JarvisOnboardingModal } from './components/ai/JarvisOnboardingModal';
+import { JarvisUserProfile } from '../shared/jarvisTypes';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
 import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
 import { ShieldAlert, LogIn, PanelLeftOpen } from 'lucide-react';
@@ -67,6 +71,32 @@ export const App: React.FC = () => {
 
   // 页面导航 Tab
   const [activeTab, setActiveTab] = useState<AppNavTab>('dashboard');
+  // J.A.R.V.I.S. 全局总领管家专属档案与引导状态
+  const [jarvisProfile, setJarvisProfile] = useState<JarvisUserProfile | null>(() => {
+    try {
+      const saved = localStorage.getItem('jarvis_user_profile');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isJarvisOnboardingOpen, setIsJarvisOnboardingOpen] = useState(false);
+
+  // 启动与管理系统桌面独立桌宠 (Jarvis Floating Desktop Pet)
+  useEffect(() => {
+    const shouldShowPet = jarvisProfile ? jarvisProfile.petVisible !== false : true;
+    if (shouldShowPet && window.neoApi?.jarvisToggleDesktopPet) {
+      window.neoApi.jarvisToggleDesktopPet(true);
+    }
+
+    const unsubscribe = window.neoApi?.onJarvisNavigate?.(() => {
+      setActiveTab('jarvis');
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
   const [activeDetailEnvId, setActiveDetailEnvId] = useState<string | null>(null);
   const [dataTargetEntity, setDataTargetEntity] = useState<string>('account');
 
@@ -483,6 +513,9 @@ export const App: React.FC = () => {
 
   // 导航处理
   const handleTabChange = (tab: AppNavTab) => {
+    if (tab === 'jarvis' && !jarvisProfile) {
+      setIsJarvisOnboardingOpen(true);
+    }
     if ((tab === 'metadata' || tab === 'data') && !session.isLoggedIn) {
       showToast('info', '请先选择环境并完成登录授权，以访问实体与业务数据');
       setActiveTab('dashboard');
@@ -731,6 +764,15 @@ export const App: React.FC = () => {
           />
         </div>
 
+        {/* Tab 5: J.A.R.V.I.S. 全息总领指挥中心大屏 */}
+        {activeTab === 'jarvis' && (
+          <JarvisCommandCenter
+            userProfile={jarvisProfile}
+            onOpenSettings={() => setIsJarvisOnboardingOpen(true)}
+            onBackToDashboard={() => setActiveTab('dashboard')}
+          />
+        )}
+
 
       </main>
 
@@ -753,6 +795,37 @@ export const App: React.FC = () => {
         onClose={() => setIsHistoryOpen(false)}
         onSwitch={handleSwitchAccount}
         onDelete={handleDeleteHistoryRecord}
+      />
+
+      {/* 贾维斯 (J.A.R.V.I.S.) 桌面方舟桌宠挂件 */}
+      <JarvisDesktopPet
+        userProfile={jarvisProfile}
+        onOpenCommandCenter={() => {
+          if (!jarvisProfile) {
+            setIsJarvisOnboardingOpen(true);
+          } else {
+            setActiveTab('jarvis');
+          }
+        }}
+        onOpenSettings={() => setIsJarvisOnboardingOpen(true)}
+      />
+
+      {/* 贾维斯 (J.A.R.V.I.S.) 协议接入与指挥官档案设置弹窗 */}
+      <JarvisOnboardingModal
+        isOpen={isJarvisOnboardingOpen}
+        initialProfile={jarvisProfile}
+        onClose={() => setIsJarvisOnboardingOpen(false)}
+        onSave={(newProfile) => {
+          setJarvisProfile(newProfile);
+          try {
+            localStorage.setItem('jarvis_user_profile', JSON.stringify(newProfile));
+          } catch {}
+          if (window.neoApi?.jarvisToggleDesktopPet) {
+            window.neoApi.jarvisToggleDesktopPet(newProfile.petVisible);
+          }
+          setIsJarvisOnboardingOpen(false);
+          showToast('success', `贾维斯核心已就绪，随时为您效劳，${newProfile.name}${newProfile.salutation}`);
+        }}
       />
 
       {/* 租户流程资产管理中心 (自动流程 & 新版审批流) */}

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { SessionState } from '../../shared/types';
 
-export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings';
+export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings' | 'jarvis';
 
 interface HeaderProps {
   platform: string;

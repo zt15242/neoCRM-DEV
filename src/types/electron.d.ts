@@ -243,6 +243,17 @@ declare global {
       loggerClearLogs?: () => Promise<boolean>;
       loggerExportLog?: (date?: string) => Promise<{ success: boolean; filePath?: string; message?: string }>;
       loggerLog?: (level: string, module: string, message: string, details?: any) => Promise<boolean>;
+      // 贾维斯 (J.A.R.V.I.S.) 全局总领与语音中枢
+      jarvisSynthesizeSpeech?: (text: string, options?: any) => Promise<{ audioBase64: string; format: "mp3"; byteLength: number }>;
+      jarvisTranscribeAudio?: (audioBase64: string, mimeType?: string) => Promise<{ text: string; durationMs?: number; provider: string; error?: string }>;
+      jarvisGetFleetOverview?: () => Promise<any>;
+      jarvisGetSystemPrompt?: (userProfile?: any) => Promise<string>;
+      jarvisGetSupportedVoices?: () => Promise<any[]>;
+      jarvisChat?: (params: { message: string; history?: any[]; userProfile?: any }) => Promise<{ content: string }>;
+      jarvisToggleDesktopPet?: (visible: boolean) => Promise<boolean>;
+      jarvisSetPetWindowExpanded?: (expanded: boolean) => Promise<boolean>;
+      jarvisOpenMainWindow?: () => Promise<boolean>;
+      onJarvisNavigate?: (callback: () => void) => () => void;
     };
   }
 }

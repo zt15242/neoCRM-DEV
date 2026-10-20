@@ -23,6 +23,7 @@ export interface CrmConnector {
   cloudDomain?: string; // 纷享所在云 (open.fxiaoke.com / open-hwcloud.fxiaoke.com 等)
   ea?: string; // 纷享销客企业账号代码
   devCertificate?: string; // 纷享销客官方开发者证书 (Developer Certificate，用于拉取/部署 APL 函数与 PWC 组件)
+  cliAlias?: string; // Salesforce 组织专属 CLI 别名 (sf alias, 如 SF_Ali_Sandbox, Olympus_Dev)
   customHeaders?: Record<string, string>;
   createdAt?: number;
   updatedAt?: number;

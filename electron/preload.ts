@@ -166,7 +166,24 @@ export const neoApi = {
   loggerLog: (level: string, module: string, message: string, details?: any) =>
     ipcRenderer.invoke('logger:log', level, module, message, details),
 
-    onAiStreamEvent: (callback: (event: any) => void) => {
+      // 贾维斯 (J.A.R.V.I.S.) 全局总领与语音中枢
+  jarvisSynthesizeSpeech: (text: string, options?: any) => ipcRenderer.invoke("jarvis:synthesizeSpeech", text, options),
+  jarvisTranscribeAudio: (audioBase64: string, mimeType?: string) => ipcRenderer.invoke("jarvis:transcribeAudio", audioBase64, mimeType),
+  jarvisGetFleetOverview: () => ipcRenderer.invoke("jarvis:getFleetOverview"),
+  jarvisGetSystemPrompt: (userProfile?: any) => ipcRenderer.invoke("jarvis:getSystemPrompt", userProfile),
+  jarvisGetSupportedVoices: () => ipcRenderer.invoke("jarvis:getSupportedVoices"),
+  jarvisChat: (params: { message: string; history?: any[]; userProfile?: any }) =>
+    ipcRenderer.invoke("jarvis:chat", params),
+  jarvisToggleDesktopPet: (visible: boolean) => ipcRenderer.invoke("jarvis:toggleDesktopPet", visible),
+  jarvisSetPetWindowExpanded: (expanded: boolean) => ipcRenderer.invoke("jarvis:setPetWindowExpanded", expanded),
+  jarvisOpenMainWindow: () => ipcRenderer.invoke("jarvis:openMainWindow"),
+  onJarvisNavigate: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("jarvis:navigateToCommandCenter", handler);
+    return () => ipcRenderer.removeListener("jarvis:navigateToCommandCenter", handler);
+  },
+
+  onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);
     return () => ipcRenderer.removeListener('ai:streamEvent', handler);

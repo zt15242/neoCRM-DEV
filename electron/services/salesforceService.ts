@@ -1,3 +1,73 @@
+/**
+ * 依据环境对象与会话数据，动态、确定性地推导该环境专属的 Salesforce CLI (sf) 别名
+ * 彻底消除所有环境硬编码为单一别名 (如 aliNewStageFull / DigitalDev) 导致的组织互相覆盖与串号混乱！
+ */
+export function resolveSalesforceAlias(env?: NeoEnvironment, tokenData?: TokenData): string {
+  // 1. 若连接器显式配置了自定义 CLI 别名，严格优先遵循
+  if (env?.cliAlias && env.cliAlias.trim()) {
+    return env.cliAlias.trim().replace(/\s+/g, '_');
+  }
+
+  // 2. 检查本地 ~/.sfdx/alias.json 中是否已有针对该具体用户名或 Org ID 的既有别名
+  const username = tokenData?.userInfo?.name || tokenData?.userInfo?.preferred_username;
+  const orgId = tokenData?.tenant_id ? String(tokenData.tenant_id) : undefined;
+  try {
+    const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
+    if (fs.existsSync(aliasJsonPath)) {
+      const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
+      const orgs = aliasData.orgs || {};
+
+      // 若指定了具体 username，优先匹配该 username 的已有别名
+      if (username) {
+        const found = Object.entries(orgs).find(([_, u]) => String(u).toLowerCase() === username.toLowerCase());
+        if (found) return found[0];
+      }
+      // 其次匹配 Org ID
+      if (orgId) {
+        const foundOrg = Object.entries(orgs).find(([_, u]) => String(u) === orgId);
+        if (foundOrg) return foundOrg[0];
+      }
+    }
+  } catch {}
+
+  // 3. 预置 Salesforce 连接器专属固定别名 (四套预置环境互不干扰)
+  if (env?.id === 'sf-alicloud-production') return 'SF_Ali_Prod';
+  if (env?.id === 'sf-sandbox' || env?.id === 'sf-alicloud-sandbox') return 'SF_Ali_Sandbox';
+  if (env?.id === 'sf-global-production') return 'SF_Global_Prod';
+  if (env?.id === 'sf-global-sandbox') return 'SF_Global_Sandbox';
+
+  // 4. 从环境实例 URL / 我的域 (MyDomain) 提取专属组织代号
+  const instanceUrl = (tokenData?.instance_uri || env?.neoBaseURL || '').trim();
+  if (instanceUrl) {
+    try {
+      const u = new URL(instanceUrl);
+      const host = u.hostname.toLowerCase();
+      // 例如 olympus--stagefull.sandbox.my.sfcrmproducts.cn -> olympus_stagefull
+      const firstPart = host.split('.')[0];
+      if (firstPart && !['login', 'test', 'www', 'api'].includes(firstPart)) {
+        const sanitized = firstPart.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+        if (sanitized && sanitized.length >= 2) return sanitized;
+      }
+    } catch {}
+  }
+
+  // 5. 根据环境名称拼装英文字符别名 (若包含中文字符，自动剥离或拼合拼音/ID)
+  if (env?.name) {
+    const engPart = env.name.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (engPart && engPart.length >= 2) {
+      return `SF_${engPart}`;
+    }
+  }
+
+  // 6. 基于环境 ID 保证全局唯一且不冲突
+  if (env?.id) {
+    const cleanId = env.id.replace(/[^a-zA-Z0-9_]/g, '_');
+    return `SF_${cleanId}`;
+  }
+
+  return 'SalesforceOrg';
+}
+
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -68,17 +138,19 @@ export class SalesforceService {
         }
       }
 
-      const files = fs.readdirSync(sfdxDir).filter(
-        (f) => f.endsWith('.json') && f !== 'alias.json' && f !== 'sfdx-config.json' && f !== 'key.json'
-      );
-      for (const f of files) {
+      if (instanceUrl) {
         try {
-          const content = JSON.parse(fs.readFileSync(path.join(sfdxDir, f), 'utf-8'));
-          if (instanceUrl && content.instanceUrl && content.instanceUrl.toLowerCase().includes(new URL(instanceUrl).host.toLowerCase())) {
-            return content;
-          }
-          if (content.accessToken && content.refreshToken) {
-            return content;
+          const host = new URL(instanceUrl).host.toLowerCase();
+          const files = fs.readdirSync(sfdxDir).filter(
+            (f) => f.endsWith('.json') && f !== 'alias.json' && f !== 'sfdx-config.json' && f !== 'key.json'
+          );
+          for (const f of files) {
+            try {
+              const content = JSON.parse(fs.readFileSync(path.join(sfdxDir, f), 'utf-8'));
+              if (content.instanceUrl && content.instanceUrl.toLowerCase().includes(host)) {
+                return content;
+              }
+            } catch {}
           }
         } catch {}
       }
@@ -102,42 +174,14 @@ export class SalesforceService {
         return diskAuth.accessToken;
       }
 
-      // 2. 解析别名：优先读取 ~/.sf/config.json -> ~/.sfdx/sfdx-config.json -> ~/.sfdx/alias.json
-      let alias = '';
-      try {
-        const sfConfigPath = path.join(os.homedir(), '.sf', 'config.json');
-        if (fs.existsSync(sfConfigPath)) {
-          const sfConfig = JSON.parse(fs.readFileSync(sfConfigPath, 'utf-8'));
-          alias = sfConfig['target-org'] || '';
-        }
-      } catch {}
-      if (!alias) {
-        try {
-          const sfdxConfigPath = path.join(os.homedir(), '.sfdx', 'sfdx-config.json');
-          if (fs.existsSync(sfdxConfigPath)) {
-            const sfdxConfig = JSON.parse(fs.readFileSync(sfdxConfigPath, 'utf-8'));
-            alias = sfdxConfig['defaultusername'] || '';
-          }
-        } catch {}
-      }
-      if (!alias) {
-        const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
-        if (fs.existsSync(aliasJsonPath)) {
-          try {
-            const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
-            const orgs = aliasData.orgs || {};
-            const keys = Object.keys(orgs);
-            if (keys.length > 0) alias = keys[0];
-          } catch {}
-        }
-      }
+      // 2. 依据当前环境动态推导专属别名，杜绝全局单一别名冲突
+      const alias = resolveSalesforceAlias(env, tokenData);
 
-      // 3. 执行 sf org display（彻底修复 Windows cmd.exe 语法：绝不使用行内环境变量赋值）
+      // 3. 执行 sf org display 探测当前环境专属组织凭据
       let stdout = '';
       try {
-        const targetParam = alias ? `--target-org "${alias}"` : '';
         stdout = execSync(
-          `"${cmd}" org display ${targetParam} --json`.trim(),
+          `"${cmd}" org display --target-org "${alias}" --json`.trim(),
           {
             encoding: 'utf-8',
             timeout: 15000,
@@ -147,16 +191,7 @@ export class SalesforceService {
           }
         );
       } catch {
-        stdout = execSync(
-          `"${cmd}" org display --json`,
-          {
-            encoding: 'utf-8',
-            timeout: 15000,
-            windowsHide: true,
-            shell: true,
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-          }
-        );
+        return null;
       }
 
       const jsonStart = stdout.indexOf('{');
