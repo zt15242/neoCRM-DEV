@@ -12,6 +12,8 @@ import {
   Sparkles
 } from 'lucide-react';
 import { JarvisReactor } from './JarvisReactor';
+import { JarvisVolumeControl } from './JarvisVolumeControl';
+import { getJarvisAudioSettings } from './jarvisAudioHelper';
 import { 
   JarvisUserProfile, 
   JarvisState, 
@@ -68,8 +70,14 @@ export const JarvisPetWindow: React.FC = () => {
     }
   };
 
-  // 语音播报
+  // 语音播报 (带音量与静音防护)
   const speakText = async (text: string) => {
+    const audioSettings = getJarvisAudioSettings(userProfile);
+    if (audioSettings.isMuted || audioSettings.volume === 0) {
+      setState('idle');
+      return;
+    }
+
     setState('speaking');
     try {
       if (currentAudioRef.current) {
@@ -83,10 +91,16 @@ export const JarvisPetWindow: React.FC = () => {
         });
         if (res?.audioBase64) {
           const audio = new Audio(`data:audio/mp3;base64,${res.audioBase64}`);
+          audio.volume = Math.max(0, Math.min(1, audioSettings.volume / 100));
+          audio.muted = audioSettings.isMuted;
           currentAudioRef.current = audio;
           audio.onended = () => setState('idle');
           audio.onerror = () => setState('idle');
-          await audio.play();
+          if (!audioSettings.isMuted && audioSettings.volume > 0) {
+            await audio.play();
+          } else {
+            setState('idle');
+          }
           return;
         }
       }
@@ -95,9 +109,14 @@ export const JarvisPetWindow: React.FC = () => {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
+        utterance.volume = audioSettings.isMuted ? 0 : Math.max(0, Math.min(1, audioSettings.volume / 100));
         utterance.onend = () => setState('idle');
         utterance.onerror = () => setState('idle');
-        window.speechSynthesis.speak(utterance);
+        if (!audioSettings.isMuted && audioSettings.volume > 0) {
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setState('idle');
+        }
       } else {
         setState('idle');
       }
@@ -220,12 +239,13 @@ export const JarvisPetWindow: React.FC = () => {
             </div>
 
             <div className="flex items-center space-x-1" style={{ WebkitAppRegion: 'no-drag' } as any}>
+              <JarvisVolumeControl currentAudio={currentAudioRef.current} />
               <button
                 onClick={() => setAutoSpeak(!autoSpeak)}
-                title={autoSpeak ? '语音已开启' : '语音已静音'}
-                className="p-1 rounded text-cyan-400/70 hover:text-cyan-200 hover:bg-cyan-950/60 transition-colors"
+                title={autoSpeak ? '自动发音已开启' : '自动发音已关闭'}
+                className="p-1 rounded text-cyan-400/70 hover:text-cyan-200 hover:bg-cyan-950/60 transition-colors text-[10px] font-mono"
               >
-                {autoSpeak ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                {autoSpeak ? 'TTS:开' : 'TTS:关'}
               </button>
               <button
                 onClick={handleOpenMainApp}

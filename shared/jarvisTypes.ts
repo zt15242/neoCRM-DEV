@@ -10,6 +10,8 @@ export interface JarvisUserProfile {
   voiceId: string; // TTS 音色 ID，如 "zh-CN-YunjianNeural"
   voiceRate: string; // 语速，如 "+0%"
   voicePitch: string; // 音调，如 "+0Hz"
+  voiceVolume?: number; // 播报音量 0 - 100，默认 100
+  isMuted?: boolean; // 是否一键静音，默认 false
   autoSpeak: boolean; // 是否自动语音播报
   petVisible: boolean; // 是否显示桌面悬浮桌宠
   petPosition: { x: number; y: number }; // 桌宠坐标

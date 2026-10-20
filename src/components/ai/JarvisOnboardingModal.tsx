@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Shield, Sparkles, Volume2, UserCheck, X } from 'lucide-react';
+import { Shield, Sparkles, Volume2, Volume1, VolumeX, UserCheck, X } from 'lucide-react';
+import { saveJarvisAudioSettings } from './jarvisAudioHelper';
 import { JarvisUserProfile, JarvisGender } from '../../../shared/jarvisTypes';
 import { JarvisReactor } from './JarvisReactor';
 
@@ -28,6 +29,8 @@ export const JarvisOnboardingModal: React.FC<JarvisOnboardingModalProps> = ({
   const [voiceId, setVoiceId] = useState(initialProfile?.voiceId || 'zh-CN-YunjianNeural');
   const [autoSpeak, setAutoSpeak] = useState(initialProfile?.autoSpeak ?? true);
   const [petVisible, setPetVisible] = useState(initialProfile?.petVisible ?? true);
+  const [voiceVolume, setVoiceVolume] = useState<number>(initialProfile?.voiceVolume ?? 100);
+  const [isMuted, setIsMuted] = useState<boolean>(initialProfile?.isMuted ?? false);
   const [previewing, setPreviewing] = useState(false);
 
   if (!isOpen) return null;
@@ -49,9 +52,15 @@ export const JarvisOnboardingModal: React.FC<JarvisOnboardingModalProps> = ({
         const res = await window.neoApi.jarvisSynthesizeSpeech(previewText, { voice: selectedVoice });
         if (res?.audioBase64) {
           const audio = new Audio(`data:audio/mp3;base64,${res.audioBase64}`);
+          audio.volume = Math.max(0, Math.min(1, voiceVolume / 100));
+          audio.muted = isMuted;
           audio.onended = () => setPreviewing(false);
           audio.onerror = () => setPreviewing(false);
-          await audio.play();
+          if (!isMuted && voiceVolume > 0) {
+            await audio.play();
+          } else {
+            setPreviewing(false);
+          }
           return;
         }
       }
@@ -60,9 +69,14 @@ export const JarvisOnboardingModal: React.FC<JarvisOnboardingModalProps> = ({
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(previewText);
+        utterance.volume = isMuted ? 0 : Math.max(0, Math.min(1, voiceVolume / 100));
         utterance.onend = () => setPreviewing(false);
         utterance.onerror = () => setPreviewing(false);
-        window.speechSynthesis.speak(utterance);
+        if (!isMuted && voiceVolume > 0) {
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setPreviewing(false);
+        }
       } else {
         setPreviewing(false);
       }
@@ -81,12 +95,15 @@ export const JarvisOnboardingModal: React.FC<JarvisOnboardingModalProps> = ({
       voiceId,
       voiceRate: '+0%',
       voicePitch: '+0Hz',
+      voiceVolume,
+      isMuted,
       autoSpeak,
       petVisible,
       petPosition: initialProfile?.petPosition || { x: window.innerWidth - 120, y: window.innerHeight - 140 },
       initializedAt: Date.now(),
     };
 
+    saveJarvisAudioSettings({ volume: voiceVolume, isMuted });
     onSave(profile);
   };
 
@@ -238,6 +255,54 @@ export const JarvisOnboardingModal: React.FC<JarvisOnboardingModalProps> = ({
                   </button>
                 </div>
               ))}
+            </div>
+
+            {/* 音量大小调节与一键静音 */}
+            <div className="p-3 rounded-xl border border-cyan-500/30 bg-cyan-950/30 space-y-2 mt-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-cyan-300 flex items-center space-x-1.5">
+                  {isMuted || voiceVolume === 0 ? (
+                    <VolumeX className="w-4 h-4 text-rose-400" />
+                  ) : voiceVolume < 40 ? (
+                    <Volume1 className="w-4 h-4 text-cyan-400" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-cyan-400" />
+                  )}
+                  <span>贾维斯播报音量调节</span>
+                </span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMute = !isMuted;
+                      setIsMuted(nextMute);
+                    }}
+                    className={`text-[11px] px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                      isMuted
+                        ? 'border-rose-400 bg-rose-950/60 text-rose-300 font-bold'
+                        : 'border-cyan-500/40 text-cyan-300 hover:bg-cyan-950/60'
+                    }`}
+                  >
+                    {isMuted ? '已静音' : '一键静音'}
+                  </button>
+                  <span className="font-mono text-cyan-300 w-10 text-right">
+                    {isMuted ? '0%' : `${voiceVolume}%`}
+                  </span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={isMuted ? 0 : voiceVolume}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setVoiceVolume(val);
+                  if (val > 0 && isMuted) setIsMuted(false);
+                  if (val === 0) setIsMuted(true);
+                }}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+              />
             </div>
           </div>
 

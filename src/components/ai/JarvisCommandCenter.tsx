@@ -28,6 +28,8 @@ import {
   JarvisChatMessage 
 } from '../../../shared/jarvisTypes';
 import { JarvisReactor } from './JarvisReactor';
+import { JarvisVolumeControl } from './JarvisVolumeControl';
+import { getJarvisAudioSettings } from './jarvisAudioHelper';
 
 interface JarvisCommandCenterProps {
   userProfile: JarvisUserProfile | null;
@@ -97,8 +99,14 @@ export const JarvisCommandCenter: React.FC<JarvisCommandCenterProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // 3. 语音合成与播报 (Edge-TTS)
+  // 3. 语音合成与播报 (Edge-TTS，带音量与静音保护)
   const speakText = async (text: string) => {
+    const audioSettings = getJarvisAudioSettings(userProfile);
+    if (audioSettings.isMuted || audioSettings.volume === 0) {
+      setJarvisState('idle');
+      return;
+    }
+
     setJarvisState('speaking');
     try {
       if (currentAudioRef.current) {
@@ -114,10 +122,16 @@ export const JarvisCommandCenter: React.FC<JarvisCommandCenterProps> = ({
           const audioUrl = `data:audio/mp3;base64,${res.audioBase64}`;
           setCurrentAudioUrl(audioUrl);
           const audio = new Audio(audioUrl);
+          audio.volume = Math.max(0, Math.min(1, audioSettings.volume / 100));
+          audio.muted = audioSettings.isMuted;
           currentAudioRef.current = audio;
           audio.onended = () => setJarvisState('idle');
           audio.onerror = () => setJarvisState('idle');
-          await audio.play();
+          if (!audioSettings.isMuted && audioSettings.volume > 0) {
+            await audio.play();
+          } else {
+            setJarvisState('idle');
+          }
           return;
         }
       }
@@ -126,9 +140,14 @@ export const JarvisCommandCenter: React.FC<JarvisCommandCenterProps> = ({
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
+        utterance.volume = audioSettings.isMuted ? 0 : Math.max(0, Math.min(1, audioSettings.volume / 100));
         utterance.onend = () => setJarvisState('idle');
         utterance.onerror = () => setJarvisState('idle');
-        window.speechSynthesis.speak(utterance);
+        if (!audioSettings.isMuted && audioSettings.volume > 0) {
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setJarvisState('idle');
+        }
       } else {
         setJarvisState('idle');
       }
@@ -283,16 +302,20 @@ export const JarvisCommandCenter: React.FC<JarvisCommandCenterProps> = ({
               <span>呼出桌面桌宠</span>
             </button>
 
+            {/* 语音播报音量调节与一键静音 */}
+            <JarvisVolumeControl currentAudio={currentAudioRef.current} />
+
+            {/* 自动语音播报开关 */}
             <button
               onClick={() => setAutoSpeak(!autoSpeak)}
-              title={autoSpeak ? '已开启语音自动发音' : '已静音'}
-              className={`p-1.5 rounded border transition-colors ${
+              title={autoSpeak ? '自动发音已开启 (点击关闭)' : '自动发音已关闭 (点击开启)'}
+              className={`px-2 py-1 rounded border text-[11px] font-mono transition-colors cursor-pointer flex items-center space-x-1 ${
                 autoSpeak
                   ? 'border-cyan-400 bg-cyan-950/60 text-cyan-300'
                   : 'border-slate-800 bg-slate-900/60 text-slate-500'
               }`}
             >
-              {autoSpeak ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              <span>{autoSpeak ? 'TTS自动播报:开' : 'TTS自动播报:关'}</span>
             </button>
 
             <button

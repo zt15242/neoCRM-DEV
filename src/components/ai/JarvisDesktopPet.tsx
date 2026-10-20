@@ -16,6 +16,8 @@ import {
   JarvisFleetOverview 
 } from '../../../shared/jarvisTypes';
 import { JarvisReactor } from './JarvisReactor';
+import { JarvisVolumeControl } from './JarvisVolumeControl';
+import { getJarvisAudioSettings } from './jarvisAudioHelper';
 
 interface JarvisDesktopPetProps {
   userProfile: JarvisUserProfile | null;
@@ -44,6 +46,7 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // 加载全连接器舰队状态
   useEffect(() => {
@@ -175,17 +178,35 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
   };
 
   const speakReply = async (replyText: string) => {
+    const audioSettings = getJarvisAudioSettings(userProfile);
+    if (audioSettings.isMuted || audioSettings.volume === 0) {
+      setState('idle');
+      return;
+    }
+
     setState('speaking');
     try {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+
       if (window.neoApi?.jarvisSynthesizeSpeech) {
         const res = await window.neoApi.jarvisSynthesizeSpeech(replyText, {
           voice: userProfile?.voiceId || 'zh-CN-YunjianNeural',
         });
         if (res?.audioBase64) {
           const audio = new Audio(`data:audio/mp3;base64,${res.audioBase64}`);
+          audio.volume = Math.max(0, Math.min(1, audioSettings.volume / 100));
+          audio.muted = audioSettings.isMuted;
+          currentAudioRef.current = audio;
           audio.onended = () => setState('idle');
           audio.onerror = () => setState('idle');
-          await audio.play();
+          if (!audioSettings.isMuted && audioSettings.volume > 0) {
+            await audio.play();
+          } else {
+            setState('idle');
+          }
           return;
         }
       }
@@ -194,9 +215,14 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(replyText);
+        utterance.volume = audioSettings.isMuted ? 0 : Math.max(0, Math.min(1, audioSettings.volume / 100));
         utterance.onend = () => setState('idle');
         utterance.onerror = () => setState('idle');
-        window.speechSynthesis.speak(utterance);
+        if (!audioSettings.isMuted && audioSettings.volume > 0) {
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setState('idle');
+        }
       } else {
         setState('idle');
       }
@@ -248,6 +274,7 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
               </span>
             </div>
             <div className="flex items-center space-x-1.5">
+              <JarvisVolumeControl currentAudio={currentAudioRef.current} />
               <button
                 onClick={onOpenCommandCenter}
                 title="展开全息全局大屏"

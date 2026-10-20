@@ -395,6 +395,8 @@ ipcMain.handle('logger:log', async (_, level: LogLevel, module: string, message:
   return true;
 });
 
+ipcMain.handle('app:getVersion', async () => updateService.getCurrentVersion());
+
 // ================= 自动更新管理 =================
 ipcMain.handle('updater:check', async () => {
   return updateService.checkForUpdates();
