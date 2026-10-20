@@ -9,6 +9,7 @@ import { execSync, spawn, ChildProcess } from 'node:child_process';
 import axios from 'axios';
 import { BrowserWindow, shell, session } from 'electron';
 import { NeoEnvironment, TokenData, UserInfo } from '../types';
+import { resolveSalesforceAlias } from './salesforceService';
 
 export class AuthService {
   private activeServer: http.Server | null = null;
@@ -327,43 +328,8 @@ export class AuthService {
   /**
    * 解析本地 Salesforce CLI (sf v2) 的当前有效 Org 别名
    */
-  public getSalesforceAlias(env?: NeoEnvironment): string {
-    // 1. 优先读取 ~/.sf/config.json 中的 target-org (sf v2 官方标准)
-    try {
-      const sfConfigPath = path.join(os.homedir(), '.sf', 'config.json');
-      if (fs.existsSync(sfConfigPath)) {
-        const sfConfig = JSON.parse(fs.readFileSync(sfConfigPath, 'utf-8'));
-        if (sfConfig['target-org']) return sfConfig['target-org'];
-      }
-    } catch {}
-
-    // 2. 读取 ~/.sfdx/sfdx-config.json 中的 defaultusername (sfdx 经典标准)
-    try {
-      const sfdxConfigPath = path.join(os.homedir(), '.sfdx', 'sfdx-config.json');
-      if (fs.existsSync(sfdxConfigPath)) {
-        const sfdxConfig = JSON.parse(fs.readFileSync(sfdxConfigPath, 'utf-8'));
-        if (sfdxConfig['defaultusername']) return sfdxConfig['defaultusername'];
-      }
-    } catch {}
-
-    // 3. 读取 ~/.sfdx/alias.json 中的别名映射
-    const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
-    if (fs.existsSync(aliasJsonPath)) {
-      try {
-        const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
-        const orgs = aliasData.orgs || {};
-        const envName = (env?.name || '').toLowerCase();
-        const found = Object.entries(orgs).find(([a, u]) => 
-          (envName && a.toLowerCase().includes(envName)) ||
-          String(u).includes('stagefull') || 
-          String(u).includes('olympus')
-        );
-        if (found) return found[0];
-        const keys = Object.keys(orgs);
-        if (keys.length > 0) return keys[0];
-      } catch {}
-    }
-    return env?.id || 'DigitalDev';
+  public getSalesforceAlias(env?: NeoEnvironment, tokenData?: TokenData): string {
+    return resolveSalesforceAlias(env, tokenData);
   }
 
   /**
@@ -458,15 +424,21 @@ export class AuthService {
         if (data.accessToken) return data;
       }
 
-      // 若别名未直接命中，遍历匹配包含当前组织或实例的最新文件
-      const files = fs.readdirSync(sfdxDir).filter(
-        (f) => f.endsWith('.json') && f !== 'alias.json' && f !== 'sfdx-config.json' && f !== 'key.json'
-      );
-      for (const f of files) {
+      // 若别名未直接命中，仅匹配与当前环境实例 URL (MyDomain) 一致的文件，绝不越界匹配其他环境
+      const instanceUrl = env?.neoBaseURL;
+      if (instanceUrl) {
         try {
-          const d = JSON.parse(fs.readFileSync(path.join(sfdxDir, f), 'utf-8'));
-          if (d.accessToken && (d.orgId || d.instanceUrl)) {
-            return d;
+          const host = new URL(instanceUrl).host.toLowerCase();
+          const files = fs.readdirSync(sfdxDir).filter(
+            (f) => f.endsWith('.json') && f !== 'alias.json' && f !== 'sfdx-config.json' && f !== 'key.json'
+          );
+          for (const f of files) {
+            try {
+              const d = JSON.parse(fs.readFileSync(path.join(sfdxDir, f), 'utf-8'));
+              if (d.accessToken && d.instanceUrl && d.instanceUrl.toLowerCase().includes(host)) {
+                return d;
+              }
+            } catch {}
           }
         } catch {}
       }

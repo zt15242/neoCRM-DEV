@@ -73,6 +73,7 @@ export const PRESET_ENVIRONMENTS: NeoEnvironment[] = [
   {
     id: 'sf-alicloud-production',
     name: 'Salesforce 阿里中国 - 生产正式环境',
+    cliAlias: 'SF_Ali_Prod',
     productType: 'salesforce',
     envType: 'production',
     cloudDomain: 'login.sfcrmproducts.cn',
@@ -89,6 +90,7 @@ export const PRESET_ENVIRONMENTS: NeoEnvironment[] = [
   {
     id: 'sf-sandbox',
     name: 'Salesforce 阿里中国 - 沙盒测试环境 (Sandbox)',
+    cliAlias: 'SF_Ali_Sandbox',
     productType: 'salesforce',
     envType: 'sandbox',
     cloudDomain: 'test.sfcrmproducts.cn',
@@ -105,6 +107,7 @@ export const PRESET_ENVIRONMENTS: NeoEnvironment[] = [
   {
     id: 'sf-global-production',
     name: 'Salesforce 全球版 - 生产/开发者环境 (Global)',
+    cliAlias: 'SF_Global_Prod',
     productType: 'salesforce',
     envType: 'production',
     cloudDomain: 'login.salesforce.com',
@@ -120,6 +123,7 @@ export const PRESET_ENVIRONMENTS: NeoEnvironment[] = [
   {
     id: 'sf-global-sandbox',
     name: 'Salesforce 全球版 - 沙盒测试环境 (Global)',
+    cliAlias: 'SF_Global_Sandbox',
     productType: 'salesforce',
     envType: 'sandbox',
     cloudDomain: 'test.salesforce.com',
@@ -289,6 +293,7 @@ export class EnvService {
       cloudDomain: env.cloudDomain?.trim(),
       ea: env.ea?.trim(),
       devCertificate: env.devCertificate?.trim(),
+      cliAlias: env.cliAlias?.trim(),
       customHeaders: env.customHeaders,
       updatedAt: Date.now(),
       createdAt: env.createdAt || Date.now(),

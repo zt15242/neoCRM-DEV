@@ -47,6 +47,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   const [sfRegion, setSfRegion] = useState<'alicloud' | 'global' | 'custom'>('alicloud');
   const [ea, setEa] = useState('');
   const [devCertificate, setDevCertificate] = useState('');
+  const [cliAlias, setCliAlias] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -69,6 +70,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       setCloudDomain(initialEnv.cloudDomain || 'open.fxiaoke.com');
       setEa(initialEnv.ea || '');
       setDevCertificate(initialEnv.devCertificate || '');
+      setCliAlias(initialEnv.cliAlias || '');
       if (initialEnv.productType === 'salesforce') {
         const u = initialEnv.neoBaseURL || '';
         if (u.includes('sfcrmproducts.cn')) {
@@ -95,6 +97,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       setPermanentCode('');
       setCloudDomain('open.fxiaoke.com');
       setEa('');
+      setCliAlias('');
     }
     setTestResult(null);
   }, [initialEnv, isOpen]);
@@ -248,6 +251,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
       cloudDomain: cloudDomain.trim(),
       ea: ea.trim(),
       devCertificate: devCertificate.trim(),
+      cliAlias: cliAlias.trim(),
     });
     onClose();
   };
@@ -465,6 +469,25 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* Salesforce CLI 组织别名配置 (环境隔离) */}
+              <div className="space-y-1 pt-1 border-t border-cyan-200/60">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-semibold text-cyan-900">
+                    Salesforce CLI 组织专属别名 (sf alias)
+                  </label>
+                  <span className="text-[10px] text-cyan-700">
+                    用于本地 sf 命令行环境隔离，留空自动按环境推导
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={cliAlias}
+                  onChange={(e) => setCliAlias(e.target.value)}
+                  placeholder="例如: Olympus_Dev, Ali_Sandbox (留空自动按环境推导)"
+                  className="w-full px-2.5 py-1.5 bg-white border border-cyan-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-cyan-500"
+                />
               </div>
 
               {/* 回调地址配置 (授权码模式必须匹配 Connected App) */}

@@ -199,31 +199,8 @@ export class SessionStore {
       const tmpFile = path.join(os.tmpdir(), `sfdx_auth_${Date.now()}.txt`);
       fs.writeFileSync(tmpFile, sfdxAuthUrl, 'utf-8');
 
-      // 提取现有别名或使用默认别名
-      let alias = 'DigitalDev';
-      try {
-        const sfConfigPath = path.join(os.homedir(), '.sf', 'config.json');
-        if (fs.existsSync(sfConfigPath)) {
-          const sfConfig = JSON.parse(fs.readFileSync(sfConfigPath, 'utf-8'));
-          if (sfConfig['target-org']) alias = sfConfig['target-org'];
-        }
-      } catch {}
-
-      if (alias === 'DigitalDev') {
-        const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
-        if (fs.existsSync(aliasJsonPath)) {
-          try {
-            const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
-            const found = Object.entries(aliasData.orgs || {}).find(([a, u]) => 
-              u === tokenData.userInfo?.userId || 
-              u === tokenData.userInfo?.name || 
-              String(u).includes('stagefull') ||
-              String(u).includes('olympus')
-            );
-            if (found) alias = found[0];
-          } catch {}
-        }
-      }
+      // 依据当前环境动态推导专属的 Salesforce CLI 别名，确保不同环境组织互不干扰、不串号
+      const alias = resolveSalesforceAlias(env, tokenData);
 
       const cmd = process.platform === 'win32' ? 'sf.cmd' : 'sf';
 
