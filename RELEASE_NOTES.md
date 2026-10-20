@@ -1,3 +1,23 @@
+### 🚀 版本更新说明 (v1.8.6)
+
+1. **彻底解决 Salesforce CLI 别名 (sf alias) 混乱与多环境踩踏覆盖问题**：
+   - **摒弃全局硬编码别名**：彻底移除了此前导致所有连接器共享单一别名（如 `aliNewStageFull` / `DigitalDev`）的历史硬编码与提示词静态绑定；
+   - **全新 6 层环境专属动态推导算法 (`resolveSalesforceAlias`)**：
+     1. **连接器自定义优先**：当连接器配置了专属别名（`cliAlias`）时，严格优先使用；
+     2. **账号/组织既有绑定对齐**：自动匹配本地 `~/.sfdx/alias.json` 中与当前登录用户 (`username`) 或组织 ID (`orgId`) 精确绑定的历史别名；
+     3. **官方预置环境专属别名隔离**：阿里中国生产 (`SF_Ali_Prod`)、阿里中国沙盒 (`SF_Ali_Sandbox`)、全球版生产 (`SF_Global_Prod`)、全球版沙盒 (`SF_Global_Sandbox`) 四套预置环境互不干扰；
+     4. **基于“我的域 (MyDomain)”智能推导**：自定义连接器自动从实例 URL 提取专属子域名（例如 `olympus--stagefull` ➔ `olympus_stagefull`，`canon--uat` ➔ `canon_uat`）；
+     5. **环境名称与唯一 ID 兜底保底**：确保极端缺少域名时依然生成全局唯一的合法别名（如 `SF_xxxx`），各环境各行其道，绝不串号；
+   - **全链路凭据与 CLI 联动更新**：
+     - `sessionStore.syncToSalesforceCli` 与 `authService.loginWithSalesforceCli` 仅更新当前环境对应的专属别名，杜绝多组织互相覆盖；
+     - 磁盘凭据读取 (`getAuthFromDiskByAlias` 与 `getAuthFileFromDisk`) 严格按照当前环境的实例域名与别名匹配，杜绝跨组织误取其他环境的文件；
+     - AI 智能体上下文动态注入当前环境真实别名 (`${sfAlias}`)，消除模型幻觉；
+   - **连接器中心交互体验升级**：
+     - 在【新建/编辑连接器】弹窗中新增「Salesforce CLI 组织专属别名 (sf alias)」配置项；
+     - 在【连接器详情页】参数面板中直观呈现当前环境专属别名及「环境隔离」徽章。
+
+---
+
 ### 🚀 版本更新说明 (v1.8.5)
 
 1. **Salesforce 生产环境写保护与沙盒/测试环境自由操作分级体系**：
