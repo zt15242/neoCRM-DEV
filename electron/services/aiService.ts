@@ -1480,7 +1480,7 @@ ${mcpInfoText}
               conversationHistory.push({
                 role: 'tool',
                 tool_call_id: tc.id || `call_0`,
-                content: this.formatSafeToolResultString(tc.resultData || tc.resultSummary || '{}', 20000),
+                content: this.formatSafeToolResultString(tc.resultData || tc.resultSummary || '{}', 3500),
               });
             }
 
@@ -1547,24 +1547,69 @@ ${mcpInfoText}
 
         const endpoint = `${cleanBaseUrl}/chat/completions`;
 
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
-          },
-          body: JSON.stringify(requestBody),
-          signal: controller.signal,
-        });
+        let response: Response | null = null;
+        let lastErrorMsg = '';
+        const maxRetries = 2;
 
-        if (!response.ok) {
-          const errText = await response.text();
-          let parsedError = errText;
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          if (controller.signal.aborted) break;
+
+          const isRetry = attempt > 0;
+          if (isRetry) {
+            console.warn(`[AI Agent Loop] 上游网关超时或抖动 (HTTP 524/504)，正在自动深度精简上下文并重试 (第 ${attempt}/${maxRetries} 次)...`);
+            sendEvent({
+              requestId,
+              sessionId,
+              messageId,
+              type: 'content_delta',
+              delta: `\n> ⚡ *[网关提示]* 检测到上游连接超时 (HTTP 524)，已自动压缩历史上下文并重试连接 (第 ${attempt}/${maxRetries} 次)...\n\n`,
+            });
+            await new Promise((r) => setTimeout(r, attempt === 1 ? 2000 : 4000));
+            if (controller.signal.aborted) break;
+          }
+
+          // 动态修剪上下文 (重试时启用激进深度压缩，大幅缩减 prefill 耗时，防止踩到 Cloudflare 100 秒超时硬限制)
+          requestBody.messages = this.pruneConversationHistory(conversationHistory, isRetry);
+
           try {
-            const parsed = JSON.parse(errText);
-            parsedError = parsed.error?.message || parsed.message || errText;
-          } catch {}
-          throw new Error(`模型接口响应异常 (HTTP ${response.status}): ${parsedError}`);
+            const resp = await fetch(endpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
+              },
+              body: JSON.stringify(requestBody),
+              signal: controller.signal,
+            });
+
+            if (resp.ok) {
+              response = resp;
+              break;
+            }
+
+            const errText = await resp.text();
+            lastErrorMsg = this.cleanHttpError(resp.status, errText);
+
+            // 若为 524, 504, 502, 503 等网关超时/抖动错误，继续自动重试
+            const isGatewayError = resp.status === 524 || resp.status === 504 || resp.status === 502 || resp.status === 503 || resp.status === 429;
+            if (isGatewayError && attempt < maxRetries) {
+              continue;
+            }
+
+            throw new Error(`模型接口响应异常 (HTTP ${resp.status}): ${lastErrorMsg}`);
+          } catch (fetchErr: any) {
+            if (fetchErr.name === 'AbortError' || controller.signal.aborted) {
+              throw fetchErr;
+            }
+            lastErrorMsg = fetchErr.message;
+            if (attempt >= maxRetries) {
+              throw fetchErr;
+            }
+          }
+        }
+
+        if (!response || !response.ok) {
+          throw new Error(lastErrorMsg || '模型接口未能建立有效连接');
         }
 
         if (!response.body) {
@@ -1866,38 +1911,53 @@ ${mcpInfoText}
               `【本地工具调用 #${idx + 1}: ${t.name}(${JSON.stringify(t.args)}) -> ${t.summary}】
 返回真实数据:
 ---
-${JSON.stringify(t.data, null, 2)}
+${this.formatSafeToolResultString(t.data, 2000)}
 ---`
           )
           .join('\n\n');
+
+        const safeToolDataContext = toolDataContext.length > 25000
+          ? toolDataContext.slice(0, 25000) + '\n... [前序工具数据已精简截断]'
+          : toolDataContext;
 
         cleanSynthesisHistory.push({
           role: 'user',
           content: `${lastUserMsg?.content || '请分析以上数据'}
 
 ---
-系统已为您自动调取到当前销售易租户的以下真实元数据/业务数据：
+系统已为您自动调取到当前租户的以下真实元数据/业务数据：
 
-${toolDataContext}
+${safeToolDataContext}
 
 请直接基于以上真实数据，用专业、清晰的中文 Markdown 格式（包含合理的分类、结构化表格与深入解读）给出完整详尽的最终回答：`,
         });
 
-        const synthesisResponse = await fetch(`${cleanBaseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
-          },
-          body: JSON.stringify({
-            model: modelId,
-            messages: cleanSynthesisHistory,
-            temperature: config.settings.temperature ?? 0.3,
-            max_tokens: config.settings.maxTokens || 4096,
-            stream: true,
-          }),
-          signal: controller.signal,
-        });
+        let synthesisResponse: Response | null = null;
+        for (let attempt = 0; attempt <= 1; attempt++) {
+          if (controller.signal.aborted) break;
+          try {
+            const resp = await fetch(`${cleanBaseUrl}/chat/completions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
+              },
+              body: JSON.stringify({
+                model: modelId,
+                messages: cleanSynthesisHistory,
+                temperature: config.settings.temperature ?? 0.3,
+                max_tokens: config.settings.maxTokens || 4096,
+                stream: true,
+              }),
+              signal: controller.signal,
+            });
+            if (resp.ok) {
+              synthesisResponse = resp;
+              break;
+            }
+          } catch {}
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+        }
 
         if (synthesisResponse.ok && synthesisResponse.body) {
           const reader = synthesisResponse.body.getReader();
@@ -2171,11 +2231,7 @@ ${toolDataContext}
 
       if (!response.ok) {
         const errText = await response.text();
-        let parsedError = errText;
-        try {
-          const parsed = JSON.parse(errText);
-          parsedError = parsed.error?.message || parsed[0]?.error?.message || errText;
-        } catch {}
+        const parsedError = this.cleanHttpError(response.status, errText);
         throw new Error(`Gemini 接口响应异常 (HTTP ${response.status}): ${parsedError}`);
       }
 
@@ -2424,9 +2480,99 @@ ${toolDataContext}
    * 执行销售易本地 Harness 工具
    */
   /**
+   * 结构化清洗 HTTP 报错信息：
+   * 彻底阻止 Cloudflare / Nginx 网关反代的整页原始 HTML (如 524, 502, 504) 倾倒污染用户界面
+   */
+  private cleanHttpError(status: number, errText: string): string {
+    if (!errText) return `HTTP ${status}`;
+    try {
+      const parsed = JSON.parse(errText);
+      const msg = parsed.error?.message || parsed.message;
+      if (msg) return msg;
+    } catch {}
+
+    // 检测是否为 HTML 网页报错
+    if (errText.includes('<!DOCTYPE html>') || errText.includes('<html') || errText.includes('<head>')) {
+      if (status === 524 || errText.includes('524: A timeout occurred') || errText.includes('Error code 524')) {
+        return '上游中转网关响应超时 (Cloudflare 524: A timeout occurred)。原因：大任务单轮上下文过长或上游大模型生成思考时间超过网关 100 秒超时限制。系统已自动为您精简历史工具上下文并恢复连接。';
+      }
+      if (status === 504 || errText.includes('504 Gateway Time-out')) {
+        return '上游网关超时 (HTTP 504 Gateway Timeout)，上游推理集群未在规定时间内返回数据。';
+      }
+      if (status === 502 || errText.includes('502 Bad Gateway')) {
+        return '上游网关错误 (HTTP 502 Bad Gateway)，中转服务器未能连通大模型后端。';
+      }
+      if (status === 503 || errText.includes('503 Service Temporarily Unavailable')) {
+        return '上游模型服务繁忙或正在维护 (HTTP 503 Service Unavailable)。';
+      }
+      if (status === 429) {
+        return '请求频次超限 (HTTP 429 Too Many Requests)，请稍后重试。';
+      }
+      const titleMatch = errText.match(/<title>([^<]+)<\/title>/i);
+      if (titleMatch && titleMatch[1]) {
+        return `${titleMatch[1].trim()} (HTTP ${status})`;
+      }
+      return `网关代理返回 HTML 错误页面 (HTTP ${status})`;
+    }
+
+    return errText.slice(0, 300);
+  }
+
+  /**
+   * 动态滑动窗口与工具上下文修剪：
+   * 在多轮大任务执行中，保留最近 2 项工具调用的完整细节，
+   * 对更早的前序工具输出进行轻量压缩，彻底杜绝单次请求膨胀至 100k+ Token 导致 Cloudflare HTTP 524 超时！
+   */
+  private pruneConversationHistory(messages: any[], aggressive = false): any[] {
+    if (!Array.isArray(messages) || messages.length === 0) return [];
+
+    let totalChars = 0;
+    for (const m of messages) {
+      if (typeof m.content === 'string') totalChars += m.content.length;
+    }
+
+    // 若总字符数在 35,000 以内 (约 8k-10k tokens)，且非 524 触发的重试，无需裁剪
+    if (totalChars < 35000 && !aggressive) {
+      return messages;
+    }
+
+    // 统计所有 tool 消息的索引
+    const toolIndices: number[] = [];
+    messages.forEach((m, idx) => {
+      if (m.role === 'tool') toolIndices.push(idx);
+    });
+
+    // 最近的 2 项工具调用为当前正在推理的活跃上下文
+    const hotCount = aggressive ? 1 : 2;
+    const hotCutoff = toolIndices.length > hotCount ? toolIndices[toolIndices.length - hotCount] : 0;
+
+    const coldCap = aggressive ? 600 : 1200;
+    const hotCap = aggressive ? 4000 : 10000;
+
+    return messages.map((m, idx) => {
+      if (m.role !== 'tool' || typeof m.content !== 'string') {
+        return m;
+      }
+
+      const isHot = idx >= hotCutoff;
+      const cap = isHot ? hotCap : coldCap;
+
+      if (m.content.length <= cap) {
+        return m;
+      }
+
+      const truncated = m.content.slice(0, cap) + '\n... [前序输出已自动精简，保障通信时效]';
+      return {
+        ...m,
+        content: truncated,
+      };
+    });
+  }
+
+  /**
    * 上下文 Token 安全守护：防御性截断工具调用返回的大文本/日志，彻底避免 1M Token 上下文溢出报错
    */
-  private formatSafeToolResultString(toolResult: any, maxChars = 25000): string {
+  private formatSafeToolResultString(toolResult: any, maxChars = 12000): string {
     if (!toolResult) return '{}';
     try {
       let str = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
@@ -2434,18 +2580,18 @@ ${toolDataContext}
 
       if (typeof toolResult === 'object' && toolResult !== null) {
         const copy = { ...toolResult };
-        if (typeof copy.stdout === 'string' && copy.stdout.length > 15000) {
-          copy.stdout = copy.stdout.slice(-15000) + '... [已截断前序日志]';
+        if (typeof copy.stdout === 'string' && copy.stdout.length > 8000) {
+          copy.stdout = copy.stdout.slice(-8000) + '... [已截断前序日志]';
         }
-        if (typeof copy.stderr === 'string' && copy.stderr.length > 5000) {
-          copy.stderr = copy.stderr.slice(-5000);
+        if (typeof copy.stderr === 'string' && copy.stderr.length > 3000) {
+          copy.stderr = copy.stderr.slice(-3000);
         }
         const reStr = JSON.stringify(copy);
         if (reStr.length <= maxChars) return reStr;
-        return reStr.slice(0, maxChars - 100) + '... [结果已安全截断]"}';
+        return reStr.slice(0, maxChars - 80) + '... [结果已安全截断]"}';
       }
 
-      return str.slice(0, maxChars - 100) + '... [输出过大已截断]';
+      return str.slice(0, maxChars - 80) + '... [输出过大已截断]';
     } catch {
       return String(toolResult).slice(0, maxChars);
     }
