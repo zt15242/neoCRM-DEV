@@ -17,6 +17,7 @@ import {
 } from '../../../shared/jarvisTypes';
 import { JarvisReactor } from './JarvisReactor';
 import { JarvisVolumeControl } from './JarvisVolumeControl';
+import { JarvisMicButton } from './JarvisMicButton';
 import { getJarvisAudioSettings } from './jarvisAudioHelper';
 
 interface JarvisDesktopPetProps {
@@ -41,11 +42,8 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
   const [state, setState] = useState<JarvisState>('idle');
   const [quickInput, setQuickInput] = useState('');
   const [fleetOverview, setFleetOverview] = useState<JarvisFleetOverview | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
   const [latestReply, setLatestReply] = useState<string>('');
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // 加载全连接器舰队状态
@@ -62,7 +60,15 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
     };
     fetchFleet();
     const interval = setInterval(fetchFleet, 10000);
-    return () => clearInterval(interval);
+
+    const unsubState = window.neoApi?.onJarvisStateChanged?.((st) => {
+      setState(st as any);
+    });
+
+    return () => {
+      clearInterval(interval);
+      unsubState?.();
+    };
   }, []);
 
   // 鼠标拖拽处理
@@ -95,57 +101,6 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [isDragging, dragStart]);
-
-  // 语音输入 ASR 控制
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64Audio = (reader.result as string).split(',')[1];
-          if (base64Audio && window.neoApi?.jarvisTranscribeAudio) {
-            setState('thinking');
-            const res = await window.neoApi.jarvisTranscribeAudio(base64Audio, 'audio/webm');
-            if (res.text) {
-              setQuickInput(res.text);
-              handleSend(res.text);
-            } else {
-              setState('idle');
-            }
-          }
-        };
-        reader.readAsDataURL(blob);
-      };
-
-      recorder.start();
-      setIsRecording(true);
-      setState('listening');
-    } catch (err) {
-      console.error('麦克风录入失败:', err);
-      setIsRecording(false);
-      setState('idle');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-    }
-  };
 
   const handleSend = async (textToSend?: string) => {
     const text = (textToSend || quickInput).trim();
@@ -320,21 +275,15 @@ export const JarvisDesktopPet: React.FC<JarvisDesktopPetProps> = ({
 
           {/* 快捷语音与输入框 */}
           <div className="flex items-center space-x-2 pt-2 border-t border-cyan-500/20">
-            <button
-              type="button"
-              onMouseDown={startRecording}
-              onMouseUp={stopRecording}
-              onTouchStart={startRecording}
-              onTouchEnd={stopRecording}
-              title="按住对讲 (硅基流动 SenseVoice 极速识别)"
-              className={`p-2 rounded-lg border transition-all ${
-                isRecording
-                  ? 'border-emerald-400 bg-emerald-950 text-emerald-300 animate-pulse'
-                  : 'border-cyan-500/30 bg-slate-900/60 text-cyan-400 hover:border-cyan-400 hover:bg-cyan-950/40'
-              }`}
-            >
-              {isRecording ? <Radio className="w-4 h-4 text-emerald-400 animate-spin" /> : <Mic className="w-4 h-4" />}
-            </button>
+            <JarvisMicButton
+              className="p-2 rounded-lg border"
+              variant="compact"
+              onTranscribed={(text) => {
+                setQuickInput(text);
+                handleSend(text);
+              }}
+              onStateChange={(st) => setState(st)}
+            />
 
             <input
               type="text"

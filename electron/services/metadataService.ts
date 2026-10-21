@@ -224,100 +224,99 @@ export class MetadataService {
     entityApiKey: string,
     payload: CreateFieldPayload
   ): Promise<{ success: boolean; data?: any; error?: string }> {
-    if (env.productType === 'salesforce') {
-      return this.salesforceService.createCustomField(env, tokenData, entityApiKey, payload);
-    }
-    if (env.productType === 'fxiaoke') {
-      return this.fxiaokeService.createCustomField(env, tokenData, entityApiKey, payload);
-    }
-    const baseUrl = this.getBaseUrl(env, tokenData);
-    const headers = this.getHeaders(tokenData);
-
-    // 关键：销售易平台创建自定义字段时，接口同样会自动在字段 apiKey 后面拼接 __c！
-    // 传入给销售易接口的字段 apiKey 必须剥离已有的 __c，避免字段被双重拼接
-    const cleanFieldApiKey = payload.apiKey.trim().replace(/__c$/i, '');
-
-    const body: Record<string, any> = {
-      apiKey: cleanFieldApiKey,
-      label: payload.label.trim(),
-      itemType: Number(payload.itemType),
-      description: payload.description || payload.label,
-    };
-
-    if ([1, 2, 40].includes(payload.itemType)) {
-      body.maxLength = payload.itemType === 2
-        ? Math.min(Number(payload.maxLength) || 1000, 2000)
-        : Math.min(Number(payload.maxLength) || 200, 500);
-    }
-    if ([6, 33].includes(payload.itemType)) {
-      body.maxLength = Math.min(Number(payload.maxLength) || 16, 18);
-      body.decimal = payload.decimal !== undefined ? Number(payload.decimal) : 2;
-      if (payload.itemType === 6) {
-        // 关键修复：当未指定 currency 或显式为 true 时，默认传入 currency: true 注册为真正货币字段
-        // 仅当显式指定 currency: false 时才注册为普通实数/浮点字段
-        body.currency = payload.currency !== false;
+    return this.withAutoRetry(env, tokenData, async (validToken) => {
+      if (env.productType === 'salesforce') {
+        return this.salesforceService.createCustomField(env, validToken, entityApiKey, payload);
       }
-    }
-    if ([3, 4].includes(payload.itemType)) {
-      if (Array.isArray(payload.pickOption) && payload.pickOption.length > 0) {
-        body.pickOption = payload.pickOption.map((opt: any, idx: number) => {
-          if (typeof opt === 'string') {
-            return { optionLabel: opt, optionCode: idx + 1 };
-          }
-          return {
-            optionLabel: String(opt.optionLabel || opt.label || opt.name || `选项${idx + 1}`),
-            optionCode: opt.optionCode !== undefined ? Number(opt.optionCode) : idx + 1,
-          };
-        });
+      if (env.productType === 'fxiaoke') {
+        return this.fxiaokeService.createCustomField(env, validToken, entityApiKey, payload);
+      }
+      const baseUrl = this.getBaseUrl(env, validToken);
+      const headers = this.getHeaders(validToken);
+
+      const cleanFieldApiKey = payload.apiKey.trim().replace(/__c$/i, '');
+
+      const body: Record<string, any> = {
+        apiKey: cleanFieldApiKey,
+        label: payload.label.trim(),
+        itemType: Number(payload.itemType),
+        description: payload.description || payload.label,
+      };
+
+      if ([1, 2, 40].includes(payload.itemType)) {
+        body.maxLength = payload.itemType === 2
+          ? Math.min(Number(payload.maxLength) || 1000, 2000)
+          : Math.min(Number(payload.maxLength) || 200, 500);
+      }
+      if ([6, 33].includes(payload.itemType)) {
+        body.maxLength = Math.min(Number(payload.maxLength) || 16, 18);
+        body.decimal = payload.decimal !== undefined ? Number(payload.decimal) : 2;
+        if (payload.itemType === 6) {
+          body.currency = payload.currency !== false;
+        }
+      }
+      if ([3, 4].includes(payload.itemType)) {
+        if (Array.isArray(payload.pickOption) && payload.pickOption.length > 0) {
+          body.pickOption = payload.pickOption.map((opt: any, idx: number) => {
+            if (typeof opt === 'string') {
+              return { optionLabel: opt, optionCode: idx + 1 };
+            }
+            return {
+              optionLabel: String(opt.optionLabel || opt.label || opt.name || `选项${idx + 1}`),
+              optionCode: opt.optionCode !== undefined ? Number(opt.optionCode) : idx + 1,
+            };
+          });
+        } else {
+          body.pickOption = [
+            { optionLabel: '选项一', optionCode: 1 },
+            { optionLabel: '选项二', optionCode: 2 },
+          ];
+        }
+      }
+      if (payload.itemType === 29) {
+        body.maxLength = payload.maxLength || 1;
+      }
+      if (payload.itemType === 10) {
+        body.referObjectApiKey = payload.referObjectApiKey?.trim() || 'account';
+        body.cascadeDelete = payload.cascadeDelete !== undefined ? Number(payload.cascadeDelete) : 1;
+        body.linkLabel = payload.linkLabel?.trim() || `${payload.label.trim()}列表`;
+      }
+
+      const targetEntitiesToTry = [entityApiKey.trim()];
+      if (!entityApiKey.endsWith('__c')) {
+        targetEntitiesToTry.push(`${entityApiKey.trim()}__c`);
       } else {
-        body.pickOption = [
-          { optionLabel: '选项一', optionCode: 1 },
-          { optionLabel: '选项二', optionCode: 2 },
-        ];
+        targetEntitiesToTry.push(`${entityApiKey.trim()}__c`);
+        targetEntitiesToTry.push(entityApiKey.trim().replace(/__c$/, ''));
       }
-    }
-    if (payload.itemType === 29) {
-      body.maxLength = payload.maxLength || 1;
-    }
-    if (payload.itemType === 10) {
-      body.referObjectApiKey = payload.referObjectApiKey?.trim() || 'account';
-      body.cascadeDelete = payload.cascadeDelete !== undefined ? Number(payload.cascadeDelete) : 1;
-      body.linkLabel = payload.linkLabel?.trim() || `${payload.label.trim()}列表`;
-    }
 
-    // 智能定位实体 API Key（支持自动兼容 __c 或历史误创的 __c__c）
-    const targetEntitiesToTry = [entityApiKey.trim()];
-    if (!entityApiKey.endsWith('__c')) {
-      targetEntitiesToTry.push(`${entityApiKey.trim()}__c`);
-    } else {
-      targetEntitiesToTry.push(`${entityApiKey.trim()}__c`); // 兼容可能误创为 __c__c 的历史对象
-      targetEntitiesToTry.push(entityApiKey.trim().replace(/__c$/, ''));
-    }
+      let lastError = '创建字段失败';
 
-    let lastError = '创建字段失败';
-
-    for (const tryKey of targetEntitiesToTry) {
-      const tryUrl = `${baseUrl}/rest/metadata/v3.1/xobjects/${tryKey}/items`;
-      try {
-        const res = await axios.post(tryUrl, body, { headers, timeout: 20000 });
-        if (res.data?.code === 200 || res.data?.code === '200') {
-          return { success: true, data: res.data?.data };
+      for (const tryKey of targetEntitiesToTry) {
+        const tryUrl = `${baseUrl}/rest/metadata/v3.1/xobjects/${tryKey}/items`;
+        try {
+          const res = await axios.post(tryUrl, body, { headers, timeout: 20000 });
+          if (res.data?.code === 200 || res.data?.code === '200') {
+            return { success: true, data: res.data?.data };
+          }
+          const errMsg = res.data?.msg || res.data?.message || JSON.stringify(res.data);
+          if (errMsg.includes('已存在') || errMsg.includes('REPEAT')) {
+            return { success: true, data: res.data?.data };
+          }
+          lastError = errMsg;
+        } catch (e: any) {
+          const is401 = e.response?.status === 401;
+          if (is401) throw e;
+          const errMsg = e.response?.data?.msg || e.response?.data?.message || e.message;
+          if (errMsg.includes('已存在') || errMsg.includes('REPEAT')) {
+            return { success: true };
+          }
+          lastError = errMsg;
         }
-        const errMsg = res.data?.msg || res.data?.message || JSON.stringify(res.data);
-        if (errMsg.includes('已存在') || errMsg.includes('REPEAT')) {
-          return { success: true, data: res.data?.data }; // 字段已存在视为成功
-        }
-        lastError = errMsg;
-      } catch (e: any) {
-        const errMsg = e.response?.data?.msg || e.response?.data?.message || e.message;
-        if (errMsg.includes('已存在') || errMsg.includes('REPEAT')) {
-          return { success: true };
-        }
-        lastError = errMsg;
       }
-    }
 
-    return { success: false, error: lastError };
+      return { success: false, error: lastError };
+    });
   }
 
   /**

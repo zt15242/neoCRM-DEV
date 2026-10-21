@@ -169,11 +169,37 @@ export const neoApi = {
       // 贾维斯 (J.A.R.V.I.S.) 全局总领与语音中枢
   jarvisSynthesizeSpeech: (text: string, options?: any) => ipcRenderer.invoke("jarvis:synthesizeSpeech", text, options),
   jarvisTranscribeAudio: (audioBase64: string, mimeType?: string) => ipcRenderer.invoke("jarvis:transcribeAudio", audioBase64, mimeType),
+  jarvisSaveAsrKey: (apiKey: string, providerId?: string) => ipcRenderer.invoke("jarvis:saveAsrKey", apiKey, providerId),
   jarvisGetFleetOverview: () => ipcRenderer.invoke("jarvis:getFleetOverview"),
   jarvisGetSystemPrompt: (userProfile?: any) => ipcRenderer.invoke("jarvis:getSystemPrompt", userProfile),
   jarvisGetSupportedVoices: () => ipcRenderer.invoke("jarvis:getSupportedVoices"),
-  jarvisChat: (params: { message: string; history?: any[]; userProfile?: any }) =>
+  jarvisChat: (params: { message: string; messageId?: string; history?: any[]; userProfile?: any; targetConnectorId?: string }) =>
     ipcRenderer.invoke("jarvis:chat", params),
+  jarvisGetSessionData: () => ipcRenderer.invoke("jarvis:getSessionData"),
+  jarvisSaveMessage: (message: any) => ipcRenderer.invoke("jarvis:saveMessage", message),
+  jarvisClearMessages: (welcomeMessage?: any) => ipcRenderer.invoke("jarvis:clearMessages", welcomeMessage),
+  jarvisAddMemory: (content: string, category?: string) => ipcRenderer.invoke("jarvis:addMemory", content, category),
+  jarvisDeleteMemory: (memoryId: string) => ipcRenderer.invoke("jarvis:deleteMemory", memoryId),
+  onJarvisMessageAppended: (callback: (message: any) => void) => {
+    const handler = (_: any, msg: any) => callback(msg);
+    ipcRenderer.on("jarvis:message_appended", handler);
+    return () => ipcRenderer.removeListener("jarvis:message_appended", handler);
+  },
+  onJarvisMessagesCleared: (callback: (welcomeMessage?: any) => void) => {
+    const handler = (_: any, welcome: any) => callback(welcome);
+    ipcRenderer.on("jarvis:messages_cleared", handler);
+    return () => ipcRenderer.removeListener("jarvis:messages_cleared", handler);
+  },
+  onJarvisStateChanged: (callback: (state: string) => void) => {
+    const handler = (_: any, st: string) => callback(st);
+    ipcRenderer.on("jarvis:state_changed", handler);
+    return () => ipcRenderer.removeListener("jarvis:state_changed", handler);
+  },
+  onJarvisToolProgress: (callback: (progress: any) => void) => {
+    const handler = (_: any, prog: any) => callback(prog);
+    ipcRenderer.on("jarvis:tool_progress", handler);
+    return () => ipcRenderer.removeListener("jarvis:tool_progress", handler);
+  },
   jarvisToggleDesktopPet: (visible: boolean) => ipcRenderer.invoke("jarvis:toggleDesktopPet", visible),
   jarvisSetPetWindowExpanded: (expanded: boolean) => ipcRenderer.invoke("jarvis:setPetWindowExpanded", expanded),
   jarvisOpenMainWindow: () => ipcRenderer.invoke("jarvis:openMainWindow"),

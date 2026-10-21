@@ -46,8 +46,10 @@ export const JarvisReactor: React.FC<JarvisReactorProps> = ({
         primaryColor = '56, 239, 125'; // Emerald green/cyan
         angle += 0.05;
       } else if (state === 'thinking') {
-        primaryColor = '138, 35, 135'; // Violet/pulse
-        angle += 0.08;
+        primaryColor = '168, 85, 247'; // Electric purple / neon violet
+        coreColor = '250, 232, 255'; // Radiant hyper core
+        angle += 0.09;
+        pulse += 0.06;
       } else if (state === 'speaking') {
         primaryColor = '0, 198, 255'; // Intense laser blue
         angle += isAudioActive ? 0.06 : 0.03;
@@ -185,7 +187,13 @@ export const JarvisReactor: React.FC<JarvisReactorProps> = ({
         ref={canvasRef}
         width={dimension}
         height={dimension}
-        className="w-full h-full drop-shadow-[0_0_15px_rgba(0,242,254,0.35)]"
+        className={`w-full h-full ${
+          state === "thinking"
+            ? "drop-shadow-[0_0_22px_rgba(168,85,247,0.75)] animate-pulse"
+            : state === "listening"
+            ? "drop-shadow-[0_0_20px_rgba(56,239,125,0.7)]"
+            : "drop-shadow-[0_0_15px_rgba(0,242,254,0.35)]"
+        }`}
       />
     </div>
   );

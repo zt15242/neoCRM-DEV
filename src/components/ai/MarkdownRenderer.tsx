@@ -9,13 +9,15 @@ import { ApprovalDeployPlan } from "../../../shared/types";
 
 interface MarkdownRendererProps {
   content: string;
+  theme?: 'light' | 'dark';
   onExecuteSql?: (sql: string) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
   suppressDeploymentCards?: boolean;
 }
 
-const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
+const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, theme = 'light', onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
+  const isDark = theme === 'dark';
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = async (copyText: string, id: string) => {
@@ -50,7 +52,9 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  if (!content) return null;
+  // 过滤专门供 TTS 语音播报的内部指令标签，屏幕端无感呈现精美 Markdown
+  const displayContent = (content || "").replace(/<speech>[\s\S]*?<\/speech>/gi, "").trim();
+  if (!displayContent) return null;
 
   // 将文本分割为代码块与普通文本块
   const parts: Array<{ type: 'text' | 'code'; content: string; lang?: string }> = [];
@@ -58,11 +62,11 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
   let lastIndex = 0;
   let match;
 
-  while ((match = codeBlockRegex.exec(content)) !== null) {
+  while ((match = codeBlockRegex.exec(displayContent)) !== null) {
     if (match.index > lastIndex) {
       parts.push({
         type: 'text',
-        content: content.slice(lastIndex, match.index),
+        content: displayContent.slice(lastIndex, match.index),
       });
     }
     parts.push({
@@ -73,10 +77,10 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
     lastIndex = match.index + match[0].length;
   }
 
-  if (lastIndex < content.length) {
+  if (lastIndex < displayContent.length) {
     parts.push({
       type: 'text',
-      content: content.slice(lastIndex),
+      content: displayContent.slice(lastIndex),
     });
   }
 
@@ -98,7 +102,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
   }
 
   return (
-    <div className="space-y-3 text-slate-800 text-[13px] leading-relaxed break-words select-text">
+    <div className={`space-y-3 ${isDark ? 'text-cyan-100 text-xs font-sans' : 'text-slate-800 text-[13px]'} leading-relaxed break-words select-text`}>
       {parts.map((part, index) => {
         if (part.type === 'code') {
           const codeId = `code_${index}`;
@@ -200,10 +204,10 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
           return (
             <div
               key={index}
-              className="my-2.5 rounded-xl overflow-hidden border border-slate-200 bg-slate-900 text-slate-100 shadow-xs"
+              className={`my-2.5 rounded-xl overflow-hidden border ${isDark ? 'border-cyan-500/30 bg-[#040814] text-cyan-100 shadow-[0_0_15px_rgba(0,0,0,0.6)]' : 'border-slate-200 bg-slate-900 text-slate-100 shadow-xs'}`}
             >
-              <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-800/90 border-b border-slate-700/80 text-[11px] font-mono text-slate-400">
-                <span className="uppercase font-semibold tracking-wider text-slate-300">
+              <div className={`flex items-center justify-between px-3.5 py-1.5 border-b text-[11px] font-mono ${isDark ? 'bg-cyan-950/70 border-cyan-500/25 text-cyan-400' : 'bg-slate-800/90 border-slate-700/80 text-slate-400'}`}>
+                <span className={`uppercase font-semibold tracking-wider ${isDark ? 'text-cyan-300' : 'text-slate-300'}`}>
                   {part.lang || 'code'}
                 </span>
                 <div className="flex items-center space-x-2">
@@ -220,7 +224,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
                   )}
                   <button
                     onClick={() => handleCopy(part.content, codeId)}
-                    className="flex items-center space-x-1 px-2 py-0.5 rounded-md hover:bg-slate-700 text-slate-300 transition-colors"
+                    className={`flex items-center space-x-1 px-2 py-0.5 rounded-md transition-colors cursor-pointer ${isDark ? 'hover:bg-cyan-900/60 text-cyan-300' : 'hover:bg-slate-700 text-slate-300'}`}
                   >
                     {isCopied ? (
                       <>
@@ -236,14 +240,14 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
                   </button>
                 </div>
               </div>
-              <pre className="p-3.5 overflow-x-auto text-[12px] font-mono leading-relaxed selection:bg-sky-700 selection:text-white">
+              <pre className={`p-3.5 overflow-x-auto text-[12px] font-mono leading-relaxed select-text ${isDark ? 'selection:bg-cyan-700 selection:text-white' : 'selection:bg-sky-700 selection:text-white'}`}>
                 <code>{part.content}</code>
               </pre>
             </div>
           );
         }
 
-        return <TextBlock key={index} text={part.content} />;
+        return <TextBlock key={index} text={part.content} isDark={isDark} />;
       })}
     </div>
   );
@@ -252,7 +256,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
 /**
  * 文本行及块级语法解析器
  */
-const TextBlock: React.FC<{ text: string }> = ({ text }) => {
+const TextBlock: React.FC<{ text: string; isDark?: boolean }> = ({ text, isDark = false }) => {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let inTable = false;
@@ -345,7 +349,7 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
 
     // 3. 水平分割线 (---, ***, ___)
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
-      elements.push(<hr key={i} className="my-3 border-t border-slate-200" />);
+      elements.push(<hr key={i} className={`my-3 border-t ${isDark ? 'border-cyan-500/30' : 'border-slate-200'}`} />);
       continue;
     }
 
@@ -365,35 +369,35 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
 
       if (level === 1) {
         elements.push(
-          <h2 key={i} className="text-base font-bold text-slate-900 mt-4 mb-2 pb-1 border-b border-slate-100">
-            {parseInline(titleText)}
+          <h2 key={i} className={`text-base font-bold ${isDark ? 'text-cyan-200 border-cyan-500/30' : 'text-slate-900 border-slate-100'} mt-4 mb-2 pb-1 border-b`}>
+            {parseInline(titleText, isDark)}
           </h2>
         );
       } else if (level === 2) {
         elements.push(
-          <h3 key={i} className="text-[15px] font-bold text-slate-900 mt-3.5 mb-1.5 pb-0.5 border-b border-slate-100">
-            {parseInline(titleText)}
+          <h3 key={i} className={`text-[15px] font-bold ${isDark ? 'text-cyan-200 border-cyan-500/30' : 'text-slate-900 border-slate-100'} mt-3.5 mb-1.5 pb-0.5 border-b`}>
+            {parseInline(titleText, isDark)}
           </h3>
         );
       } else if (level === 3) {
         elements.push(
-          <h4 key={i} className="text-sm font-semibold text-slate-900 mt-3 mb-1 flex items-center space-x-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0" />
-            <span>{parseInline(titleText)}</span>
+          <h4 key={i} className={`text-sm font-semibold ${isDark ? 'text-cyan-200' : 'text-slate-900'} mt-3 mb-1 flex items-center space-x-1.5`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isDark ? 'bg-cyan-400 shadow-[0_0_8px_#00f2fe]' : 'bg-sky-500'} shrink-0`} />
+            <span>{parseInline(titleText, isDark)}</span>
           </h4>
         );
       } else if (level === 4) {
         elements.push(
-          <h5 key={i} className="text-[13px] font-semibold text-slate-800 mt-2.5 mb-1 flex items-center space-x-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
-            <span>{parseInline(titleText)}</span>
+          <h5 key={i} className={`text-[13px] font-semibold ${isDark ? 'text-cyan-300' : 'text-slate-800'} mt-2.5 mb-1 flex items-center space-x-1.5`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isDark ? 'bg-cyan-500' : 'bg-indigo-500'} shrink-0`} />
+            <span>{parseInline(titleText, isDark)}</span>
           </h5>
         );
       } else {
         elements.push(
-          <h6 key={i} className="text-xs font-semibold text-slate-700 mt-2 mb-1 flex items-center space-x-1">
-            <span className="w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-            <span>{parseInline(titleText)}</span>
+          <h6 key={i} className={`text-xs font-semibold ${isDark ? 'text-cyan-400' : 'text-slate-700'} mt-2 mb-1 flex items-center space-x-1`}>
+            <span className={`w-1 h-1 rounded-full ${isDark ? 'bg-cyan-500' : 'bg-slate-400'} shrink-0`} />
+            <span>{parseInline(titleText, isDark)}</span>
           </h6>
         );
       }
@@ -406,9 +410,9 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
       elements.push(
         <blockquote
           key={i}
-          className="pl-3 py-1 my-1.5 border-l-3 border-sky-400 bg-sky-50/60 rounded-r-md text-slate-700 text-xs italic"
+          className={`pl-3 py-1 my-1.5 border-l-3 ${isDark ? 'border-cyan-400 bg-cyan-950/40 text-cyan-200' : 'border-sky-400 bg-sky-50/60 text-slate-700'} rounded-r-md text-xs italic`}
         >
-          {parseInline(quoteText)}
+          {parseInline(quoteText, isDark)}
         </blockquote>
       );
       continue;
@@ -426,8 +430,8 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
             className="flex items-start space-x-2 py-0.5"
             style={{ paddingLeft: `${indent * 8 + 4}px` }}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-2 shrink-0" />
-            <div className="flex-1">{parseInline(itemText)}</div>
+            <span className={`w-1.5 h-1.5 rounded-full ${isDark ? 'bg-cyan-400 shadow-[0_0_6px_#00f2fe]' : 'bg-slate-400'} mt-2 shrink-0`} />
+            <div className="flex-1">{parseInline(itemText, isDark)}</div>
           </div>
         );
         continue;
@@ -447,10 +451,10 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
             className="flex items-start space-x-2 py-0.5"
             style={{ paddingLeft: `${indent * 8 + 4}px` }}
           >
-            <span className="text-[11px] font-bold text-sky-600 bg-sky-50 px-1.5 rounded shrink-0 font-mono mt-0.5">
+            <span className={`text-[11px] font-bold ${isDark ? 'text-cyan-300 bg-cyan-950/80 border border-cyan-500/30' : 'text-sky-600 bg-sky-50'} px-1.5 rounded shrink-0 font-mono mt-0.5`}>
               {num}.
             </span>
-            <div className="flex-1">{parseInline(itemText)}</div>
+            <div className="flex-1">{parseInline(itemText, isDark)}</div>
           </div>
         );
         continue;
@@ -460,7 +464,7 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
     // 8. 普通段落
     elements.push(
       <p key={i} className="py-0.5">
-        {parseInline(rawLine)}
+        {parseInline(rawLine, isDark)}
       </p>
     );
   }
@@ -475,7 +479,7 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
 /**
  * 行内元素解析 (支持粗体递归嵌套行内代码、斜体、超链接)
  */
-function parseInline(text: string): React.ReactNode[] {
+function parseInline(text: string, isDark: boolean = false): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let keyIndex = 0;
@@ -531,8 +535,8 @@ function parseInline(text: string): React.ReactNode[] {
     } else if (matchType === 'bold') {
       // 递归解析粗体内部的内容 (完美支持 **`accountName`** 嵌套代码胶囊)
       parts.push(
-        <strong key={`b_${keyIndex++}`} className="font-semibold text-slate-900 mx-0.5">
-          {parseInline(chosenMatch[2])}
+        <strong key={`b_${keyIndex++}`} className={`font-bold ${isDark ? 'text-cyan-200' : 'text-slate-900'} mx-0.5`}>
+          {parseInline(chosenMatch[2], isDark)}
         </strong>
       );
       remaining = chosenMatch[3] || '';
@@ -540,7 +544,7 @@ function parseInline(text: string): React.ReactNode[] {
       parts.push(
         <code
           key={`c_${keyIndex++}`}
-          className="px-1.5 py-0.5 mx-0.5 rounded bg-sky-50 text-sky-700 font-mono text-[12px] border border-sky-200/80 font-medium"
+          className={`px-1.5 py-0.5 mx-0.5 rounded font-mono text-[12px] font-medium ${isDark ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/30' : 'bg-sky-50 text-sky-700 border border-sky-200/80'}`}
         >
           {chosenMatch[2]}
         </code>
@@ -553,7 +557,7 @@ function parseInline(text: string): React.ReactNode[] {
           href={chosenMatch[3]}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sky-600 hover:text-sky-700 underline mx-0.5 font-medium inline-flex items-center space-x-0.5"
+          className={`${isDark ? 'text-cyan-400 hover:text-cyan-300' : 'text-sky-600 hover:text-sky-700'} underline mx-0.5 font-medium inline-flex items-center space-x-0.5`}
         >
           <span>{chosenMatch[2]}</span>
         </a>
@@ -566,5 +570,5 @@ function parseInline(text: string): React.ReactNode[] {
 }
 
 export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps, nextProps) => {
-  return prevProps.content === nextProps.content && prevProps.suppressDeploymentCards === nextProps.suppressDeploymentCards;
+  return prevProps.content === nextProps.content && prevProps.suppressDeploymentCards === nextProps.suppressDeploymentCards && prevProps.theme === nextProps.theme;
 });

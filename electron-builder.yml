@@ -12,6 +12,8 @@ publish:
   repo: neoCRM-DEV
 mac:
   identity: null
+  extendInfo:
+    NSMicrophoneUsageDescription: "J.A.R.V.I.S. 贾维斯总领管家需要访问您的麦克风以进行语音指令与实时对讲"
   gatekeeperAssess: false
   hardenedRuntime: false
   target:

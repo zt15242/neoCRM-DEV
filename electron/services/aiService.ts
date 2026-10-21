@@ -234,6 +234,10 @@ export class AiService {
           if (!found.models || found.models.length === 0) {
             found.models = builtin.models;
           }
+          if (builtin.id === "siliconflow" && (!found.apiKey || !found.apiKey.trim())) {
+            found.apiKey = builtin.apiKey;
+            found.enabled = true;
+          }
           mergedProviders.push(found);
         }
       }
@@ -2613,7 +2617,7 @@ ${safeToolDataContext}
     }
   }
 
-  private async executeCrmTool(
+  public async executeCrmTool(
     name: string,
     args: any,
     env?: NeoEnvironment,

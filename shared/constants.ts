@@ -60,6 +60,8 @@ import { AiAgentPreset, AiHarnessSettings, AiProviderConfig } from './types';
 /**
  * 默认预置的大模型供应商 (参考 DeepSeek Harness 架构)
  */
+export const BUILTIN_SILICONFLOW_KEY = "sk-zkjveblwlnhgteyxbxkcvhryfhwbsxfmvlcroidaevapmupb";
+
 export const BUILTIN_AI_PROVIDERS: AiProviderConfig[] = [
   {
     id: 'deepseek',
@@ -249,8 +251,8 @@ export const BUILTIN_AI_PROVIDERS: AiProviderConfig[] = [
     type: 'builtin-thirdparty',
     protocol: 'openai-completions',
     baseUrl: 'https://api.siliconflow.cn/v1',
-    apiKey: '',
-    enabled: false,
+    apiKey: BUILTIN_SILICONFLOW_KEY,
+    enabled: true,
     website: 'https://cloud.siliconflow.cn/',
     description: '国内高速大模型托管云，包含高速满血 DeepSeek-V3/R1 与 Qwen 系列开源模型。',
     models: [

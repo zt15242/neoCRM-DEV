@@ -45,6 +45,12 @@ export interface JarvisChatMessage {
   audioBase64?: string;
   audioFormat?: 'mp3' | 'wav';
   targetConnectorId?: string;
+  toolCalls?: Array<{
+    name: string;
+    args?: any;
+    summary?: string;
+    status: 'running' | 'success' | 'error';
+  }>;
   createdAt: number;
 }
 
@@ -64,6 +70,22 @@ export interface JarvisVoiceOptions {
 export interface JarvisAsrResult {
   text: string;
   durationMs?: number;
-  provider: 'siliconflow' | 'webspeech' | 'mock';
+  provider: string;
+  needConfig?: boolean;
   error?: string;
+}
+
+export interface JarvisMemoryItem {
+  id: string;
+  category: 'preference' | 'project' | 'fact' | 'system';
+  content: string;
+  createdAt: number;
+}
+
+export interface JarvisSessionData {
+  sessionId: string;
+  title: string;
+  messages: JarvisChatMessage[];
+  memories: JarvisMemoryItem[];
+  updatedAt: number;
 }

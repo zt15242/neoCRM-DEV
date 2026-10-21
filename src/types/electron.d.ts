@@ -245,11 +245,21 @@ declare global {
       loggerLog?: (level: string, module: string, message: string, details?: any) => Promise<boolean>;
       // 贾维斯 (J.A.R.V.I.S.) 全局总领与语音中枢
       jarvisSynthesizeSpeech?: (text: string, options?: any) => Promise<{ audioBase64: string; format: "mp3"; byteLength: number }>;
-      jarvisTranscribeAudio?: (audioBase64: string, mimeType?: string) => Promise<{ text: string; durationMs?: number; provider: string; error?: string }>;
+      jarvisTranscribeAudio?: (audioBase64: string, mimeType?: string) => Promise<{ text: string; durationMs?: number; provider: string; needConfig?: boolean; error?: string }>;
+      jarvisSaveAsrKey?: (apiKey: string, providerId?: string) => Promise<{ success: boolean; error?: string }>;
       jarvisGetFleetOverview?: () => Promise<any>;
       jarvisGetSystemPrompt?: (userProfile?: any) => Promise<string>;
       jarvisGetSupportedVoices?: () => Promise<any[]>;
-      jarvisChat?: (params: { message: string; history?: any[]; userProfile?: any }) => Promise<{ content: string }>;
+      jarvisChat?: (params: { message: string; messageId?: string; history?: any[]; userProfile?: any; targetConnectorId?: string }) => Promise<{ content: string; messageId?: string; toolCalls?: any[] }>;
+      jarvisGetSessionData?: () => Promise<{ sessionId: string; title: string; messages: any[]; memories: any[]; updatedAt: number }>;
+      jarvisSaveMessage?: (message: any) => Promise<any>;
+      jarvisClearMessages?: (welcomeMessage?: any) => Promise<any>;
+      jarvisAddMemory?: (content: string, category?: string) => Promise<any>;
+      jarvisDeleteMemory?: (memoryId: string) => Promise<any>;
+      onJarvisMessageAppended?: (callback: (message: any) => void) => () => void;
+      onJarvisMessagesCleared?: (callback: (welcomeMessage?: any) => void) => () => void;
+      onJarvisStateChanged?: (callback: (state: string) => void) => () => void;
+      onJarvisToolProgress?: (callback: (progress: { name: string; status: "executing" | "completed" | "error"; summary?: string; description?: string }) => void) => () => void;
       jarvisToggleDesktopPet?: (visible: boolean) => Promise<boolean>;
       jarvisSetPetWindowExpanded?: (expanded: boolean) => Promise<boolean>;
       jarvisOpenMainWindow?: () => Promise<boolean>;

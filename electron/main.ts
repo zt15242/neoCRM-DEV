@@ -2,7 +2,7 @@ import axios from 'axios';
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session, systemPreferences } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EnvService } from './services/envService';
@@ -26,6 +26,8 @@ import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../
 import { edgeTtsService, EdgeTtsService } from './services/edgeTtsService';
 import { asrService } from './services/asrService';
 import { JarvisFleetService } from './services/jarvisFleetService';
+import { CRM_HARNESS_TOOLS_SPEC } from './security/protectedHarness';
+import { BUILTIN_SILICONFLOW_KEY } from '../shared/constants';
 
 const currentDir = typeof __dirname !== 'undefined' 
   ? __dirname 
@@ -189,6 +191,25 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // 全局麦克风与多媒体录音权限自动放行 (保障 J.A.R.V.I.S. 语音对讲畅通无阻)
+  try {
+    session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+      if (permission === 'media' || permission === 'microphone') return true;
+      return true;
+    });
+
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      if (permission === 'media' || permission === 'microphone') return callback(true);
+      callback(true);
+    });
+
+    if (process.platform === 'darwin' && systemPreferences?.askForMediaAccess) {
+      systemPreferences.askForMediaAccess('microphone').catch(() => {});
+    }
+  } catch (permErr: any) {
+    console.warn('[Permission] 设置音频权限处理器提示:', permErr.message);
+  }
+
   createWindow();
 
   app.on('activate', () => {
@@ -882,12 +903,56 @@ ipcMain.handle("jarvis:transcribeAudio", async (_, audioBase64: string, mimeType
   try {
     const buffer = Buffer.from(audioBase64, "base64");
     const aiConfig = aiService.getAiConfig();
-    const sfProvider = aiConfig.providers?.find((p: any) => p.id === "siliconflow" || p.id === "silicon_flow");
-    const apiKey = sfProvider?.apiKey || process.env.SILICONFLOW_API_KEY || "";
-    return await asrService.transcribeWithSiliconFlow(buffer, apiKey, mimeType || "audio/webm");
+
+    // 1. 优先尝试硅基流动 SenseVoice (毫秒级响应，中文普通话推荐)
+    const sfProvider = aiConfig.providers?.find((p: any) => (p.id === "siliconflow" || p.id === "silicon_flow") && p.apiKey?.trim());
+    const sfKey = sfProvider?.apiKey?.trim() || BUILTIN_SILICONFLOW_KEY || process.env.SILICONFLOW_API_KEY;
+
+    if (sfKey) {
+      const res = await asrService.transcribeWithSiliconFlow(buffer, sfKey, mimeType || "audio/webm");
+      // 只要服务正常响应（即便在极其安静的环境下未识别出文字），也属于合法结果
+      if (!res.error) {
+        return res;
+      }
+      console.warn('[Jarvis ASR] 硅基流动返回异常，尝试备用引擎:', res.error);
+    }
+
+    // 2. 尝试 OpenAI Whisper
+    const openaiProvider = aiConfig.providers?.find((p: any) => p.id === "openai" && p.apiKey?.trim());
+    const openaiKey = openaiProvider?.apiKey?.trim() || process.env.OPENAI_API_KEY;
+    if (openaiKey) {
+      const res = await asrService.transcribeWithOpenAI(buffer, openaiKey, openaiProvider?.baseUrl, mimeType || "audio/webm");
+      if (!res.error) {
+        return res;
+      }
+      console.warn('[Jarvis ASR] OpenAI Whisper 返回异常:', res.error);
+    }
+
+    // 3. 未配置或服务均异常时的友好引导
+    const hasKey = !!(sfKey || openaiKey);
+    return {
+      text: "",
+      provider: "none",
+      needConfig: !hasKey,
+      error: hasKey ? "语音服务网络波动或响应超时，请靠近麦克风重新按住说话" : "请先配置语音识别 API Key",
+    };
   } catch (err: any) {
-    return { text: "", provider: "siliconflow", error: err.message || "转写异常" };
+    return { text: "", provider: "error", error: err.message || "转写异常" };
   }
+});
+
+ipcMain.handle("jarvis:saveAsrKey", async (_, apiKey: string, providerId = "siliconflow") => {
+  const cleanKey = (apiKey || "").trim();
+  if (!cleanKey) return { success: false, error: "Key 不能为空" };
+  const config = aiService.getAiConfig();
+  const target = config.providers?.find((p: any) => p.id === providerId);
+  if (target) {
+    target.apiKey = cleanKey;
+    target.enabled = true;
+    aiService.saveProvider(target);
+    return { success: true };
+  }
+  return { success: false, error: "未找到目标供应商" };
 });
 
 ipcMain.handle("jarvis:getFleetOverview", async () => {
@@ -948,12 +1013,69 @@ ipcMain.handle("jarvis:openMainWindow", async () => {
   return true;
 });
 
-ipcMain.handle("jarvis:chat", async (_, params: { message: string; history?: any[]; userProfile?: any }) => {
-  const { message, history = [], userProfile } = params;
+// ======================= 贾维斯长期记忆与对话历史 IPC =======================
+ipcMain.handle("jarvis:getSessionData", async () => {
+  return jarvisFleetService.getSessionData();
+});
+
+ipcMain.handle("jarvis:saveMessage", async (_, message: any) => {
+  const session = jarvisFleetService.appendMessage(message);
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send("jarvis:message_appended", message);
+    }
+  });
+  return session;
+});
+
+ipcMain.handle("jarvis:clearMessages", async (_, welcomeMessage?: any) => {
+  const session = jarvisFleetService.clearMessages(welcomeMessage);
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send("jarvis:messages_cleared", welcomeMessage);
+    }
+  });
+  return session;
+});
+
+ipcMain.handle("jarvis:addMemory", async (_, content: string, category?: any) => {
+  return jarvisFleetService.addMemory(content, category);
+});
+
+ipcMain.handle("jarvis:deleteMemory", async (_, memoryId: string) => {
+  return jarvisFleetService.deleteMemory(memoryId);
+});
+
+ipcMain.handle("jarvis:chat", async (_, params: { message: string; messageId?: string; history?: any[]; userProfile?: any; targetConnectorId?: string }) => {
+  const { message, messageId, history = [], userProfile, targetConnectorId } = params;
   const sysPrompt = jarvisFleetService.buildJarvisSystemPrompt(userProfile);
   const fleet = jarvisFleetService.getFleetOverview();
+  const salutation = userProfile?.salutation || (userProfile?.gender === "female" ? "女士" : "先生");
+  const name = userProfile?.name || "指挥官";
+  const fullCall = `${name}${salutation}`;
 
-  const lower = (message || "").toLowerCase();
+  // 广播全网窗口同步进入高能思考状态 (大屏与桌宠方舟反应堆同步进入超频动效)
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send("jarvis:state_changed", "thinking");
+    }
+  });
+
+  // 保存用户提问到持久化历史并向多端窗口实时广播
+  const userMsgId = messageId || `msg_u_${Date.now()}`;
+  const userChatMsg = {
+    id: userMsgId,
+    role: "user" as const,
+    content: message,
+    createdAt: Date.now(),
+  };
+  jarvisFleetService.appendMessage(userChatMsg);
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send("jarvis:message_appended", userChatMsg);
+    }
+  });
+
   // 1. 若问题询问系统态势/连接器在线情况，由管家直接精准如实汇报
   if (
     message.includes("态势") ||
@@ -962,8 +1084,6 @@ ipcMain.handle("jarvis:chat", async (_, params: { message: string; history?: any
     message.includes("系统状态") ||
     message.includes("舰队")
   ) {
-    const salutation = userProfile?.salutation || (userProfile?.gender === "female" ? "女士" : "先生");
-    const name = userProfile?.name || "指挥官";
     const onlineNames = fleet.connectors
       .filter((c) => c.isLoggedIn)
       .map((c) => `【${c.name}】(${c.productType.toUpperCase()}${c.tenantId ? ` · 租户:${c.tenantId}` : ""})`)
@@ -973,68 +1093,301 @@ ipcMain.handle("jarvis:chat", async (_, params: { message: string; history?: any
       .map((c) => c.name)
       .join("、");
 
-    let detail = `汇报${name}${salutation}，当前全网舰队共接入 ${fleet.totalCount} 套连接器，全部 ${fleet.onlineCount} 套处于在线授权状态。
+    let detail = `汇报${fullCall}，当前全网舰队共接入 ${fleet.totalCount} 套连接器，全部 ${fleet.onlineCount} 套处于在线授权状态。
 在线连接器包括：${onlineNames}。`;
     if (offlineNames) {
-      detail += `
-未授权或Token失效连接器：${offlineNames}。`;
+      detail += `\n未授权或Token失效连接器：${offlineNames}。`;
     }
-    detail += `
-所有已连通系统的 API 探活与会话心跳均正常，随时听候您的调遣。`;
-    return { content: detail };
+    detail += `\n所有已连通系统的 API 探活与会话心跳均正常，随时听候您的调遣。`;
+
+    const assistantMsgId = `msg_a_${Date.now()}`;
+    const assistantChatMsg = {
+      id: assistantMsgId,
+      role: "assistant" as const,
+      content: detail,
+      createdAt: Date.now(),
+    };
+    jarvisFleetService.appendMessage(assistantChatMsg);
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) {
+        w.webContents.send("jarvis:message_appended", assistantChatMsg);
+      }
+    });
+
+    return { content: detail, messageId: assistantMsgId };
   }
 
-  // 2. 调用当前用户配置的 AI 模型进行深度规划与回答
-  try {
-    const config = aiService.getAiConfig();
-    const defaultProviderId = config.settings.defaultProviderId;
-    const provider =
-      config.providers.find((p) => p.id === defaultProviderId && p.enabled && p.apiKey) ||
-      config.providers.find((p) => p.enabled && p.apiKey);
+  // 2. 具备全套 Harness 工具物理调用能力的自主进化执行循环
+  const config = aiService.getAiConfig();
+  const defaultProviderId = config.settings.defaultProviderId;
+  const primaryProvider =
+    config.providers.find((p) => p.id === defaultProviderId && p.enabled && p.apiKey) ||
+    config.providers.find((p) => p.enabled && p.apiKey);
 
-    if (provider) {
-      const modelId = config.settings.defaultModelId || provider.models[0]?.id || "deepseek-ai/DeepSeek-V3";
-      const cleanHistory = history.slice(-8).map((h) => ({
-        role: h.role === "assistant" ? "assistant" : "user",
-        content: String(h.content || ""),
-      }));
+  const sessionData = jarvisFleetService.getSessionData();
+  const effectiveHistory = (history.length > 0 ? history : sessionData.messages.slice(0, -1)).slice(-10);
+  const cleanHistory = effectiveHistory.map((h: any) => ({
+    role: h.role === "assistant" ? "assistant" : "user",
+    content: String(h.content || ""),
+  }));
 
-      const messages = [
-        { role: "system", content: sysPrompt },
-        ...cleanHistory,
-        { role: "user", content: message },
-      ];
+  const messages: any[] = [
+    { role: "system", content: sysPrompt },
+    ...cleanHistory,
+    { role: "user", content: message },
+  ];
 
-      const url = `${provider.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-      const response = await axios.post(
-        url,
-        {
-          model: modelId,
-          messages,
-          temperature: config.settings.temperature ?? 0.7,
-          max_tokens: config.settings.maxTokens ?? 2000,
-        },
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${provider.apiKey.trim()}`,
-          },
-          timeout: 45000,
+  const tools = CRM_HARNESS_TOOLS_SPEC;
+  const executedToolCalls: Array<{
+    name: string;
+    args: any;
+    summary?: string;
+    status: 'success' | 'error';
+  }> = [];
+
+  let replyContent = "";
+
+  // 设定最多 10 轮自主决策与工具执行循环 (Tool Loop)
+  const maxRounds = 10;
+  for (let round = 0; round < maxRounds; round++) {
+    let chosenChoice: any = null;
+
+    if (primaryProvider) {
+      try {
+        let baseUrl = primaryProvider.baseUrl.trim().replace(/\/+$/, "");
+        if (!baseUrl.endsWith("/v1") && !baseUrl.includes("/v1/")) {
+          baseUrl += "/v1";
         }
-      );
+        const modelId = config.settings.defaultModelId || primaryProvider.models[0]?.id || "deepseek-ai/DeepSeek-V3";
+        const url = `${baseUrl}/chat/completions`;
 
-      const replyContent = response.data?.choices?.[0]?.message?.content || "";
-      if (replyContent) {
-        return { content: replyContent };
+        const response = await axios.post(
+          url,
+          {
+            model: modelId,
+            messages,
+            tools,
+            tool_choice: "auto",
+            temperature: 0.2,
+            max_tokens: 3000,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${primaryProvider.apiKey.trim()}`,
+            },
+            timeout: 65000,
+          }
+        );
+        chosenChoice = response.data?.choices?.[0];
+      } catch (err: any) {
+        console.warn(`[Jarvis Chat] 主模型服务异常 (第 ${round + 1} 轮):`, err.message);
       }
     }
-  } catch (err: any) {
-    console.warn("Jarvis LLM call fallback:", err.message);
+
+    if (!chosenChoice && BUILTIN_SILICONFLOW_KEY) {
+      try {
+        const sfResponse = await axios.post(
+          "https://api.siliconflow.cn/v1/chat/completions",
+          {
+            model: "deepseek-ai/DeepSeek-V3",
+            messages,
+            tools,
+            tool_choice: "auto",
+            temperature: 0.2,
+            max_tokens: 3000,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${BUILTIN_SILICONFLOW_KEY}`,
+            },
+            timeout: 45000,
+          }
+        );
+        chosenChoice = sfResponse.data?.choices?.[0];
+      } catch (sfErr: any) {
+        console.warn(`[Jarvis Chat] 硅基流动备用大模型异常 (第 ${round + 1} 轮):`, sfErr.message);
+      }
+    }
+
+    if (!chosenChoice) {
+      break;
+    }
+
+    const respMsg = chosenChoice.message;
+    const toolCalls = respMsg?.tool_calls;
+
+    // 若本轮无工具调用，生成最终回答并跳出循环
+    if (!toolCalls || toolCalls.length === 0) {
+      replyContent = respMsg?.content || "";
+      break;
+    }
+
+    // 记录 assistant 消息（包含 tool_calls）
+    messages.push(respMsg);
+
+    for (const tc of toolCalls) {
+      const toolName = tc.function.name;
+      let toolArgs: any = {};
+      try {
+        toolArgs = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
+      } catch {
+        toolArgs = {};
+      }
+
+      console.log(`[Jarvis Autonomous Action] 贾维斯正在真实调用底层物理工具: ${toolName}`, toolArgs);
+
+      // 实时广播工具执行进度给前端全息思考卡片
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) {
+          w.webContents.send("jarvis:tool_progress", {
+            name: toolName,
+            status: "executing",
+            description: toolArgs?.description || `正在执行物理工具 ${toolName}...`
+          });
+        }
+      });
+
+      // 智能解析目标连接器环境与凭据
+      const targetConn = jarvisFleetService.resolveConnector(
+        targetConnectorId,
+        message + " " + toolName + " " + JSON.stringify(toolArgs)
+      );
+
+      let toolRes: any = null;
+      try {
+        toolRes = await aiService.executeCrmTool(toolName, toolArgs, targetConn?.env, targetConn?.tokenData);
+        executedToolCalls.push({
+          name: toolName,
+          args: toolArgs,
+          summary: toolRes.summary,
+          status: 'success',
+        });
+        BrowserWindow.getAllWindows().forEach((w) => {
+          if (!w.isDestroyed()) {
+            w.webContents.send("jarvis:tool_progress", {
+              name: toolName,
+              status: "completed",
+              summary: toolRes.summary
+            });
+          }
+        });
+      } catch (toolErr: any) {
+        toolRes = { error: toolErr.message, success: false };
+        executedToolCalls.push({
+          name: toolName,
+          args: toolArgs,
+          summary: `执行异常: ${toolErr.message}`,
+          status: 'error',
+        });
+      }
+
+      messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify(toolRes?.data || toolRes),
+      });
+    }
   }
 
-  // 降级兜底管家回复
-  const salutation = userProfile?.salutation || (userProfile?.gender === "female" ? "女士" : "先生");
-  return {
-    content: `已接收您的指令，${salutation}。各系统连接器处于在线监听状态，随时听候进一步差遣。`,
+  // 3. 终局收敛处理：若执行了物理工具但模型尚未输出最终回复（例如达到轮次上限或最后轮为工具调用），发起终局总结请求
+  if (!replyContent && executedToolCalls.length > 0) {
+    console.log(`[Jarvis Chat] 工具执行阶段结束（已真实调用 ${executedToolCalls.length} 项底层工具），正在请求大模型生成最终分析总结与汇报...`);
+    messages.push({
+      role: "user",
+      content: `【系统指令 · 终局总结】已完成所有物理工具调用与数据探测（共已真实执行 ${executedToolCalls.length} 项工具操作）。现在请基于前序已获取到的所有真实执行结果与系统数据，向${fullCall}生成完整、详实、条理清晰的最终分析报告与总结（包括发现的实体字段、环境现状、比对结论或问题排查结果），请勿再调用任何工具。`,
+    });
+
+    if (primaryProvider) {
+      try {
+        let baseUrl = primaryProvider.baseUrl.trim().replace(/\/+$/, "");
+        if (!baseUrl.endsWith("/v1") && !baseUrl.includes("/v1/")) {
+          baseUrl += "/v1";
+        }
+        const modelId = config.settings.defaultModelId || primaryProvider.models[0]?.id || "deepseek-ai/DeepSeek-V3";
+        const url = `${baseUrl}/chat/completions`;
+
+        const response = await axios.post(
+          url,
+          {
+            model: modelId,
+            messages,
+            temperature: 0.2,
+            max_tokens: 3500,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${primaryProvider.apiKey.trim()}`,
+            },
+            timeout: 60000,
+          }
+        );
+        replyContent = response.data?.choices?.[0]?.message?.content || "";
+      } catch (err: any) {
+        console.warn(`[Jarvis Chat] 终局总结主模型服务异常:`, err.message);
+      }
+    }
+
+    if (!replyContent && BUILTIN_SILICONFLOW_KEY) {
+      try {
+        const sfResponse = await axios.post(
+          "https://api.siliconflow.cn/v1/chat/completions",
+          {
+            model: "deepseek-ai/DeepSeek-V3",
+            messages,
+            temperature: 0.2,
+            max_tokens: 3500,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${BUILTIN_SILICONFLOW_KEY}`,
+            },
+            timeout: 45000,
+          }
+        );
+        replyContent = sfResponse.data?.choices?.[0]?.message?.content || "";
+      } catch (sfErr: any) {
+        console.warn(`[Jarvis Chat] 终局总结硅基流动备用模型异常:`, sfErr.message);
+      }
+    }
+
+    // 若由于网络彻底阻断未能生成总结，直接基于真实执行回执输出保底结构化事实报告，杜绝谎报"超时"
+    if (!replyContent) {
+      const summaryLines = executedToolCalls
+        .map((t, idx) => `${idx + 1}. **\`${t.name}\`**: ${t.summary || (t.status === "success" ? "执行完成" : "执行异常")}`)
+        .join("\n");
+      replyContent = `${fullCall}，刚才已为您调度底层物理工具真实执行了 ${executedToolCalls.length} 项操作，关键事实回执如下：\n\n${summaryLines}\n\n当前上游大模型生成最终总结文本时发生短暂网络波动，但底层已探查到的元数据与运行状态均已在本地生效记录。请问需要我为您深入哪一部分的详细信息？\n\n<speech>先生，底层已真实执行 ${executedToolCalls.length} 项物理工具，详细回执已在屏幕呈报。</speech>`;
+    }
+  }
+
+  // 最终回复并落盘保存，向多端窗口实时广播
+  const finalReply =
+    replyContent ||
+    `抱歉，${fullCall}。刚才大模型上游通信服务出现短暂波动（未收到有效响应）。各系统连接器心跳处于正常监听状态，请您再次尝试下达指令。`;
+  const assistantMsgId = `msg_a_${Date.now()}`;
+  const assistantChatMsg = {
+    id: assistantMsgId,
+    role: "assistant" as const,
+    content: finalReply,
+    toolCalls: executedToolCalls.length > 0 ? executedToolCalls : undefined,
+    createdAt: Date.now(),
   };
+  jarvisFleetService.appendMessage(assistantChatMsg);
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send("jarvis:message_appended", assistantChatMsg);
+    }
+  });
+
+  // 广播思考结束，恢复待命
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send("jarvis:state_changed", "idle");
+    }
+  });
+
+  return { content: finalReply, messageId: assistantMsgId, toolCalls: executedToolCalls };
 });

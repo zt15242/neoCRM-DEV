@@ -17,7 +17,6 @@ import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerM
 import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
 import { JarvisCommandCenter } from './components/ai/JarvisCommandCenter';
-import { JarvisDesktopPet } from './components/ai/JarvisDesktopPet';
 import { JarvisOnboardingModal } from './components/ai/JarvisOnboardingModal';
 import { JarvisUserProfile } from '../shared/jarvisTypes';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
@@ -797,18 +796,6 @@ export const App: React.FC = () => {
         onDelete={handleDeleteHistoryRecord}
       />
 
-      {/* 贾维斯 (J.A.R.V.I.S.) 桌面方舟桌宠挂件 */}
-      <JarvisDesktopPet
-        userProfile={jarvisProfile}
-        onOpenCommandCenter={() => {
-          if (!jarvisProfile) {
-            setIsJarvisOnboardingOpen(true);
-          } else {
-            setActiveTab('jarvis');
-          }
-        }}
-        onOpenSettings={() => setIsJarvisOnboardingOpen(true)}
-      />
 
       {/* 贾维斯 (J.A.R.V.I.S.) 协议接入与指挥官档案设置弹窗 */}
       <JarvisOnboardingModal

@@ -24,3 +24,7 @@ Thumbs.db
 
 # Local license generator (admin only)
 scripts/generate-license.mjs
+
+# Auto-generated documents & scripts
+*.docx
+generate_doc.*
