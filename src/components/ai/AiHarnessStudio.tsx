@@ -353,7 +353,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     const unsubscribe = window.neoApi.onAiStreamEvent((event) => {
       const { sessionId, messageId, type, delta, toolCall, error, compactionSummary } = event;
 
-      // 捕获后台自动压缩完成事件，实时更新会话中的 compactionSummary
+      // 捕获后台自动压缩完成事件，实时更新会话中的 compactionSummary 并提醒用户
       if (type === 'compaction_done' && compactionSummary) {
         setSessions((prevSessions) => {
           return prevSessions.map((sess) => {
@@ -365,6 +365,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             };
           });
         });
+        showToast('info', `🗜️ 历史上下文已自动提炼 Checkpoint (浓缩前 ${compactionSummary.originalMessageCount} 轮对话)`);
         return;
       }
 

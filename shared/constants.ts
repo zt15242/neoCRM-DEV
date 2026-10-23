@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.7';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.8';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -9,6 +9,11 @@ export const DEFAULT_AUTH_CONFIG = {
   oauthType: 'standard',
   accessType: 'offline',
 };
+
+/**
+ * 内置硅基流动高可用容灾与极速语音识别 Key (SenseVoice & DeepSeek-V3 灾备)
+ */
+export const BUILTIN_SILICONFLOW_KEY = 'sk-zkjveblwlnhgteyxbxkcvhryfhwbsxfmvlcroidaevapmupb';
 
 /**
  * 销售易 PaaS 平台官方字段类型代码对照表 (itemType)

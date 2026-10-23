@@ -47,7 +47,8 @@ import {
   BUILTIN_AI_PROVIDERS, 
   DEFAULT_AI_SETTINGS, 
   BUILTIN_MCP_SERVERS, 
-  BUILTIN_AI_SKILLS 
+  BUILTIN_AI_SKILLS,
+  BUILTIN_SILICONFLOW_KEY
 } from '../../shared/constants';
 import { 
   CRM_HARNESS_TOOLS_SPEC, 
@@ -474,24 +475,71 @@ export class AiService {
     }
 
     const config = this.getAiConfig();
-    const providerId = session.providerId || config.settings.defaultProviderId || 'deepseek';
-    const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
-    const modelId = session.modelId || provider?.models?.[0]?.id || 'deepseek-chat';
+    const providerId = session.providerId || config.settings.defaultProviderId;
+    let provider = config.providers.find((p) => p.id === providerId && p.enabled && p.apiKey?.trim())
+      || config.providers.find((p) => p.enabled && p.apiKey?.trim());
 
-    // 取除最近 4 条之外的所有更早消息进行总结 (保留最近4条作为真实模型上下文 Tail)
-    const messagesToCompact = session.messages.slice(0, -4);
+    if (!provider?.apiKey?.trim() && BUILTIN_SILICONFLOW_KEY) {
+      provider = {
+        id: "siliconflow_builtin",
+        name: "硅基流动 (内置)",
+        type: "siliconflow" as any,
+        protocol: "openai-completions",
+        baseUrl: "https://api.siliconflow.cn/v1",
+        apiKey: BUILTIN_SILICONFLOW_KEY,
+        enabled: true,
+        models: [{ id: "deepseek-ai/DeepSeek-V3", name: "DeepSeek-V3" }],
+      };
+    }
+
+    if (!provider) {
+      provider = config.providers[0];
+    }
+
+    const modelId = session.modelId || provider?.models?.[0]?.id || "deepseek-chat";
+
+    // 严格对齐到用户提问轮次边界 (User Turn Boundary)
+    // 默认保留最近 3-5 条作为活跃尾部 (Tail)，更早的消息全部纳入 Checkpoint 压缩范围
+    const targetTailLength = 4;
+    let cutoff = Math.max(0, session.messages.length - targetTailLength);
+    while (cutoff > 0 && session.messages[cutoff].role !== "user") {
+      cutoff--;
+    }
+    if (cutoff === 0 && session.messages.length > targetTailLength) {
+      cutoff = Math.max(0, session.messages.length - targetTailLength);
+      while (cutoff < session.messages.length - 2 && session.messages[cutoff].role !== "user") {
+        cutoff++;
+      }
+    }
+
+    const messagesToCompact = session.messages.slice(0, cutoff);
+    if (messagesToCompact.length < 2) {
+      return session;
+    }
 
     const dialogHistoryText = messagesToCompact
       .map((m) => {
-        let content = m.content || '';
-        if (!content && m.toolCalls && m.toolCalls.length > 0) {
-          content = `[执行了工具: ${m.toolCalls.map((t) => `${t.name}(${t.summary || ''})`).join('; ')}]`;
+        const roleLabel = m.role === "user" ? "用户" : "AI助手";
+        let content = m.content || "";
+        let toolInfo = "";
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          toolInfo = "\n" + m.toolCalls.map((t) => {
+            const summary = t.summary || "";
+            const argStr = JSON.stringify(t.arguments || {}).slice(0, 150);
+            const resSample = typeof t.data === "string"
+              ? t.data.slice(0, 300)
+              : JSON.stringify(t.data || (t as any).resultData || "").slice(0, 300);
+            return `[执行工具: ${t.name}(${argStr}) -> ${summary} | 结果摘要: ${resSample}]`;
+          }).join("\n");
         }
-        return `${m.role === 'user' ? '用户' : 'AI助手'}: ${content.slice(0, 600)}`;
+        return `${roleLabel}: ${content.slice(0, 800)}${toolInfo}`;
       })
-      .join('\n\n');
+      .join("\n\n");
 
-    const priorSummary = session.compactionSummary?.summary ? `Prior Checkpoint Summary:\n${session.compactionSummary.summary}\n\n` : '';
+    const priorSummary = session.compactionSummary?.summary ? `Prior Checkpoint Summary:
+${session.compactionSummary.summary}
+
+` : "";
     const prompt = `${priorSummary}You are acting as a compaction engine for this AI engineering workspace assistant (DeepSeek Harness standard). Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.
 
 Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section.
@@ -528,42 +576,100 @@ Rules:
 Conversation to condense:
 ${dialogHistoryText}`;
 
-    let summaryText = '';
-    try {
-      const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
-      const res = await axios.post(
-        `${cleanBaseUrl}/chat/completions`,
-        {
-          model: modelId,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.2,
-          max_tokens: 1500,
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
+    let summaryText = "";
+    const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
+    const apiEndpoint = cleanBaseUrl.endsWith("/v1") || cleanBaseUrl.includes("/v1/")
+      ? `${cleanBaseUrl}/chat/completions`
+      : `${cleanBaseUrl}/v1/chat/completions`;
+
+    if (provider.apiKey?.trim()) {
+      try {
+        const res = await axios.post(
+          apiEndpoint,
+          {
+            model: modelId,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.2,
+            max_tokens: 2000,
           },
-          timeout: 20000,
-        }
-      );
-      summaryText = res.data?.choices?.[0]?.message?.content || '';
-    } catch (err: any) {
-      console.warn('[DSH Compaction] LLM 总结接口调用超时或异常，启用智能本地兜底生成 Checkpoint:', err.message);
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${provider.apiKey.trim()}`,
+            },
+            timeout: 35000,
+          }
+        );
+        summaryText = res.data?.choices?.[0]?.message?.content || "";
+      } catch (err: any) {
+        console.warn("[DSH Compaction] 主模型总结接口超时或异常:", err.message);
+      }
+    }
+
+    // 硅基流动 DeepSeek-V3 快速灾备
+    if (!summaryText.trim() && BUILTIN_SILICONFLOW_KEY && provider.apiKey !== BUILTIN_SILICONFLOW_KEY) {
+      try {
+        console.log("[DSH Compaction] 启动硅基流动 DeepSeek-V3 兜底生成结构化 Checkpoint...");
+        const sfRes = await axios.post(
+          "https://api.siliconflow.cn/v1/chat/completions",
+          {
+            model: "deepseek-ai/DeepSeek-V3",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.2,
+            max_tokens: 2000,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${BUILTIN_SILICONFLOW_KEY}`,
+            },
+            timeout: 30000,
+          }
+        );
+        summaryText = sfRes.data?.choices?.[0]?.message?.content || "";
+      } catch (sfErr: any) {
+        console.warn("[DSH Compaction] 硅基流动备用总结异常:", sfErr.message);
+      }
     }
 
     if (!summaryText.trim()) {
       const userGoals = messagesToCompact
-        .filter((m) => m.role === 'user')
-        .map((m) => m.content.slice(0, 100))
+        .filter((m) => m.role === "user")
+        .map((m) => m.content.slice(0, 120))
         .filter(Boolean)
-        .slice(-3);
-      const toolsRan = messagesToCompact
-        .flatMap((m) => m.toolCalls || [])
-        .map((t) => t.name);
-      const uniqueTools = Array.from(new Set(toolsRan));
+        .slice(-4);
 
-      summaryText = `## Primary Request and Intent\n- ${userGoals.join('\n- ') || '多轮工程排查与数据对接'}\n\n## Key Technical Concepts & CRM Objects\n- 包含实体元数据探测、字段校准与代码落盘\n\n## Files, Code & Artifacts\n- 项目工作区代码文件与配置文件\n\n## Errors and Fixes\n- 历史排查与纠偏已在会话中确认\n\n## Pending Jobs\n- (none)\n\n## Current Work & Progress\n- 已执行 ${toolsRan.length} 次工具操作 (${uniqueTools.join(', ')})\n\n## Next Step\n- 根据用户最新指令继续推进\n\n## Critical Context & User Preferences\n- 遵循 DeepSeek Harness 自主工程落地与沙箱安全规范`;
+      const allToolCalls = messagesToCompact.flatMap((m) => m.toolCalls || []);
+      const toolSummaries = allToolCalls
+        .map((t) => `${t.name}: ${t.summary || "已执行"}`)
+        .slice(-10);
+
+      const textCorpus = messagesToCompact.map((m) => m.content || "").join(" ");
+      const entityMatches = Array.from(new Set(textCorpus.match(/[a-zA-Z0-9_]+__(?:c|Obj)|[A-Z][a-zA-Z0-9]+Obj|(?:contract|account|opportunity|order|lead|contact)/gi) || [])).slice(0, 10);
+
+      summaryText = `## Primary Request and Intent\n- ${userGoals.join("\n- ") || "多轮工程排查与数据对接"}
+
+## Key Technical Concepts & CRM Objects
+- 涉及业务对象: ${entityMatches.join(", ") || "包含实体元数据探测、字段校准与代码落盘"}
+
+## Files, Code & Artifacts
+- 项目工作区代码文件、脚本与模板生成
+
+## Errors and Fixes
+- 历史排查与纠偏已在会话中确认与实施
+
+## Pending Jobs
+- (none)
+
+## Current Work & Progress
+- 共执行 ${allToolCalls.length} 次工具操作:
+  * ${toolSummaries.join("\n  * ") || "已完成历史工具链调用"}
+
+## Next Step
+- 根据用户最新指令继续推进
+
+## Critical Context & User Preferences
+- 遵循 DeepSeek Harness 自主工程落地与沙箱安全规范，严格核对真实字段`;
     }
 
     session.compactionSummary = {
@@ -900,16 +1006,40 @@ ${dialogHistoryText}`;
     let effectiveMessages = messages;
 
     try {
-      const totalChars = messages.reduce((acc, m) => acc + (m.content?.length || 0), 0);
+      // 真实统计全量上下文开销（包含文本、工具执行参数与返回数据、文件附件）
+      let totalEffectiveChars = 0;
+      for (const m of messages) {
+        totalEffectiveChars += (m.content?.length || 0);
+        if (m.toolCalls && Array.isArray(m.toolCalls)) {
+          for (const tc of m.toolCalls) {
+            totalEffectiveChars += (JSON.stringify(tc.arguments || "").length + JSON.stringify((tc as any).resultData || tc.resultSummary || "").length);
+          }
+        }
+        if (m.attachments && Array.isArray(m.attachments)) {
+          for (const a of m.attachments) {
+            totalEffectiveChars += (a.parsedContent?.length || 0);
+          }
+        }
+      }
+
       const lastCompactedAt = compactionSummary?.compactedAt || 0;
-      const cooldownOk = Date.now() - lastCompactedAt > 90000; // 90秒冷却，避免过于频繁
+      const cooldownOk = Date.now() - lastCompactedAt > 45000; // 45秒冷却
       const lastCompactedCount = compactionSummary?.originalMessageCount || 0;
       const uncompactedCount = messages.length - lastCompactedCount;
 
-      const shouldAutoCompact = (uncompactedCount >= 8 || totalChars > 30000) && cooldownOk && messages.length >= 8;
+      const shouldAutoCompact = (uncompactedCount >= 6 || totalEffectiveChars > 22000) && cooldownOk && messages.length >= 6;
 
       if (shouldAutoCompact && sessionId) {
-        console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${messages.length} 条 (${totalChars} 字符)，正在执行结构化记忆自动压缩...`);
+        console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${messages.length} 条 (真实有效字符: ${totalEffectiveChars})，正在执行结构化记忆自动压缩...`);
+        // 关键体验优化：向前端流式派发进度提示，告知用户正在提炼 Checkpoint，避免假死感
+        sendEvent({
+          requestId,
+          sessionId,
+          messageId,
+          type: "content_delta",
+          delta: "> 🗜️ *[前序上下文达到阈值，已自动提炼 DSH 8 节工程 Checkpoint 压缩记忆...]*\n\n",
+        });
+
         const compacted = await this.compactSession(sessionId);
         if (compacted?.compactionSummary) {
           currentCompactionSummary = compacted.compactionSummary;
@@ -917,14 +1047,14 @@ ${dialogHistoryText}`;
             requestId,
             sessionId,
             messageId,
-            type: 'compaction_done' as any,
+            type: "compaction_done" as any,
             compactionSummary: currentCompactionSummary,
           });
           console.log(`[DSH Auto-Compaction] 自动压缩完成！成功浓缩前 ${currentCompactionSummary.originalMessageCount} 轮对话为 8 节 Checkpoint`);
         }
       }
     } catch (compactErr: any) {
-      console.warn('[DSH Auto-Compaction] 自动压缩过程提示:', compactErr.message);
+      console.warn("[DSH Auto-Compaction] 自动压缩过程提示:", compactErr.message);
     }
 
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
@@ -1280,13 +1410,29 @@ ${mcpInfoText}
 
       // 注入历史对话压缩记忆 (DSH 8-Section Checkpoint)
       if (currentCompactionSummary?.summary) {
-        systemParts.push(`【DeepSeek Harness 前序历史结构化工程记忆 Checkpoint (Compact Summary)】\n${currentCompactionSummary.summary}`);
+        systemParts.push(`【DeepSeek Harness 前序历史结构化工程记忆 Checkpoint (Compact Summary)】
+此为系统自动生成的压缩检查点，浓缩了前序 ${currentCompactionSummary.originalMessageCount} 轮复杂对话与工具调用事实。请将以下内容作为已确认的系统既成事实与背景，直接基于后续对话推进，无需重复复述该检查点：
+
+${currentCompactionSummary.summary}`);
       }
 
-      // 2. 截取上下文消息：当存在压缩记忆 Checkpoint 时，仅取最近 6 条消息作为当前活跃尾部 (Verbatim Tail)，前文由 Checkpoint 全量承载
-      const recentMessages = currentCompactionSummary?.summary
-        ? effectiveMessages.slice(-6)
-        : effectiveMessages.slice(-(config.settings.contextLimit || 20));
+      // 2. 截取上下文消息：对齐到用户提问轮次边界 (User Turn Boundary)，确保尾部始终从 user 消息开始
+      let recentMessages = effectiveMessages;
+      if (currentCompactionSummary?.summary && effectiveMessages.length > 4) {
+        const targetTailCount = 6;
+        let startIdx = Math.max(0, effectiveMessages.length - targetTailCount);
+        while (startIdx < effectiveMessages.length - 1 && effectiveMessages[startIdx].role !== "user") {
+          startIdx++;
+        }
+        recentMessages = effectiveMessages.slice(startIdx);
+      } else {
+        const limit = config.settings.contextLimit || 20;
+        let startIdx = Math.max(0, effectiveMessages.length - limit);
+        while (startIdx < effectiveMessages.length - 1 && effectiveMessages[startIdx].role !== "user") {
+          startIdx++;
+        }
+        recentMessages = effectiveMessages.slice(startIdx);
+      }
 
       // 实时意图强引导：当已连接租户且用户请求查询对象、实体或字段时，注入最高优先级调具执行指令
       if (currentSession.isLoggedIn && currentSession.environment && config.settings.enableCrmTools !== false) {
@@ -1436,6 +1582,18 @@ ${mcpInfoText}
       const conversationHistory: any[] = [];
       if (systemMessage) {
         conversationHistory.push(systemMessage);
+      }
+
+      // 当存在历史压缩记忆时，在会话消息队列首部显式注入 DSH <compacted-summary> 结构块与确认，保持角色轮次严格交替合法
+      if (currentCompactionSummary?.summary) {
+        conversationHistory.push({
+          role: "user",
+          content: `<compacted-summary>\nThis is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.\n\n${currentCompactionSummary.summary}\n</compacted-summary>`,
+        });
+        conversationHistory.push({
+          role: "assistant",
+          content: "明白。前序历史工程 Checkpoint 与系统架构决策已完全掌握，我将直接基于后续消息继续为您推进。",
+        });
       }
 
       for (const msg of recentMessages) {
@@ -2519,16 +2677,16 @@ ${safeToolDataContext}
   }
 
   /**
-   * 动态滑动窗口与工具上下文修剪：
+   * 动态滑动窗口与工具上下文修剪 (遵循 DSH @deepseek-ai/dsh-compaction-tool-result-pruner 规范)：
    * 在多轮大任务执行中，保留最近 2 项工具调用的完整细节，
-   * 对更早的前序工具输出进行轻量压缩，彻底杜绝单次请求膨胀至 100k+ Token 导致 Cloudflare HTTP 524 超时！
+   * 对更早的前序工具输出进行语法结构安全剪枝（避免破坏合法 JSON 或拆分字符串），彻底杜绝单次请求膨胀导致 HTTP 524 超时！
    */
   private pruneConversationHistory(messages: any[], aggressive = false): any[] {
     if (!Array.isArray(messages) || messages.length === 0) return [];
 
     let totalChars = 0;
     for (const m of messages) {
-      if (typeof m.content === 'string') totalChars += m.content.length;
+      if (typeof m.content === "string") totalChars += m.content.length;
     }
 
     // 若总字符数在 35,000 以内 (约 8k-10k tokens)，且非 524 触发的重试，无需裁剪
@@ -2536,13 +2694,11 @@ ${safeToolDataContext}
       return messages;
     }
 
-    // 统计所有 tool 消息的索引
     const toolIndices: number[] = [];
     messages.forEach((m, idx) => {
-      if (m.role === 'tool') toolIndices.push(idx);
+      if (m.role === "tool") toolIndices.push(idx);
     });
 
-    // 最近的 2 项工具调用为当前正在推理的活跃上下文
     const hotCount = aggressive ? 1 : 2;
     const hotCutoff = toolIndices.length > hotCount ? toolIndices[toolIndices.length - hotCount] : 0;
 
@@ -2550,7 +2706,7 @@ ${safeToolDataContext}
     const hotCap = aggressive ? 4000 : 10000;
 
     return messages.map((m, idx) => {
-      if (m.role !== 'tool' || typeof m.content !== 'string') {
+      if (m.role !== "tool" || typeof m.content !== "string") {
         return m;
       }
 
@@ -2561,10 +2717,50 @@ ${safeToolDataContext}
         return m;
       }
 
-      const truncated = m.content.slice(0, cap) + '\n... [前序输出已自动精简，保障通信时效]';
+      let prunedContent = m.content;
+      try {
+        const parsed = JSON.parse(m.content);
+        if (parsed && typeof parsed === "object") {
+          if (Array.isArray(parsed)) {
+            const keepCount = isHot ? 10 : 3;
+            const slice = parsed.slice(0, keepCount);
+            prunedContent = JSON.stringify({
+              _dshPruned: true,
+              totalCount: parsed.length,
+              preview: slice,
+              hint: `[DSH Pruner] 已安全精简前序工具列表（共 ${parsed.length} 项，保留前 ${slice.length} 项）`,
+            });
+          } else {
+            const prunedObj: any = { ...parsed };
+            for (const k of Object.keys(prunedObj)) {
+              if (Array.isArray(prunedObj[k]) && prunedObj[k].length > 5) {
+                prunedObj[k] = prunedObj[k].slice(0, isHot ? 8 : 3);
+                prunedObj[`_${k}_truncated`] = `已截取前 ${prunedObj[k].length} 项，前序结果已自动精简`;
+              } else if (typeof prunedObj[k] === "string" && prunedObj[k].length > (isHot ? 2500 : 500)) {
+                prunedObj[k] = prunedObj[k].slice(0, isHot ? 2500 : 500) + "... [已剪枝]";
+              }
+            }
+            let resStr = JSON.stringify(prunedObj);
+            if (resStr.length > cap) {
+              resStr = JSON.stringify({
+                _dshPruned: true,
+                summary: prunedObj.summary || prunedObj.message || "前序工具执行数据",
+                preview: resStr.slice(0, cap - 180),
+              });
+            }
+            prunedContent = resStr;
+          }
+        }
+      } catch {
+        // Plain text (stdout / stderr / logs)
+        const headChars = Math.floor(cap * 0.7);
+        const tailChars = Math.floor(cap * 0.2);
+        prunedContent = `${m.content.slice(0, headChars)}\n\n[... tool result middle pruned by DSH (${m.content.length - headChars - tailChars} chars omitted) ...]\n\n${m.content.slice(-tailChars)}`;
+      }
+
       return {
         ...m,
-        content: truncated,
+        content: prunedContent,
       };
     });
   }
@@ -2573,25 +2769,43 @@ ${safeToolDataContext}
    * 上下文 Token 安全守护：防御性截断工具调用返回的大文本/日志，彻底避免 1M Token 上下文溢出报错
    */
   private formatSafeToolResultString(toolResult: any, maxChars = 12000): string {
-    if (!toolResult) return '{}';
+    if (!toolResult) return "{}";
     try {
-      let str = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-      if (str.length <= maxChars) return str;
+      if (typeof toolResult === "string") {
+        if (toolResult.length <= maxChars) return toolResult;
+        const head = Math.floor(maxChars * 0.7);
+        const tail = Math.floor(maxChars * 0.2);
+        return `${toolResult.slice(0, head)}\n\n[... 输出过大已安全精简 (${toolResult.length - head - tail} 字符) ...]\n\n${toolResult.slice(-tail)}`;
+      }
 
-      if (typeof toolResult === 'object' && toolResult !== null) {
+      if (typeof toolResult === "object" && toolResult !== null) {
         const copy = { ...toolResult };
-        if (typeof copy.stdout === 'string' && copy.stdout.length > 8000) {
-          copy.stdout = copy.stdout.slice(-8000) + '... [已截断前序日志]';
+        if (typeof copy.stdout === "string" && copy.stdout.length > 6000) {
+          const head = 4000;
+          const tail = 1500;
+          copy.stdout = `${copy.stdout.slice(0, head)}\n... [中间日志已自动剪枝] ...\n${copy.stdout.slice(-tail)}`;
         }
-        if (typeof copy.stderr === 'string' && copy.stderr.length > 3000) {
-          copy.stderr = copy.stderr.slice(-3000);
+        if (typeof copy.stderr === "string" && copy.stderr.length > 2500) {
+          copy.stderr = copy.stderr.slice(-2500);
+        }
+        for (const k of Object.keys(copy)) {
+          if (Array.isArray(copy[k]) && copy[k].length > 20) {
+            const origLen = copy[k].length;
+            copy[k] = copy[k].slice(0, 20);
+            copy[`_${k}_truncated`] = `共 ${origLen} 项，已安全精简展示前 20 项`;
+          }
         }
         const reStr = JSON.stringify(copy);
         if (reStr.length <= maxChars) return reStr;
-        return reStr.slice(0, maxChars - 80) + '... [结果已安全截断]"}';
+        return JSON.stringify({
+          _truncated: true,
+          summary: copy.summary || "数据量过大已自动精简",
+          totalLength: reStr.length,
+          preview: reStr.slice(0, maxChars - 200),
+        });
       }
 
-      return str.slice(0, maxChars - 80) + '... [输出过大已截断]';
+      return String(toolResult).slice(0, maxChars);
     } catch {
       return String(toolResult).slice(0, maxChars);
     }

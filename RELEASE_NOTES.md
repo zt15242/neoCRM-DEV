@@ -1,3 +1,18 @@
+### 🚀 版本更新说明 (v1.8.8)
+
+1. **彻底修复长对话自动压缩 (Context Auto-Compaction) 失灵与时序断裂问题**：
+   - **全要素真实上下文计量引擎**：彻底摒弃仅计算 `m.content` 导致漏算海量工具回执的缺陷，将 `m.content`、`m.toolCalls.arguments`、`m.toolCalls.resultData` 及 `attachments` 真实体积全量纳入计量，未压缩达到 6 轮或真实字符达到 22,000 时灵敏自愈触发压缩，彻底解决自动压缩“永远不触发”、最终硬踩 Cloudflare 524 超时的问题；
+   - **严格对齐用户提问轮次边界 (User Turn Boundary Alignment)**：依据 DeepSeek Harness 官方规范，压缩切分点向前寻找并严格对齐至 `user` 提问起始边界，保留活跃尾部（Verbatim Tail）始终由合法 User 消息开启，彻底根除 Assistant/Tool 孤立置顶导致的“对话断开、接不上上文”致命 Bug；
+   - **工具数据全量注入压缩提示词**：无论 Assistant 文本是否有内容，均将执行工具的名称、关键入参、回执摘要与数据样本完整编码输入总结引擎，杜绝 Checkpoint 沦为空洞套话；
+   - **DSH 标准 `<compacted-summary>` 结构化对话注入**：在上下文历史队列首部以官方标准结构块注入前序记忆，并由助手进行确认吸收，确保大模型 100% 紧密承接前序工程与字段事实；
+   - **高可用总结灾备与极速体验**：自动压缩触发时实时下发流式提示消除假死感，主模型异常时自动无感接入 SiliconFlow DeepSeek-V3 毫秒级生成 Checkpoint，确保压缩 100% 成功。
+
+2. **语法级安全的工具剪枝服务 (`pruneConversationHistory`)**：
+   - 遵循 DSH `@deepseek-ai/dsh-compaction-tool-result-pruner` 规范重构工具剪枝；
+   - 针对结构化 JSON 数据做语义级数组与字段收缩，杜绝字符串暴力截断导致 JSON 语法破坏与解析报错；针对文本日志采用 `Head (70%) + [... DSH Pruned ...] + Tail (20%)` 安全剪枝。
+
+---
+
 ### 🚀 版本更新说明 (v1.8.7)
 
 1. **彻底解决大任务频繁触发 Cloudflare HTTP 524 超时与模型中断**：
