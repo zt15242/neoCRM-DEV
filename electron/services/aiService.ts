@@ -1031,14 +1031,7 @@ ${dialogHistoryText}`;
 
       if (shouldAutoCompact && sessionId) {
         console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${messages.length} 条 (真实有效字符: ${totalEffectiveChars})，正在执行结构化记忆自动压缩...`);
-        // 关键体验优化：向前端流式派发进度提示，告知用户正在提炼 Checkpoint，避免假死感
-        sendEvent({
-          requestId,
-          sessionId,
-          messageId,
-          type: "content_delta",
-          delta: "> 🗜️ *[前序上下文达到阈值，已自动提炼 DSH 8 节工程 Checkpoint 压缩记忆...]*\n\n",
-        });
+        // 后台静默提炼 DSH 8 节工程 Checkpoint，通过 compaction_done 事件安全通知前端卡片，绝不污染正文
 
         const compacted = await this.compactSession(sessionId);
         if (compacted?.compactionSummary) {
@@ -1408,13 +1401,7 @@ ${mcpInfoText}
 重要提示：当用户询问外部知识库、查看 MCP 知识库、检索外部文档或使用上述 MCP 扩展功能时，请务必优先主动调用上述外部 MCP 服务提供的工具（而不是查询销售易 CRM 实体对象表）！`);
       }
 
-      // 注入历史对话压缩记忆 (DSH 8-Section Checkpoint)
-      if (currentCompactionSummary?.summary) {
-        systemParts.push(`【DeepSeek Harness 前序历史结构化工程记忆 Checkpoint (Compact Summary)】
-此为系统自动生成的压缩检查点，浓缩了前序 ${currentCompactionSummary.originalMessageCount} 轮复杂对话与工具调用事实。请将以下内容作为已确认的系统既成事实与背景，直接基于后续对话推进，无需重复复述该检查点：
-
-${currentCompactionSummary.summary}`);
-      }
+      // 注意：根据 DSH 官方规范，历史压缩记忆直接作为前序消息以 <compacted-summary> 标签在对话流首部注入，保持系统提示词干净纯粹，避免重复膨胀
 
       // 2. 截取上下文消息：对齐到用户提问轮次边界 (User Turn Boundary)，确保尾部始终从 user 消息开始
       let recentMessages = effectiveMessages;
@@ -1554,6 +1541,9 @@ ${currentCompactionSummary.summary}`);
       const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
       const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
+      const apiEndpoint = cleanBaseUrl.endsWith('/v1') || cleanBaseUrl.includes('/v1/')
+        ? `${cleanBaseUrl}/chat/completions`
+        : `${cleanBaseUrl}/v1/chat/completions`;
 
       // 判断是否走 Google Gemini 原生协议
       if (provider.protocol === 'google-gemini' && !cleanBaseUrl.endsWith('/openai')) {
@@ -1703,7 +1693,7 @@ ${currentCompactionSummary.summary}`);
           requestBody.tool_choice = 'auto';
         }
 
-        const endpoint = `${cleanBaseUrl}/chat/completions`;
+        const endpoint = apiEndpoint;
 
         let response: Response | null = null;
         let lastErrorMsg = '';
@@ -2055,14 +2045,30 @@ ${currentCompactionSummary.summary}`);
           cleanSynthesisHistory.push(systemMessage);
         }
 
-        // 保留前面的普通 user/assistant 消息
+        if (currentCompactionSummary?.summary) {
+          cleanSynthesisHistory.push({
+            role: "user",
+            content: `<compacted-summary>\nThis is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.
+
+${currentCompactionSummary.summary}
+</compacted-summary>`,
+          });
+          cleanSynthesisHistory.push({
+            role: "assistant",
+            content: "明白。前序历史工程 Checkpoint 与系统架构决策已完全掌握，我将直接基于后续消息继续为您推进。",
+          });
+        }
+
+        // 保留前面的普通历史消息
         for (const msg of recentMessages.slice(0, -1)) {
-          if (msg.role === 'user' || msg.role === 'assistant') {
-            cleanSynthesisHistory.push({ role: msg.role, content: msg.content });
+          if (msg.role === 'user') {
+            cleanSynthesisHistory.push({ role: 'user', content: msg.content });
+          } else if (msg.role === 'assistant' && msg.content && msg.content.trim()) {
+            cleanSynthesisHistory.push({ role: 'assistant', content: msg.content });
           }
         }
 
-        const lastUserMsg = recentMessages[recentMessages.length - 1];
+        const realLastUserMsg = [...recentMessages].reverse().find((m) => m.role === 'user');
         const toolDataContext = executedToolsLog
           .map(
             (t, idx) =>
@@ -2072,15 +2078,15 @@ ${currentCompactionSummary.summary}`);
 ${this.formatSafeToolResultString(t.data, 2000)}
 ---`
           )
-          .join('\n\n');
+          .join("\n\n");
 
         const safeToolDataContext = toolDataContext.length > 25000
-          ? toolDataContext.slice(0, 25000) + '\n... [前序工具数据已精简截断]'
+          ? toolDataContext.slice(0, 25000) + "\n... [前序工具数据已精简截断]"
           : toolDataContext;
 
         cleanSynthesisHistory.push({
           role: 'user',
-          content: `${lastUserMsg?.content || '请分析以上数据'}
+          content: `${realLastUserMsg?.content || '请分析以上数据'}
 
 ---
 系统已为您自动调取到当前租户的以下真实元数据/业务数据：
@@ -2094,7 +2100,7 @@ ${safeToolDataContext}
         for (let attempt = 0; attempt <= 1; attempt++) {
           if (controller.signal.aborted) break;
           try {
-            const resp = await fetch(`${cleanBaseUrl}/chat/completions`, {
+            const resp = await fetch(apiEndpoint, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -2117,7 +2123,8 @@ ${safeToolDataContext}
           if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
         }
 
-        if (synthesisResponse.ok && synthesisResponse.body) {
+        let synthesisStreamed = '';
+        if (synthesisResponse && synthesisResponse.ok && synthesisResponse.body) {
           const reader = synthesisResponse.body.getReader();
           const decoder = new TextDecoder('utf-8');
           let buffer = '';
@@ -2128,7 +2135,7 @@ ${safeToolDataContext}
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
+            const lines = buffer.split("\n");
             buffer = lines.pop() || '';
 
             for (const line of lines) {
@@ -2170,6 +2177,7 @@ ${safeToolDataContext}
                         sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: parts[0] });
                       }
                       if (parts[1]) {
+                        synthesisStreamed += parts[1];
                         sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: parts[1] });
                       }
                     } else {
@@ -2177,6 +2185,7 @@ ${safeToolDataContext}
                     }
                     continue;
                   }
+                  synthesisStreamed += piece;
                   sendEvent({
                     requestId,
                     sessionId,
@@ -2188,6 +2197,21 @@ ${safeToolDataContext}
               } catch {}
             }
           }
+        }
+
+        // 若大模型接口在收敛轮因网络未能生成文本，直接以已成功执行的真实数据生成保底结构化 Markdown 报告
+        if (!synthesisStreamed.trim()) {
+          const formattedReceipts = executedToolsLog
+            .map((t, idx) => `**${idx + 1}. \`${t.name}\`**: ${t.summary || '已执行完成'}`)
+            .join("\n");
+          const fallbackText = `已成功调取并执行以下 ${executedToolsLog.length} 项操作：\n\n${formattedReceipts}\n\n详细数据与元数据已就绪，请告知需要深入查看或执行哪一部分。`;
+          sendEvent({
+            requestId,
+            sessionId,
+            messageId,
+            type: 'content_delta',
+            delta: fallbackText,
+          });
         }
       }
 
