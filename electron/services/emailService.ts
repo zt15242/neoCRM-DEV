@@ -286,7 +286,10 @@ export class EmailService {
   /**
    * 针对指定账号真实连接 IMAP 拉取最近邮件
    */
-  public async syncEmailsForAccount(accountId: string): Promise<{ newCount: number; emails: EmailItem[] }> {
+  public async syncEmailsForAccount(
+    accountId: string,
+    options: { mode?: 'recent' | 'all'; maxBodyFetch?: number } = {}
+  ): Promise<{ newCount: number; totalCount: number; emails: EmailItem[] }> {
     const accounts = this.getAccounts();
     const account = accounts.find((a) => a.id === accountId);
     if (!account) {
@@ -294,8 +297,8 @@ export class EmailService {
     }
 
     if (!account.authPassword) {
-      console.log(`[Email Service] 账号 ${account.email} 未配置真实密码，跳过 IMAP 拉取`);
-      return { newCount: 0, emails: this.getEmails() };
+      console.log(`[Email Service] 账号 ${account.email} 未配置密码，跳过真实 IMAP 拉取`);
+      return { newCount: 0, totalCount: this.getEmails().length, emails: this.getEmails() };
     }
 
     const client = new ImapFlow({
@@ -311,12 +314,13 @@ export class EmailService {
     });
 
     const localEmails = this.getEmails();
-    let fetchedCount = 0;
+    let newFetchedCount = 0;
 
     try {
-      console.log(`[Email Service] 正在连接 ${account.imapHost} 真实拉取收件箱邮件...`);
+      console.log(`[Email Service] 正在连接 ${account.imapHost} 真实同步全量邮件...`);
       await client.connect();
 
+      // ================= 1. 同步收件箱 (INBOX) =================
       const lock = await client.getMailboxLock('INBOX');
       try {
         const status = client.mailbox;
@@ -324,88 +328,179 @@ export class EmailService {
         console.log(`[Email Service] 线上收件箱邮件总数: ${totalExists}`);
 
         if (totalExists > 0) {
-          // 拉取最近 25 封邮件
-          const fetchFrom = Math.max(1, totalExists - 25);
-          const range = `${fetchFrom}:${totalExists}`;
+          // 阶段 A: 全量极速扫描信头 (1:totalExists)，构建完整邮件目录
+          const envelopeMap = new Map<number, any>();
+          const fetchRange = options.mode === 'recent'
+            ? `${Math.max(1, totalExists - 60)}:${totalExists}`
+            : `1:${totalExists}`;
 
-          for await (const message of client.fetch(range, {
+          console.log(`[Email Service] 正在拉取信头清单 (范围: ${fetchRange})...`);
+          for await (const msg of client.fetch(fetchRange, {
             envelope: true,
-            source: true,
-            flags: true,
             internalDate: true,
+            flags: true,
+            uid: true,
           })) {
-            try {
-              const parsed = await simpleParser(message.source);
-              const messageId = message.envelope.messageId || `imap_${account.id}_${message.seq}`;
+            envelopeMap.set(msg.seq, msg);
+          }
 
-              // 检查本地是否已存在
-              const existingIdx = localEmails.findIndex(
-                (e) => e.id === messageId || (e.subject === parsed.subject && Math.abs(e.date - (parsed.date?.getTime() || 0)) < 2000)
-              );
+          console.log(`[Email Service] 成功检索到 ${envelopeMap.size} 封线上邮件信头`);
 
-              const senderName = parsed.from?.value?.[0]?.name || parsed.from?.value?.[0]?.address?.split('@')[0] || '未知发件人';
-              const senderEmail = parsed.from?.value?.[0]?.address || 'unknown@domain.com';
+          // 阶段 B: 从最新向更早遍历，对未缓存正文的最新邮件分批预下载正文
+          const maxBodyToFetch = options.maxBodyFetch ?? 60;
+          let bodyFetchCount = 0;
 
-              const toList = (parsed.to ? (Array.isArray(parsed.to) ? parsed.to : [parsed.to]) : [])
-                .flatMap((t: any) => t.value || [])
-                .map((t: any) => ({ name: t.name || t.address?.split('@')[0] || '收件人', email: t.address || '' }))
-                .filter((t: any) => Boolean(t.email));
+          // 倒序遍历（从最大 seq 最新的邮件开始）
+          const sortedSeqs = Array.from(envelopeMap.keys()).sort((a, b) => b - a);
 
-              const ccList = (parsed.cc ? (Array.isArray(parsed.cc) ? parsed.cc : [parsed.cc]) : [])
-                .flatMap((c: any) => c.value || [])
-                .map((c: any) => ({ name: c.name || c.address?.split('@')[0] || '抄送人', email: c.address || '' }))
-                .filter((c: any) => Boolean(c.email));
+          for (const seq of sortedSeqs) {
+            const msg = envelopeMap.get(seq);
+            const env = msg.envelope;
+            const messageId = env.messageId || `imap_${account.id}_${msg.uid || seq}`;
+            const dateTimestamp = msg.internalDate ? msg.internalDate.getTime() : (env.date ? new Date(env.date).getTime() : Date.now());
 
-              const bodyText = parsed.text || '';
-              const bodyHtml = parsed.html || undefined;
-              const snippet = (bodyText || parsed.subject || '').replace(/\s+/g, ' ').slice(0, 150);
+            const existingIdx = localEmails.findIndex(
+              (e) => e.folder === 'inbox' && (e.id === messageId || (e.subject === env.subject && Math.abs(e.date - dateTimestamp) < 3000))
+            );
 
-              const isSeen = message.flags.has('\\Seen');
-              const isFlagged = message.flags.has('\\Flagged');
+            const isSeen = msg.flags ? msg.flags.has('\\Seen') : false;
+            const isFlagged = msg.flags ? msg.flags.has('\\Flagged') : false;
 
-              const emailItem: EmailItem = {
-                id: messageId,
-                accountId: account.id,
-                folder: 'inbox',
-                from: {
-                  name: senderName,
-                  email: senderEmail,
-                },
-                to: toList.length > 0 ? toList : [{ name: account.name, email: account.email }],
-                cc: ccList.length > 0 ? ccList : undefined,
-                subject: parsed.subject || '（无主题）',
-                date: parsed.date?.getTime() || message.internalDate.getTime() || Date.now(),
-                snippet,
-                bodyText,
-                bodyHtml,
-                isRead: isSeen,
-                isStarred: isFlagged,
-                tags: ['真实邮件'],
-                attachments: parsed.attachments?.map((a, i) => ({
-                  id: `att_${messageId}_${i}`,
-                  name: a.filename || `附件_${i + 1}`,
-                  size: a.size || 0,
-                  ext: path.extname(a.filename || '').replace(/^\./, '') || 'dat',
-                })),
-              };
+            // 如果本地已有该邮件且正文非空，只更新已读/星标状态
+            if (existingIdx >= 0 && localEmails[existingIdx].bodyText) {
+              localEmails[existingIdx].isRead = isSeen;
+              localEmails[existingIdx].isStarred = isFlagged;
+              continue;
+            }
 
-              if (existingIdx >= 0) {
-                localEmails[existingIdx] = {
-                  ...localEmails[existingIdx],
-                  isRead: isSeen,
-                  isStarred: isFlagged,
-                };
-              } else {
-                localEmails.unshift(emailItem);
-                fetchedCount++;
+            // 若需要拉取正文 (最新批次或本地缺失正文的邮件)
+            let bodyText = '';
+            let bodyHtml: string | undefined = undefined;
+            let attachments: any[] = [];
+            let snippet = env.subject || '';
+
+            if (bodyFetchCount < maxBodyToFetch) {
+              try {
+                const download = await client.download(String(seq));
+                if (download && download.content) {
+                  const parsed = await simpleParser(download.content);
+                  bodyText = parsed.text || '';
+                  bodyHtml = parsed.html || undefined;
+                  snippet = (bodyText || parsed.subject || '').replace(/\s+/g, ' ').slice(0, 150);
+                  if (parsed.attachments && parsed.attachments.length > 0) {
+                    attachments = parsed.attachments.map((a, i) => ({
+                      id: `att_${messageId}_${i}`,
+                      name: a.filename || `附件_${i + 1}`,
+                      size: a.size || 0,
+                      ext: path.extname(a.filename || '').replace(/^\./, '') || 'dat',
+                    }));
+                  }
+                  bodyFetchCount++;
+                }
+              } catch (bErr: any) {
+                console.warn(`[Email Service] 拉取单封正文异常 (seq: ${seq}):`, bErr.message);
               }
-            } catch (msgErr: any) {
-              console.warn('[Email Service] 单封邮件解析异常:', msgErr.message);
+            }
+
+            const senderName = env.from?.[0]?.name || env.from?.[0]?.address?.split('@')[0] || '未知发件人';
+            const senderEmail = env.from?.[0]?.address || 'unknown@domain.com';
+
+            const toList = (env.to || []).map((t: any) => ({
+              name: t.name || t.address?.split('@')[0] || '收件人',
+              email: t.address || '',
+            })).filter((t: any) => Boolean(t.email));
+
+            const ccList = (env.cc || []).map((c: any) => ({
+              name: c.name || c.address?.split('@')[0] || '抄送人',
+              email: c.address || '',
+            })).filter((c: any) => Boolean(c.email));
+
+            const emailItem: EmailItem = {
+              id: messageId,
+              accountId: account.id,
+              folder: 'inbox',
+              from: { name: senderName, email: senderEmail },
+              to: toList.length > 0 ? toList : [{ name: account.name, email: account.email }],
+              cc: ccList.length > 0 ? ccList : undefined,
+              subject: env.subject || '（无主题）',
+              date: dateTimestamp,
+              snippet: snippet || env.subject || '（无摘要）',
+              bodyText,
+              bodyHtml,
+              isRead: isSeen,
+              isStarred: isFlagged,
+              attachments: attachments.length > 0 ? attachments : undefined,
+              tags: ['收件箱'],
+            };
+
+            if (existingIdx >= 0) {
+              localEmails[existingIdx] = {
+                ...localEmails[existingIdx],
+                ...emailItem,
+                bodyText: bodyText || localEmails[existingIdx].bodyText,
+                bodyHtml: bodyHtml || localEmails[existingIdx].bodyHtml,
+              };
+            } else {
+              localEmails.unshift(emailItem);
+              newFetchedCount++;
             }
           }
         }
       } finally {
         lock.release();
+      }
+
+      // ================= 2. 顺带拉取已发送邮件箱 (Sent Messages) =================
+      try {
+        const mailboxes = await client.list();
+        const sentBox = mailboxes.find(
+          (b) => b.specialUse === '\\Sent' || b.name.toLowerCase().includes('sent') || b.path.toLowerCase().includes('sent')
+        );
+
+        if (sentBox) {
+          const sentLock = await client.getMailboxLock(sentBox.path);
+          try {
+            const sentExists = client.mailbox ? client.mailbox.exists : 0;
+            if (sentExists > 0) {
+              const fetchFrom = Math.max(1, sentExists - 30);
+              for await (const msg of client.fetch(`${fetchFrom}:${sentExists}`, {
+                envelope: true,
+                internalDate: true,
+                flags: true,
+                uid: true,
+              })) {
+                const env = msg.envelope;
+                const messageId = env.messageId || `sent_${account.id}_${msg.uid || msg.seq}`;
+                const existingSentIdx = localEmails.findIndex((e) => e.folder === 'sent' && (e.id === messageId || (e.subject === env.subject && Math.abs(e.date - (msg.internalDate?.getTime() || 0)) < 3000)));
+                if (existingSentIdx < 0) {
+                  const toList = (env.to || []).map((t: any) => ({
+                    name: t.name || t.address?.split('@')[0] || '收件人',
+                    email: t.address || '',
+                  }));
+                  const sentSenderName = account.name || account.email.split('@')[0];
+                  localEmails.push({
+                    id: messageId,
+                    accountId: account.id,
+                    folder: 'sent',
+                    from: { name: sentSenderName, email: account.email },
+                    to: toList.length > 0 ? toList : [{ name: '收件人', email: 'recipient@domain.com' }],
+                    subject: env.subject || '（无主题）',
+                    date: msg.internalDate ? msg.internalDate.getTime() : Date.now(),
+                    snippet: env.subject || '已发送邮件',
+                    bodyText: env.subject || '',
+                    isRead: true,
+                    isStarred: false,
+                    tags: ['已发送'],
+                  });
+                }
+              }
+            }
+          } finally {
+            sentLock.release();
+          }
+        }
+      } catch (sentErr: any) {
+        console.warn('[Email Service] 同步发件箱提示:', sentErr.message);
       }
 
       await client.logout();
@@ -414,7 +509,7 @@ export class EmailService {
       account.lastError = undefined;
       this.saveAccounts(accounts);
       this.saveEmails(localEmails);
-      console.log(`[Email Service] IMAP 同步完毕，成功解析入库 ${fetchedCount} 封真实邮件`);
+      console.log(`[Email Service] 同步结束: 新收 ${newFetchedCount} 封邮件，本地共计 ${localEmails.length} 封`);
     } catch (err: any) {
       account.authStatus = 'auth_failed';
       account.lastError = err.message;
@@ -422,7 +517,90 @@ export class EmailService {
       throw err;
     }
 
-    return { newCount: fetchedCount, emails: localEmails };
+    return {
+      newCount: newFetchedCount,
+      totalCount: localEmails.length,
+      emails: localEmails,
+    };
+  }
+
+  /**
+   * 按需实时拉取单封邮件的正文 (针对列表中正文未被预取的历史邮件，点击时200ms毫秒级无感拉取)
+   */
+  public async fetchEmailBody(accountId: string, emailId: string): Promise<EmailItem | null> {
+    const emails = this.getEmails();
+    const target = emails.find((e) => e.id === emailId);
+    if (!target) return null;
+
+    if (target.bodyText && target.bodyText.trim()) {
+      return target;
+    }
+
+    const accounts = this.getAccounts();
+    const account = accounts.find((a) => a.id === (accountId || target.accountId));
+    if (!account || !account.authPassword) {
+      return target;
+    }
+
+    const client = new ImapFlow({
+      host: account.imapHost,
+      port: account.imapPort,
+      secure: account.imapSsl,
+      auth: {
+        user: account.authUsername || account.email,
+        pass: account.authPassword,
+      },
+      logger: false,
+      emitLogs: false,
+    });
+
+    try {
+      await client.connect();
+      const targetMailbox = target.folder === 'sent' ? 'Sent Messages' : 'INBOX';
+      const lock = await client.getMailboxLock(targetMailbox);
+      try {
+        let seqToDownload: number | null = null;
+        if (target.id.startsWith('imap_') || target.id.startsWith('sent_')) {
+          const parts = target.id.split('_');
+          const lastNum = Number(parts[parts.length - 1]);
+          if (!isNaN(lastNum)) seqToDownload = lastNum;
+        }
+
+        if (!seqToDownload) {
+          const cleanSubject = target.subject.replace(/['"\\]/g, '').slice(0, 30);
+          const searchResults = await client.search({ subject: cleanSubject });
+          if (searchResults && searchResults.length > 0) {
+            seqToDownload = searchResults[searchResults.length - 1];
+          }
+        }
+
+        if (seqToDownload) {
+          const download = await client.download(String(seqToDownload));
+          if (download && download.content) {
+            const parsed = await simpleParser(download.content);
+            target.bodyText = parsed.text || target.subject;
+            target.bodyHtml = parsed.html || undefined;
+            target.snippet = (target.bodyText || '').replace(/\s+/g, ' ').slice(0, 150);
+            if (parsed.attachments && parsed.attachments.length > 0) {
+              target.attachments = parsed.attachments.map((a, i) => ({
+                id: `att_${target.id}_${i}`,
+                name: a.filename || `附件_${i + 1}`,
+                size: a.size || 0,
+                ext: path.extname(a.filename || '').replace(/^\./, '') || 'dat',
+              }));
+            }
+            this.saveEmails(emails);
+          }
+        }
+      } finally {
+        lock.release();
+      }
+      await client.logout();
+    } catch (e: any) {
+      console.warn(`[Email Service] 实时拉取邮件正文异常: ${e.message}`);
+    }
+
+    return target;
   }
 
   public async syncEmails(): Promise<{ newCount: number; emails: EmailItem[] }> {

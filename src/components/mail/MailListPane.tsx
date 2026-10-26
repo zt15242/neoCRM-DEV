@@ -104,9 +104,19 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
             <span className="text-[11px] text-slate-400 font-mono">({filteredEmails.length})</span>
           </div>
 
-          {/* 筛选切换胶囊 */}
+          {/* 筛选切换胶囊 (支持显式全部 / 未读 / 紧急 / 已分析) */}
           <div className="flex items-center space-x-1 text-[11px]">
             <button
+              type="button"
+              onClick={() => setFilterType('all')}
+              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+                filterType === 'all' ? 'bg-slate-200 text-slate-900 font-bold' : 'text-slate-500 hover:bg-slate-100'
+              }`}
+            >
+              全部
+            </button>
+            <button
+              type="button"
               onClick={() => setFilterType(filterType === 'unread' ? 'all' : 'unread')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'unread' ? 'bg-sky-100 text-sky-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -115,6 +125,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
               未读
             </button>
             <button
+              type="button"
               onClick={() => setFilterType(filterType === 'urgent' ? 'all' : 'urgent')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'urgent' ? 'bg-rose-100 text-rose-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -123,6 +134,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
               紧急
             </button>
             <button
+              type="button"
               onClick={() => setFilterType(filterType === 'analyzed' ? 'all' : 'analyzed')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'analyzed' ? 'bg-indigo-100 text-indigo-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -191,11 +203,15 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center space-x-1.5 truncate pr-2">
                     {/* 未读状态蓝点 */}
-                    {!email.isRead && (
+                    {!email.isRead && email.folder !== 'sent' && (
                       <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0 shadow-2xs" />
                     )}
                     <span className={`truncate text-xs ${!email.isRead ? 'font-bold text-slate-900' : 'text-slate-700'}`}>
-                      {email.from.name}
+                      {email.folder === 'sent' || currentFolder === 'sent'
+                        ? `收件人: ${(email.to && email.to.length > 0 ? email.to.map((t) => t.name || t.email).join(', ') : '收件人')}`
+                        : email.folder === 'drafts' || currentFolder === 'drafts'
+                        ? `草稿至: ${(email.to && email.to.length > 0 ? email.to.map((t) => t.name || t.email).join(', ') : '未指定收件人')}`
+                        : email.from.name}
                     </span>
                   </div>
 
@@ -243,14 +259,15 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
                         <span className="truncate">{email.analysis?.intent || '已AI深度分析'}</span>
                       </span>
                     ) : (
-                      email.tags?.slice(0, 2).map((t, i) => (
-                        <span
-                          key={i}
-                          className="px-1.5 py-0.2 rounded text-[10px] bg-slate-200/70 text-slate-600 truncate"
-                        >
-                          {t}
-                        </span>
-                      ))
+                      <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                        email.folder === 'sent'
+                          ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                          : email.folder === 'drafts'
+                          ? 'bg-slate-200 text-slate-700'
+                          : 'bg-slate-200/70 text-slate-600'
+                      }`}>
+                        {email.folder === 'sent' ? '已发送' : email.folder === 'drafts' ? '草稿' : (email.tags?.[0] || '收件箱')}
+                      </span>
                     )}
                   </div>
 

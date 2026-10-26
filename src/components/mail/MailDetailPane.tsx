@@ -17,13 +17,15 @@ import {
   Calendar,
   Wand2,
   CheckCircle2,
-  Printer
+  Printer,
+  Loader2
 } from 'lucide-react';
 import { EmailItem } from '../../../shared/mailTypes';
 
 interface MailDetailPaneProps {
   email: EmailItem | null;
-  onOpenReplyCompose: (initialData?: { to: string; subject: string; body: string }) => void;
+  currentUserEmail?: string;
+  onOpenReplyCompose: (initialData?: { to?: string; cc?: string; subject?: string; body?: string }) => void;
   onToggleStar: (emailId: string) => void;
   onDeleteEmail: (emailId: string) => void;
   onTriggerAiAnalysis: () => void;
@@ -33,6 +35,7 @@ interface MailDetailPaneProps {
 
 export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
   email,
+  currentUserEmail,
   onOpenReplyCompose,
   onToggleStar,
   onDeleteEmail,
@@ -40,6 +43,66 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
   onOpenPersonaDrawer,
   showToast,
 }) => {
+  // 计算单人回复数据
+  const getSingleReplyData = () => {
+    if (!email) return { to: '', subject: '', body: '' };
+    const quoteHeader = `\n\n------------------ 原始邮件 ------------------\n发件人: "${email.from.name}" <${email.from.email}>\n发送时间: ${new Date(email.date).toLocaleString()}\n收件人: ${(email.to || []).map((t) => t.email).join('; ')}\n主题: ${email.subject}\n\n${email.bodyText || ''}`;
+    return {
+      to: email.from.email,
+      subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
+      body: quoteHeader,
+    };
+  };
+
+  // 严格根据标准计算全部回复 (Reply All) 的收件人与全部抄送人
+  const getReplyAllData = () => {
+    if (!email) return { to: '', cc: '', subject: '', body: '' };
+
+    const myEmail = (currentUserEmail || '').toLowerCase();
+    const senderEmail = email.from.email.toLowerCase();
+
+    // 1. 收件人：原发件人
+    const toEmail = email.from.email;
+
+    // 2. 抄送人：原邮件的 to 列表中除了自己和发件人以外的所有人，加原邮件的 cc 列表中除了自己和发件人以外的所有人
+    const candidateEmails = new Set<string>();
+
+    (email.to || []).forEach((t) => {
+      const em = (t.email || '').trim().toLowerCase();
+      if (em && em !== myEmail && em !== senderEmail) {
+        candidateEmails.add(t.email.trim());
+      }
+    });
+
+    (email.cc || []).forEach((c) => {
+      const em = (c.email || '').trim().toLowerCase();
+      if (em && em !== myEmail && em !== senderEmail) {
+        candidateEmails.add(c.email.trim());
+      }
+    });
+
+    const ccString = Array.from(candidateEmails).join('; ');
+
+    const quoteHeader = `\n\n------------------ 原始邮件 ------------------\n发件人: "${email.from.name}" <${email.from.email}>\n发送时间: ${new Date(email.date).toLocaleString()}\n收件人: ${(email.to || []).map((t) => t.email).join('; ')}${email.cc && email.cc.length > 0 ? `\n抄送: ${email.cc.map((c) => c.email).join('; ')}` : ''}\n主题: ${email.subject}\n\n${email.bodyText || ''}`;
+
+    return {
+      to: toEmail,
+      cc: ccString,
+      subject: email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject}`,
+      body: quoteHeader,
+    };
+  };
+
+  // 转发数据
+  const getForwardData = () => {
+    if (!email) return { to: '', subject: '', body: '' };
+    const forwardHeader = `\n\n---------- 转发邮件信息 ----------\n发件人: "${email.from.name}" <${email.from.email}>\n发送时间: ${new Date(email.date).toLocaleString()}\n主题: ${email.subject}\n收件人: ${(email.to || []).map((t) => t.email).join('; ')}\n\n${email.bodyText || ''}`;
+    return {
+      to: '',
+      subject: email.subject.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject}`,
+      body: forwardHeader,
+    };
+  };
   const [quickReplyText, setQuickReplyText] = useState('');
   const [sendingQuickReply, setSendingQuickReply] = useState(false);
 
@@ -83,40 +146,31 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
           {/* 回复 */}
           <button
             type="button"
-            onClick={() => onOpenReplyCompose({
-              to: email.from.email,
-              subject: `Re: ${email.subject}`,
-              body: `\n\n------------------ 原始邮件 ------------------\n发件人: "${email.from.name}" <${email.from.email}>\n发送时间: ${new Date(email.date).toLocaleString()}\n收件人: ${email.to.map((t) => t.email).join('; ')}\n主题: ${email.subject}\n\n${email.bodyText || ''}`,
-            })}
+            onClick={() => onOpenReplyCompose(getSingleReplyData())}
             className="px-2.5 py-1 rounded-lg hover:bg-slate-200/80 text-slate-700 font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+            title="回复发件人"
           >
             <Reply className="w-3.5 h-3.5 text-sky-600" />
             <span>回复</span>
           </button>
 
-          {/* 全部回复 */}
+          {/* 全部回复 (带全量抄送人与干系人) */}
           <button
             type="button"
-            onClick={() => onOpenReplyCompose({
-              to: email.from.email,
-              subject: `Re: ${email.subject}`,
-              body: `\n\n------------------ 原始邮件 ------------------\n发件人: "${email.from.name}" <${email.from.email}>\n主题: ${email.subject}\n\n${email.bodyText || ''}`,
-            })}
-            className="px-2.5 py-1 rounded-lg hover:bg-slate-200/80 text-slate-700 font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+            onClick={() => onOpenReplyCompose(getReplyAllData())}
+            className="px-2.5 py-1 rounded-lg hover:bg-blue-100/60 text-blue-700 font-medium flex items-center space-x-1 cursor-pointer transition-colors border border-blue-200/80 bg-blue-50/50"
+            title="回复发件人并抄送邮件所有其他收件人与抄送人"
           >
             <ReplyAll className="w-3.5 h-3.5 text-blue-600" />
-            <span>全部回复</span>
+            <span className="font-semibold">全部回复</span>
           </button>
 
           {/* 转发 */}
           <button
             type="button"
-            onClick={() => onOpenReplyCompose({
-              to: '',
-              subject: `Fwd: ${email.subject}`,
-              body: `\n\n---------- 转发邮件信息 ----------\n发件人: "${email.from.name}" <${email.from.email}>\n发送时间: ${new Date(email.date).toLocaleString()}\n主题: ${email.subject}\n\n${email.bodyText || ''}`,
-            })}
+            onClick={() => onOpenReplyCompose(getForwardData())}
             className="px-2.5 py-1 rounded-lg hover:bg-slate-200/80 text-slate-700 font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+            title="转发这封邮件"
           >
             <Forward className="w-3.5 h-3.5 text-slate-600" />
             <span>转发</span>
@@ -181,18 +235,28 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
             </h1>
           </div>
 
-          {email.tags && email.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 pt-1">
-              {email.tags.map((t, idx) => (
-                <span
-                  key={idx}
-                  className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200"
-                >
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold font-mono border ${
+              email.folder === 'sent'
+                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                : email.folder === 'drafts'
+                ? 'bg-slate-100 text-slate-700 border-slate-300'
+                : email.folder === 'trash'
+                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                : 'bg-sky-50 text-sky-700 border-sky-200'
+            }`}>
+              {email.folder === 'sent' ? '📤 已发送邮件' : email.folder === 'drafts' ? '📝 草稿箱' : email.folder === 'trash' ? '🗑️ 已删除' : '📥 收件箱'}
+            </span>
+
+            {email.tags && email.tags.filter(t => t !== '收件箱' && t !== '已发送').map((t, idx) => (
+              <span
+                key={idx}
+                className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200"
+              >
+                {t}
+              </span>
+            ))}
+          </div>
         </div>
 
         {/* 发件人详情信息卡 (Foxmail 标志性 Sender Header) */}
@@ -213,10 +277,17 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
 
             <div className="min-w-0 space-y-0.5">
               <div className="flex items-center space-x-2">
-                <span className="font-bold text-slate-900 text-xs truncate">{email.from.name}</span>
+                <span className="font-bold text-slate-900 text-xs truncate">
+                  {email.folder === 'sent' ? `我 (${email.from.name || '发件人'})` : email.from.name}
+                </span>
                 {email.from.title && (
                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-100 text-sky-800 font-medium">
                     {email.from.title}
+                  </span>
+                )}
+                {email.folder === 'sent' && (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 font-semibold font-mono">
+                    已发出的邮件
                   </span>
                 )}
               </div>
@@ -226,10 +297,10 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
                 {email.from.company && <span>· {email.from.company}</span>}
               </div>
 
-              <div className="text-[10px] text-slate-400">
-                收件人: {email.to.map((t) => `${t.name} <${t.email}>`).join('; ')}
+              <div className={`text-[11px] ${email.folder === 'sent' ? 'text-slate-800 font-semibold' : 'text-slate-500'}`}>
+                收件人: {email.to && email.to.length > 0 ? email.to.map((t) => `${t.name} <${t.email}>`).join('; ') : '未指定收件人'}
                 {email.cc && email.cc.length > 0 && (
-                  <span className="ml-2">抄送: {email.cc.map((c) => c.name).join('; ')}</span>
+                  <span className="ml-2 font-normal text-slate-400">抄送: {email.cc.map((c) => c.name).join('; ')}</span>
                 )}
               </div>
             </div>
@@ -292,9 +363,15 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
               className="prose prose-sm max-w-none text-slate-800"
               dangerouslySetInnerHTML={{ __html: email.bodyHtml }}
             />
-          ) : (
+          ) : email.bodyText ? (
             <div className="whitespace-pre-wrap leading-relaxed space-y-2">
               {email.bodyText}
+            </div>
+          ) : (
+            <div className="py-12 text-center text-slate-400 space-y-2 bg-slate-50/70 rounded-2xl border border-slate-200">
+              <Loader2 className="w-5 h-5 text-sky-500 animate-spin mx-auto" />
+              <p className="text-xs font-semibold text-slate-700">正在从邮箱服务器获取该邮件完整正文...</p>
+              <p className="text-[10px] text-slate-400 font-mono">历史邮件正文按需毫秒级加载与本地缓存</p>
             </div>
           )}
         </div>
@@ -306,11 +383,13 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
           <span>快速回复发件人：<b>{email.from.name}</b></span>
           <button
             type="button"
-            onClick={() => onOpenReplyCompose({
-              to: email.from.email,
-              subject: `Re: ${email.subject}`,
-              body: '',
-            })}
+            onClick={() => {
+              const base = getSingleReplyData();
+              if (quickReplyText.trim()) {
+                base.body = quickReplyText.trim() + base.body;
+              }
+              onOpenReplyCompose(base);
+            }}
             className="text-sky-600 hover:underline flex items-center space-x-1 cursor-pointer font-medium"
           >
             <Wand2 className="w-3 h-3" />

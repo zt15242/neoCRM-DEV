@@ -822,6 +822,7 @@ ipcMain.handle('mail:testAndSaveAccount', async (_, payload) => emailService.tes
 ipcMain.handle('mail:deleteAccount', async (_, accountId: string) => emailService.deleteAccount(accountId));
 ipcMain.handle('mail:setDefaultAccount', async (_, accountId: string) => emailService.setDefaultAccount(accountId));
 ipcMain.handle('mail:syncEmailsForAccount', async (_, accountId: string) => emailService.syncEmailsForAccount(accountId));
+ipcMain.handle('mail:fetchEmailBody', async (_, accountId: string, emailId: string) => emailService.fetchEmailBody(accountId, emailId));
 ipcMain.handle('mail:saveAccounts', async (_, accounts) => emailService.saveAccounts(accounts));
 ipcMain.handle('mail:getEmails', async () => emailService.getEmails());
 ipcMain.handle('mail:markAsRead', async (_, emailId: string, isRead?: boolean) => emailService.markAsRead(emailId, isRead));

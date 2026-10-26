@@ -257,7 +257,8 @@ declare global {
       mailTestAndSaveAccount?: (payload: CreateEmailAccountPayload) => Promise<{ success: boolean; account?: EmailAccount; error?: string }>;
       mailDeleteAccount?: (accountId: string) => Promise<boolean>;
       mailSetDefaultAccount?: (accountId: string) => Promise<boolean>;
-      mailSyncEmailsForAccount?: (accountId: string) => Promise<{ newCount: number; emails: EmailItem[] }>;
+      mailSyncEmailsForAccount?: (accountId: string, options?: { mode?: 'recent' | 'all'; maxBodyFetch?: number }) => Promise<{ newCount: number; totalCount: number; emails: EmailItem[] }>;
+      mailFetchEmailBody?: (accountId: string, emailId: string) => Promise<EmailItem | null>;
       mailSaveAccounts?: (accounts: EmailAccount[]) => Promise<EmailAccount[]>;
       mailGetEmails?: () => Promise<EmailItem[]>;
       mailMarkAsRead?: (emailId: string, isRead?: boolean) => Promise<EmailItem | null>;
