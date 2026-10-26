@@ -1,4 +1,12 @@
 import { 
+  EmailItem, 
+  EmailAccount, 
+  ContactPersona, 
+  EmailAnalysisResult, 
+  GenerateReplyOptions, 
+  GeneratedReplyResult 
+} from '../../shared/mailTypes';
+import { 
   NeoEnvironment, 
   SessionState, 
   AccountRecord, 
@@ -243,6 +251,27 @@ declare global {
       loggerClearLogs?: () => Promise<boolean>;
       loggerExportLog?: (date?: string) => Promise<{ success: boolean; filePath?: string; message?: string }>;
       loggerLog?: (level: string, module: string, message: string, details?: any) => Promise<boolean>;
+
+      // Foxmail 风格智能邮件管理与人物画像 (Mail & Persona Copilot)
+      mailGetAccounts?: () => Promise<EmailAccount[]>;
+      mailTestAndSaveAccount?: (payload: CreateEmailAccountPayload) => Promise<{ success: boolean; account?: EmailAccount; error?: string }>;
+      mailDeleteAccount?: (accountId: string) => Promise<boolean>;
+      mailSetDefaultAccount?: (accountId: string) => Promise<boolean>;
+      mailSyncEmailsForAccount?: (accountId: string) => Promise<{ newCount: number; emails: EmailItem[] }>;
+      mailSaveAccounts?: (accounts: EmailAccount[]) => Promise<EmailAccount[]>;
+      mailGetEmails?: () => Promise<EmailItem[]>;
+      mailMarkAsRead?: (emailId: string, isRead?: boolean) => Promise<EmailItem | null>;
+      mailToggleStar?: (emailId: string) => Promise<EmailItem | null>;
+      mailDeleteEmail?: (emailId: string) => Promise<boolean>;
+      mailSendEmail?: (payload: { accountId?: string; to: string; subject: string; content: string; cc?: string; attachments?: any[] }) => Promise<EmailItem>;
+      mailSaveDraft?: (payload: { id?: string; accountId?: string; to: string; subject: string; content: string; cc?: string }) => Promise<EmailItem>;
+      mailSyncEmails?: () => Promise<{ newCount: number; emails: EmailItem[] }>;
+      mailAnalyzeEmail?: (emailId: string) => Promise<EmailAnalysisResult>;
+      mailGenerateReply?: (options: GenerateReplyOptions) => Promise<GeneratedReplyResult>;
+      mailGetPersonas?: () => Promise<ContactPersona[]>;
+      mailAnalyzePersonaByEmail?: (email: string, hints?: string) => Promise<ContactPersona>;
+      mailSavePersonaNotes?: (email: string, notes: string) => Promise<ContactPersona | null>;
+
     };
   }
 }

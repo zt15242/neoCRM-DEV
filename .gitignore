@@ -24,3 +24,6 @@ Thumbs.db
 
 # Local license generator (admin only)
 scripts/generate-license.mjs
+
+# Local email & session caches
+neocrm_*.json

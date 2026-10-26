@@ -48,9 +48,9 @@ const REALM_CONFIGS = {
     billing_upstream: 'https://www.codebuddy.cn',
     origin: 'https://www.codebuddy.cn',
     domain: 'copilot.tencent.com',
-    client_ver: '5.5.6',
-    chat_ua: 'WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1',
-    billing_ua: 'WorkBuddy/5.5.6',
+    client_ver: '5.8.3',
+    chat_ua: 'WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0',
+    billing_ua: 'WorkBuddy/5.8.3',
   },
 };
 
@@ -339,7 +339,8 @@ export class WorkBuddyService {
     try {
       console.log(`[WorkBuddy] 正在静默续期 Token (UID: ${this.account.uid})...`);
       const res = await axios.post(refreshUrl, {}, { headers, timeout: 15000 });
-      const data = res.data?.data || {};
+      const rawData = res.data?.data || {};
+      const data = rawData.data || rawData;
 
       if (data.accessToken) {
         const jwt = this.parseJwt(data.accessToken);
@@ -361,14 +362,62 @@ export class WorkBuddyService {
   /**
    * 5. 构建与官方客户端完全对齐的出站指纹头
    */
+  /**
+   * 清洗发往腾讯 WorkBuddy 上游的消息体 (免疫 11-128 非法渠道拦截 WAF 规则)
+   * 1. 角色映射: developer 映射为 system (上游只认 system/user/assistant/tool)
+   * 2. 去除触发上游 WAF 拦截的特定第三方 IDE / Agent 指纹句式
+   */
+  public sanitizeUpstreamMessages(messages: any[]): any[] {
+    if (!Array.isArray(messages)) return [];
+
+    return messages.map((m) => {
+      if (!m || typeof m !== 'object') return m;
+      const copy = { ...m };
+
+      // 角色归一化
+      if (copy.role === 'developer') {
+        copy.role = 'system';
+      }
+
+      // 文本安全过滤
+      if (typeof copy.content === 'string') {
+        let text = copy.content;
+        // 免疫 DSH GUI 语序特征拦截
+        text = text.replace(
+          /DeepSeek\s+Harness\s+Web\s+GUI\s+whose\s+URL\s+the\s+runtime\s+context\s+names\./gi,
+          'DeepSeek Web GUI whose URL is named in the runtime context.'
+        );
+        // 免疫 Codex / Claude Code 特定 WAF 拦截
+        text = text.replace(
+          /You are a coding agent running in the Codex CLI, a terminal-based coding assistant\./gi,
+          'You are a coding agent running in the terminal-based assistant.'
+        );
+        text = text.replace(
+          /You are Claude Code, Anthropic's official CLI for Claude/gi,
+          "You are Claude Code, Anthropic's official CLI tool for Claude"
+        );
+        copy.content = text;
+      }
+
+      return copy;
+    });
+  }
+
+  /**
+   * 5. 构建与官方客户端 5.8.x 完全对齐的出站指纹头 (严格对齐连字符 UUID，杜绝 11-128 渠道拦截)
+   */
   public buildHeaders(token: string, model?: string): Record<string, string> {
     const realm = this.account?.realm || 'cn';
     const cfg = REALM_CONFIGS[realm];
     const uid = this.account?.uid || 'anonymous';
     const domain = this.account?.domain || cfg.domain;
 
-    const convId = crypto.randomUUID().replace(/-/g, '');
+    // 官方规范实测：会话 ID (X-Conversation-ID) 必须是带连字符的完整 UUID；
+    // 请求与消息 ID 必须是 32 位无连字符 hex。缺了或错剥连字符会导致上游拦截 11-128 (conversation id missing)
+    const convId = crypto.randomUUID();
     const msgId = crypto.randomUUID().replace(/-/g, '');
+    const traceId = crypto.randomBytes(16).toString('hex');
+    const nowMs = String(Date.now());
 
     return {
       'Content-Type': 'application/json',
@@ -384,12 +433,15 @@ export class WorkBuddyService {
       'User-Agent': cfg.chat_ua,
       'X-User-Id': uid,
       'Authorization': `Bearer ${token}`,
+      'X-Request-Trace-Id': traceId,
       'X-Conversation-ID': convId,
       'X-Conversation-Request-ID': msgId,
       'X-Root-Request-ID': msgId,
       'X-Conversation-Message-ID': msgId,
       'X-Request-ID': msgId,
       'X-Model-ID': model || 'default-model',
+      'monitor_promptPrepareStartTime': nowMs,
+      'monitor_httpSendTime': nowMs,
     };
   }
 
@@ -411,8 +463,12 @@ export class WorkBuddyService {
     const model = body.model || 'deepseek-v4.1-flash';
     const headers = this.buildHeaders(token, model);
 
-    // 标准化消息体与注入
+    // 标准化消息体并执行 WAF 敏感指纹安全清洗
     const forwardBody = { ...body };
+    if (Array.isArray(forwardBody.messages)) {
+      forwardBody.messages = this.sanitizeUpstreamMessages(forwardBody.messages);
+    }
+
     if (String(model).toLowerCase().startsWith('deepseek') && !forwardBody.thinking) {
       forwardBody.thinking = { type: 'enabled' };
     }

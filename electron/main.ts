@@ -20,6 +20,7 @@ import { NexService } from './services/nexService';
 import { WorkBuddyService } from './services/workbuddyService';
 import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
+import { EmailService } from './services/emailService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 
@@ -62,6 +63,8 @@ const workflowService = new WorkflowService(metadataService);
 const printTemplateService = new PrintTemplateService(metadataService);
 const nexService = new NexService(metadataService);
 const workbuddyService = new WorkBuddyService();
+aiService.setWorkBuddyService(workbuddyService);
+const emailService = new EmailService(aiService);
 const projectService = new ProjectService();
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
@@ -812,3 +815,23 @@ ipcMain.handle("jobs:kill", async (_, params: { job_id: string; reason?: string 
 ipcMain.handle("terminal:execute", async (_, params: { command: string; workdir?: string; timeoutMs?: number }) => {
   return dshToolService.executeBash(params);
 });
+
+// ================= Foxmail 风格智能邮件管理与人物画像 (Mail & Persona Copilot) =================
+ipcMain.handle('mail:getAccounts', async () => emailService.getAccounts());
+ipcMain.handle('mail:testAndSaveAccount', async (_, payload) => emailService.testAndSaveAccount(payload));
+ipcMain.handle('mail:deleteAccount', async (_, accountId: string) => emailService.deleteAccount(accountId));
+ipcMain.handle('mail:setDefaultAccount', async (_, accountId: string) => emailService.setDefaultAccount(accountId));
+ipcMain.handle('mail:syncEmailsForAccount', async (_, accountId: string) => emailService.syncEmailsForAccount(accountId));
+ipcMain.handle('mail:saveAccounts', async (_, accounts) => emailService.saveAccounts(accounts));
+ipcMain.handle('mail:getEmails', async () => emailService.getEmails());
+ipcMain.handle('mail:markAsRead', async (_, emailId: string, isRead?: boolean) => emailService.markAsRead(emailId, isRead));
+ipcMain.handle('mail:toggleStar', async (_, emailId: string) => emailService.toggleStar(emailId));
+ipcMain.handle('mail:deleteEmail', async (_, emailId: string) => emailService.deleteEmail(emailId));
+ipcMain.handle('mail:sendEmail', async (_, payload) => emailService.sendEmail(payload));
+ipcMain.handle('mail:saveDraft', async (_, payload) => emailService.saveDraft(payload));
+ipcMain.handle('mail:syncEmails', async () => emailService.syncEmails());
+ipcMain.handle('mail:analyzeEmail', async (_, emailId: string) => emailService.analyzeEmail(emailId));
+ipcMain.handle('mail:generateReply', async (_, options) => emailService.generateEmailReply(options));
+ipcMain.handle('mail:getPersonas', async () => emailService.getPersonas());
+ipcMain.handle('mail:analyzePersonaByEmail', async (_, email: string, hints?: string) => emailService.analyzePersonaByEmail(email, hints));
+ipcMain.handle('mail:savePersonaNotes', async (_, email: string, notes: string) => emailService.savePersonaNotes(email, notes));

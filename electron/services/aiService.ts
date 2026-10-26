@@ -25,6 +25,7 @@ import { NexService } from "./nexService";
 import { DshToolService } from "./dshToolService";
 import { licenseService } from "../security/licenseService";
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import path from 'node:path';
 import { app } from 'electron';
 import axios from 'axios';
@@ -73,6 +74,11 @@ export class AiService {
   private nexService = new NexService(this.metadataService);
   private dshToolService = new DshToolService();
   private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
+
+  private workbuddyService?: any;
+  public setWorkBuddyService(service: any) {
+    this.workbuddyService = service;
+  }
 
   constructor(
     private sessionStore: SessionStore,
@@ -1720,6 +1726,20 @@ ${mcpInfoText}
           requestBody.messages = this.pruneConversationHistory(conversationHistory, isRetry);
 
           try {
+            if (provider.id === 'workbuddy' && this.workbuddyService) {
+              const wbAcc = this.workbuddyService.getAccount();
+              if (!wbAcc || !wbAcc.accessToken) {
+                throw new Error('WorkBuddy 尚未扫码授权，请在【系统设置 -> 模型供应商 -> WorkBuddy】中点击扫码登录后使用。');
+              }
+              const streamNode = await this.workbuddyService.dispatchChat(requestBody, { signal: controller.signal });
+              response = {
+                ok: true,
+                status: 200,
+                body: Readable.toWeb(streamNode),
+              } as any;
+              break;
+            }
+
             const resp = await fetch(endpoint, {
               method: 'POST',
               headers: {
@@ -2100,19 +2120,31 @@ ${safeToolDataContext}
         for (let attempt = 0; attempt <= 1; attempt++) {
           if (controller.signal.aborted) break;
           try {
+            const synthBody = {
+              model: modelId,
+              messages: cleanSynthesisHistory,
+              temperature: config.settings.temperature ?? 0.3,
+              max_tokens: config.settings.maxTokens || 4096,
+              stream: true,
+            };
+
+            if (provider.id === 'workbuddy' && this.workbuddyService) {
+              const streamNode = await this.workbuddyService.dispatchChat(synthBody, { signal: controller.signal });
+              synthesisResponse = {
+                ok: true,
+                status: 200,
+                body: Readable.toWeb(streamNode),
+              } as any;
+              break;
+            }
+
             const resp = await fetch(apiEndpoint, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
                 ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
               },
-              body: JSON.stringify({
-                model: modelId,
-                messages: cleanSynthesisHistory,
-                temperature: config.settings.temperature ?? 0.3,
-                max_tokens: config.settings.maxTokens || 4096,
-                stream: true,
-              }),
+              body: JSON.stringify(synthBody),
               signal: controller.signal,
             });
             if (resp.ok) {

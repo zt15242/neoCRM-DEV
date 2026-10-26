@@ -41,10 +41,10 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame, BarChart3 } from 'lucide-react';
+import { Mail, Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame, BarChart3 } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
-export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai';
+export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'mail';
 
 interface AppSidebarProps {
   platform: string;
@@ -356,6 +356,24 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         >
           <SquarePen className="w-4 h-4 text-slate-600" />
           <span>New chat</span>
+        </button>
+
+        {/* Foxmail 智能邮件与人物画像 */}
+        <button
+          onClick={() => onSelectTab('mail')}
+          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
+            activeTab === 'mail'
+              ? 'bg-slate-200 text-slate-900 font-bold'
+              : 'text-slate-700 hover:bg-slate-200/60 hover:text-slate-900'
+          }`}
+        >
+          <div className="flex items-center space-x-2.5">
+            <Mail className="w-4 h-4 text-sky-600" />
+            <span>智能邮件 (Foxmail)</span>
+          </div>
+          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 border border-sky-200 font-bold">
+            AI画像
+          </span>
         </button>
 
         {/* 控制台 & 会话 */}

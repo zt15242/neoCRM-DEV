@@ -243,16 +243,20 @@ export const WorkBuddyAuthModal: React.FC<WorkBuddyAuthModalProps> = ({
                 </div>
 
                 {/* 状态与指导说明 */}
-                <div className="text-center space-y-1">
-                  <div className="flex items-center justify-center space-x-1.5 text-xs font-medium text-slate-700">
+                <div className="text-center space-y-1.5 w-full">
+                  <div className="flex items-center justify-center space-x-1.5 text-xs font-semibold text-slate-700">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     <span>{pollStatus}</span>
                   </div>
-                  <p className="text-[11px] text-slate-400">
-                    {realm === 'cn'
-                      ? '支持使用微信扫一扫或腾讯微伴客户端扫码'
-                      : '支持使用手机扫描二维码或浏览器快捷授权'}
-                  </p>
+                  
+                  {/* 温馨排错指引：解释微信内置浏览器为何会报登录失败 */}
+                  <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200/80 text-[11px] text-amber-800 text-left leading-relaxed">
+                    <div className="font-bold flex items-center space-x-1 mb-0.5 text-amber-900">
+                      <span>💡 扫码排错提示</span>
+                    </div>
+                    微信扫码若提示<b>「登录失败，请返回客户端重新发起」</b>，系微信内置浏览器隔离拦截了腾讯云跨域 Cookie 导致。
+                    <b>强烈推荐直接点击下方按钮</b>，使用电脑默认浏览器完成一键授权！
+                  </div>
                 </div>
               </div>
             ) : (
@@ -263,28 +267,34 @@ export const WorkBuddyAuthModal: React.FC<WorkBuddyAuthModalProps> = ({
             )}
           </div>
 
-          {/* 辅助操作栏 */}
-          <div className="flex items-center justify-between text-xs pt-1">
-            <button
-              type="button"
-              onClick={startNewLogin}
-              disabled={loading}
-              className="text-slate-600 hover:text-slate-900 font-medium flex items-center space-x-1 p-1 rounded transition-colors cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span>刷新二维码</span>
-            </button>
-
+          {/* 核心操作按钮：醒目的电脑浏览器一键授权 */}
+          <div className="space-y-2 pt-1">
             {authUrl && (
               <button
                 type="button"
                 onClick={() => window.neoApi.openExternal(authUrl)}
-                className="text-cyan-700 hover:text-cyan-800 font-semibold flex items-center space-x-1 p-1 rounded transition-colors cursor-pointer"
+                className="w-full py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-98"
               >
-                <span>在默认浏览器打开登录页</span>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <ExternalLink className="w-4 h-4" />
+                <span>在系统默认浏览器中打开登录 (极速推荐 · 0秒避开微信拦截)</span>
               </button>
             )}
+
+            <div className="flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={startNewLogin}
+                disabled={loading}
+                className="text-slate-600 hover:text-slate-900 font-medium flex items-center space-x-1 p-1 rounded transition-colors cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                <span>刷新二维码 / 重新申请授权</span>
+              </button>
+              
+              <span className="text-[10px] text-slate-400 font-mono">
+                授权码有效期: 10 分钟
+              </span>
+            </div>
           </div>
 
           {/* 底部特性提示 */}

@@ -166,7 +166,28 @@ export const neoApi = {
   loggerLog: (level: string, module: string, message: string, details?: any) =>
     ipcRenderer.invoke('logger:log', level, module, message, details),
 
-    onAiStreamEvent: (callback: (event: any) => void) => {
+  
+  // Foxmail 风格智能邮件管理与人物画像 (Mail & Persona Copilot)
+  mailGetAccounts: () => ipcRenderer.invoke('mail:getAccounts'),
+  mailTestAndSaveAccount: (payload: any) => ipcRenderer.invoke('mail:testAndSaveAccount', payload),
+  mailDeleteAccount: (accountId: string) => ipcRenderer.invoke('mail:deleteAccount', accountId),
+  mailSetDefaultAccount: (accountId: string) => ipcRenderer.invoke('mail:setDefaultAccount', accountId),
+  mailSyncEmailsForAccount: (accountId: string) => ipcRenderer.invoke('mail:syncEmailsForAccount', accountId),
+  mailSaveAccounts: (accounts: any[]) => ipcRenderer.invoke('mail:saveAccounts', accounts),
+  mailGetEmails: () => ipcRenderer.invoke('mail:getEmails'),
+  mailMarkAsRead: (emailId: string, isRead?: boolean) => ipcRenderer.invoke('mail:markAsRead', emailId, isRead),
+  mailToggleStar: (emailId: string) => ipcRenderer.invoke('mail:toggleStar', emailId),
+  mailDeleteEmail: (emailId: string) => ipcRenderer.invoke('mail:deleteEmail', emailId),
+  mailSendEmail: (payload: any) => ipcRenderer.invoke('mail:sendEmail', payload),
+  mailSaveDraft: (payload: any) => ipcRenderer.invoke('mail:saveDraft', payload),
+  mailSyncEmails: () => ipcRenderer.invoke('mail:syncEmails'),
+  mailAnalyzeEmail: (emailId: string) => ipcRenderer.invoke('mail:analyzeEmail', emailId),
+  mailGenerateReply: (options: any) => ipcRenderer.invoke('mail:generateReply', options),
+  mailGetPersonas: () => ipcRenderer.invoke('mail:getPersonas'),
+  mailAnalyzePersonaByEmail: (email: string, hints?: string) => ipcRenderer.invoke('mail:analyzePersonaByEmail', email, hints),
+  mailSavePersonaNotes: (email: string, notes: string) => ipcRenderer.invoke('mail:savePersonaNotes', email, notes),
+
+  onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);
     return () => ipcRenderer.removeListener('ai:streamEvent', handler);

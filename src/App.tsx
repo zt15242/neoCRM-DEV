@@ -7,6 +7,7 @@ import { ConnectorDetailView } from './components/ConnectorDetailView';
 import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
 import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
+import { MailClientView } from './components/mail/MailClientView';
 import { SettingsManager, SettingsSubTab } from './components/settings/SettingsManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
@@ -587,6 +588,8 @@ export const App: React.FC = () => {
                   ? (activeDetailEnvId ? '连接器详情' : 'CRM 连接器中心')
                   : activeTab === 'metadata'
                   ? '对象与字段管理'
+                  : activeTab === 'mail'
+                  ? '智能邮件中心 (Foxmail)'
                   : '数据中心 (DML/SQL)'}
               </span>
             </div>
@@ -730,6 +733,13 @@ export const App: React.FC = () => {
             showToast={showToast}
           />
         </div>
+
+        {/* Tab 5: Foxmail 风格智能邮件客户端与 AI 人物画像中心 */}
+        {activeTab === 'mail' && (
+          <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
+            <MailClientView showToast={showToast} />
+          </div>
+        )}
 
 
       </main>
