@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.9';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.10';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
