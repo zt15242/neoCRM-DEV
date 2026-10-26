@@ -127,22 +127,23 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
     
     const targetFolderEmails = currentScopedEmails.filter((e) =>
       folder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === folder
-    );
+    ).sort((a, b) => (b.date || 0) - (a.date || 0));
 
-    setSelectedEmailId(targetFolderEmails[0]?.id || null);
+    void handleSelectEmail(targetFolderEmails[0]?.id || null, { markAsRead: false });
   };
 
   // 当前选中的邮件
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) || null;
 
   // 3. 选中某封邮件 (自动标为已读，且若无正文则毫秒级按需拉取正文)
-  const handleSelectEmail = async (emailId: string) => {
+  const handleSelectEmail = async (emailId: string | null, options: { markAsRead?: boolean } = {}) => {
     setSelectedEmailId(emailId);
+    if (!emailId) return;
     const target = emails.find((e) => e.id === emailId);
     if (!target) return;
 
     // 标为已读
-    if (!target.isRead && window.neoApi?.mailMarkAsRead) {
+    if (options.markAsRead !== false && !target.isRead && window.neoApi?.mailMarkAsRead) {
       try {
         await window.neoApi.mailMarkAsRead(emailId, true);
         setEmails((prev) =>
@@ -457,8 +458,9 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
           onSelectAccount={(accId) => {
             setActiveAccountId(accId);
             const targetMails = (accId === 'all' ? emails : emails.filter((e) => e.accountId === accId))
-              .filter((e) => currentFolder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === currentFolder);
-            setSelectedEmailId(targetMails[0]?.id || null);
+              .filter((e) => currentFolder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === currentFolder)
+              .sort((a, b) => (b.date || 0) - (a.date || 0));
+            void handleSelectEmail(targetMails[0]?.id || null, { markAsRead: false });
           }}
           emails={emails}
           onOpenCompose={() => handleOpenCompose()}

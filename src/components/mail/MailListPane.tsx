@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useDeferredValue, useEffect, useRef } from 'react';
 import { 
   Search, 
   Star, 
@@ -18,7 +18,7 @@ interface MailListPaneProps {
   emails: EmailItem[];
   currentFolder: EmailFolder | 'personas';
   selectedEmailId: string | null;
-  onSelectEmail: (emailId: string) => void;
+  onSelectEmail: (emailId: string | null, options?: { markAsRead?: boolean }) => void;
   onToggleStar: (emailId: string) => void;
   onDeleteEmail: (emailId: string) => void;
 }
@@ -33,6 +33,8 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'starred' | 'urgent' | 'analyzed'>('all');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const lastAutoSelectionRef = useRef<string | null | undefined>(undefined);
 
   // 根据当前文件夹与搜索条件过滤邮件
   const filteredEmails = useMemo(() => {
@@ -57,21 +59,53 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
     }
 
     // 搜索词过滤
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      list = list.filter(
-        (e) =>
-          e.subject.toLowerCase().includes(q) ||
-          e.from.name.toLowerCase().includes(q) ||
-          e.from.email.toLowerCase().includes(q) ||
-          e.snippet.toLowerCase().includes(q) ||
-          e.tags?.some((t) => t.toLowerCase().includes(q))
-      );
+    if (deferredSearchQuery.trim()) {
+      const q = deferredSearchQuery.trim().toLocaleLowerCase();
+      list = list.filter((email) => {
+        const contacts = [
+          ...(Array.isArray(email.to) ? email.to : []),
+          ...(Array.isArray(email.cc) ? email.cc : []),
+          ...(Array.isArray(email.bcc) ? email.bcc : []),
+        ];
+        const htmlText = typeof email.bodyHtml === 'string'
+          ? email.bodyHtml
+              .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+              .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+              .replace(/<[^>]+>/g, ' ')
+          : '';
+        const searchableText = [
+          email.subject,
+          email.from?.name,
+          email.from?.email,
+          ...contacts.flatMap((contact) => [contact?.name, contact?.email]),
+          email.snippet,
+          email.bodyText,
+          htmlText,
+          ...(Array.isArray(email.tags) ? email.tags : []),
+        ]
+          .filter((value): value is string => typeof value === 'string')
+          .join(' ')
+          .toLocaleLowerCase();
+
+        return searchableText.includes(q);
+      });
     }
 
     // 保持时间倒序
-    return [...list].sort((a, b) => b.date - a.date);
-  }, [emails, currentFolder, filterType, searchQuery]);
+    return [...list].sort((a, b) => (b.date || 0) - (a.date || 0));
+  }, [emails, currentFolder, filterType, deferredSearchQuery]);
+
+  useEffect(() => {
+    if (filteredEmails.some((email) => email.id === selectedEmailId)) {
+      lastAutoSelectionRef.current = undefined;
+      return;
+    }
+
+    const nextEmailId = filteredEmails[0]?.id ?? null;
+    if (lastAutoSelectionRef.current === nextEmailId) return;
+    lastAutoSelectionRef.current = nextEmailId;
+    onSelectEmail(nextEmailId, { markAsRead: false });
+  }, [filteredEmails, selectedEmailId, onSelectEmail]);
 
   const folderTitles: Record<string, string> = {
     inbox: '收件箱',
@@ -108,6 +142,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
           <div className="flex items-center space-x-1 text-[11px]">
             <button
               type="button"
+              aria-pressed={filterType === 'all'}
               onClick={() => setFilterType('all')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'all' ? 'bg-slate-200 text-slate-900 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -117,6 +152,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
             </button>
             <button
               type="button"
+              aria-pressed={filterType === 'unread'}
               onClick={() => setFilterType(filterType === 'unread' ? 'all' : 'unread')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'unread' ? 'bg-sky-100 text-sky-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -126,6 +162,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
             </button>
             <button
               type="button"
+              aria-pressed={filterType === 'urgent'}
               onClick={() => setFilterType(filterType === 'urgent' ? 'all' : 'urgent')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'urgent' ? 'bg-rose-100 text-rose-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -135,6 +172,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
             </button>
             <button
               type="button"
+              aria-pressed={filterType === 'analyzed'}
               onClick={() => setFilterType(filterType === 'analyzed' ? 'all' : 'analyzed')}
               className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
                 filterType === 'analyzed' ? 'bg-indigo-100 text-indigo-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
@@ -151,7 +189,8 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索发件人、主题、正文或标签..."
+            placeholder="搜索发件人、收件人、主题、摘要、已下载正文或标签..."
+            aria-label="搜索邮件"
             className="w-full pl-8 pr-3 py-1.5 bg-slate-100 border border-transparent rounded-xl text-xs text-slate-800 placeholder-slate-400 outline-none focus:bg-white focus:border-sky-400 focus:ring-1 focus:ring-sky-400 transition-all"
           />
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
