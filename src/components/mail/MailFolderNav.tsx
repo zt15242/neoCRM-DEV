@@ -15,7 +15,8 @@ import {
   Plus,
   Check,
   MoreVertical,
-  AlertCircle
+  AlertCircle,
+  PanelLeftClose
 } from 'lucide-react';
 import { EmailFolder, EmailAccount, EmailItem } from '../../../shared/mailTypes';
 
@@ -31,6 +32,7 @@ interface MailFolderNavProps {
   onOpenAddAccountModal: () => void;
   onDeleteAccount?: (accountId: string) => void;
   isSyncing?: boolean;
+  onCollapse?: () => void;
 }
 
 export const MailFolderNav: React.FC<MailFolderNavProps> = ({
@@ -45,6 +47,7 @@ export const MailFolderNav: React.FC<MailFolderNavProps> = ({
   onOpenAddAccountModal,
   onDeleteAccount,
   isSyncing = false,
+  onCollapse,
 }) => {
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
 
@@ -73,17 +76,28 @@ export const MailFolderNav: React.FC<MailFolderNavProps> = ({
   );
 
   return (
-    <div className="w-60 h-full flex flex-col bg-[#0f172a] text-slate-300 border-r border-slate-800 select-none shrink-0 font-sans">
+    <div className="w-full h-full flex flex-col bg-[#0f172a] text-slate-300 border-r border-slate-800 select-none min-w-0 font-sans">
       {/* 1. 顶部写信与收取快捷操作条 (Foxmail 标志性大按钮) */}
       <div className="p-3 border-b border-slate-800/80 space-y-2">
-        <button
-          type="button"
-          onClick={onOpenCompose}
-          className="w-full py-2 px-3 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-xl font-bold text-xs shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-98"
-        >
-          <PenSquare className="w-4 h-4" />
-          <span>写 邮 件</span>
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onOpenCompose}
+            className="min-w-0 flex-1 py-2 px-3 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white rounded-xl font-bold text-xs shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer active:scale-98"
+          >
+            <PenSquare className="w-4 h-4 shrink-0" />
+            <span>写 邮 件</span>
+          </button>
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="h-9 w-8 shrink-0 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white"
+            title="折叠邮箱文件夹栏"
+            aria-label="折叠邮箱文件夹栏"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        </div>
 
         <button
           type="button"

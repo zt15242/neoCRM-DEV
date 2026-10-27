@@ -3,6 +3,8 @@ import {
   Sparkles, 
   PanelRightClose, 
   PanelRightOpen, 
+  PanelLeftOpen,
+  GripVertical,
   UserCheck, 
   Plus, 
   RefreshCw, 
@@ -32,6 +34,45 @@ interface MailClientViewProps {
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
+interface MailPanelLayout {
+  foldersCollapsed: boolean;
+  listCollapsed: boolean;
+  copilotOpen: boolean;
+  foldersWidth: number;
+  listWidth: number;
+  copilotWidth: number;
+}
+
+type ResizablePanel = 'folders' | 'list' | 'copilot';
+
+const MAIL_PANEL_LAYOUT_KEY = 'neo-mail-panel-layout-v1';
+const DEFAULT_MAIL_PANEL_LAYOUT: MailPanelLayout = {
+  foldersCollapsed: false,
+  listCollapsed: false,
+  copilotOpen: true,
+  foldersWidth: 240,
+  listWidth: 360,
+  copilotWidth: 360,
+};
+
+const readMailPanelLayout = (): MailPanelLayout => {
+  try {
+    const saved = localStorage.getItem(MAIL_PANEL_LAYOUT_KEY);
+    if (!saved) return DEFAULT_MAIL_PANEL_LAYOUT;
+    const parsed = JSON.parse(saved) as Partial<MailPanelLayout>;
+    return {
+      foldersCollapsed: parsed.foldersCollapsed ?? DEFAULT_MAIL_PANEL_LAYOUT.foldersCollapsed,
+      listCollapsed: parsed.listCollapsed ?? DEFAULT_MAIL_PANEL_LAYOUT.listCollapsed,
+      copilotOpen: parsed.copilotOpen ?? DEFAULT_MAIL_PANEL_LAYOUT.copilotOpen,
+      foldersWidth: Math.min(360, Math.max(200, parsed.foldersWidth || DEFAULT_MAIL_PANEL_LAYOUT.foldersWidth)),
+      listWidth: Math.min(520, Math.max(280, parsed.listWidth || DEFAULT_MAIL_PANEL_LAYOUT.listWidth)),
+      copilotWidth: Math.min(520, Math.max(280, parsed.copilotWidth || DEFAULT_MAIL_PANEL_LAYOUT.copilotWidth)),
+    };
+  } catch {
+    return DEFAULT_MAIL_PANEL_LAYOUT;
+  }
+};
+
 export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => {
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [activeAccountId, setActiveAccountId] = useState<string>('all');
@@ -39,8 +80,139 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
   const [currentFolder, setCurrentFolder] = useState<EmailFolder | 'personas'>('inbox');
 
-  // AI 副驾驶展开状态 (默认在大屏模式下展开)
-  const [isCopilotOpen, setIsCopilotOpen] = useState(true);
+  const [panelLayout, setPanelLayout] = useState<MailPanelLayout>(readMailPanelLayout);
+  const isCopilotOpen = panelLayout.copilotOpen;
+  const panelContainerRef = useRef<HTMLDivElement>(null);
+  const foldersPaneRef = useRef<HTMLDivElement>(null);
+  const listPaneRef = useRef<HTMLDivElement>(null);
+  const copilotPaneRef = useRef<HTMLDivElement>(null);
+  const activeResizeRef = useRef<{
+    panel: ResizablePanel;
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    direction: 1 | -1;
+  } | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MAIL_PANEL_LAYOUT_KEY, JSON.stringify(panelLayout));
+    } catch {}
+  }, [panelLayout]);
+
+  const getPanelElement = (panel: ResizablePanel) => {
+    if (panel === 'folders') return foldersPaneRef.current;
+    if (panel === 'list') return listPaneRef.current;
+    return copilotPaneRef.current;
+  };
+
+  const getPanelBounds = (panel: ResizablePanel) => {
+    const minimum = panel === 'folders' ? 200 : 280;
+    const maximum = panel === 'folders' ? 360 : 520;
+    const containerWidth = panelContainerRef.current?.clientWidth || window.innerWidth;
+    const otherWidths = (['folders', 'list', 'copilot'] as ResizablePanel[])
+      .filter((other) => other !== panel)
+      .reduce((sum, other) => {
+        if (other === 'folders' && panelLayout.foldersCollapsed) return sum + 44;
+        if (other === 'list' && panelLayout.listCollapsed) return sum + 44;
+        if (other === 'copilot' && !panelLayout.copilotOpen) return sum;
+        const element = getPanelElement(other);
+        const measuredWidth = element?.getBoundingClientRect().width;
+        const savedWidth = other === 'folders'
+          ? panelLayout.foldersWidth
+          : other === 'list'
+            ? panelLayout.listWidth
+            : panelLayout.copilotWidth;
+        return sum + (measuredWidth || savedWidth);
+      }, 0);
+    const handleCount = Number(!panelLayout.foldersCollapsed)
+      + Number(!panelLayout.listCollapsed)
+      + Number(panelLayout.copilotOpen);
+    const availableMax = containerWidth - 360 - otherWidths - handleCount * 8;
+    return { minimum, maximum: Math.max(minimum, Math.min(maximum, availableMax)) };
+  };
+
+  const resizePanel = (panel: ResizablePanel, width: number) => {
+    const { minimum, maximum } = getPanelBounds(panel);
+    const nextWidth = Math.round(Math.min(maximum, Math.max(minimum, width)));
+    setPanelLayout((current) => ({
+      ...current,
+      ...(panel === 'folders' ? { foldersWidth: nextWidth } : {}),
+      ...(panel === 'list' ? { listWidth: nextWidth } : {}),
+      ...(panel === 'copilot' ? { copilotWidth: nextWidth } : {}),
+    }));
+  };
+
+  const startPanelResize = (panel: ResizablePanel, direction: 1 | -1, event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const savedWidth = panel === 'folders'
+      ? panelLayout.foldersWidth
+      : panel === 'list'
+        ? panelLayout.listWidth
+        : panelLayout.copilotWidth;
+    activeResizeRef.current = {
+      panel,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: getPanelElement(panel)?.getBoundingClientRect().width || savedWidth,
+      direction,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePanelResizeMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const active = activeResizeRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    resizePanel(active.panel, active.startWidth + (event.clientX - active.startX) * active.direction);
+  };
+
+  const endPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (activeResizeRef.current?.pointerId === event.pointerId) activeResizeRef.current = null;
+  };
+
+  const handleResizeKeyDown = (panel: ResizablePanel, direction: 1 | -1, event: React.KeyboardEvent<HTMLDivElement>) => {
+    const savedWidth = panel === 'folders'
+      ? panelLayout.foldersWidth
+      : panel === 'list'
+        ? panelLayout.listWidth
+        : panelLayout.copilotWidth;
+    const currentWidth = getPanelElement(panel)?.getBoundingClientRect().width || savedWidth;
+    const { minimum, maximum } = getPanelBounds(panel);
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowRight' ? 16 : -16;
+      resizePanel(panel, currentWidth + delta * direction);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      resizePanel(panel, minimum);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      resizePanel(panel, maximum);
+    }
+  };
+
+  const renderResizeHandle = (panel: ResizablePanel, label: string, direction: 1 | -1) => (
+    <div
+      role="separator"
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuenow={Math.round(getPanelElement(panel)?.getBoundingClientRect().width || (
+        panel === 'folders' ? panelLayout.foldersWidth : panel === 'list' ? panelLayout.listWidth : panelLayout.copilotWidth
+      ))}
+      aria-valuemin={getPanelBounds(panel).minimum}
+      aria-valuemax={getPanelBounds(panel).maximum}
+      tabIndex={0}
+      onPointerDown={(event) => startPanelResize(panel, direction, event)}
+      onPointerMove={handlePanelResizeMove}
+      onPointerUp={endPanelResize}
+      onPointerCancel={endPanelResize}
+      onKeyDown={(event) => handleResizeKeyDown(panel, direction, event)}
+      className="group relative z-10 flex w-2 shrink-0 cursor-col-resize touch-none items-center justify-center bg-slate-100/70 hover:bg-sky-100 focus:outline-none focus-visible:bg-sky-100"
+      title={`${label}，可拖动调整宽度`}
+    >
+      <GripVertical className="h-4 w-3 text-slate-300 group-hover:text-sky-600" />
+    </div>
+  );
 
   // 弹窗状态
   const [isComposeOpen, setIsComposeOpen] = useState(false);
@@ -322,7 +494,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
 
   // 触发 AI 分析当前邮件
   const handleTriggerAnalysis = () => {
-    setIsCopilotOpen(true);
+    setPanelLayout((current) => ({ ...current, copilotOpen: true }));
   };
 
   // 打开指定邮箱人物画像弹窗
@@ -435,7 +607,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
 
           <button
             type="button"
-            onClick={() => setIsCopilotOpen(!isCopilotOpen)}
+            onClick={() => setPanelLayout((current) => ({ ...current, copilotOpen: !current.copilotOpen }))}
             className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors flex items-center space-x-1.5 cursor-pointer ${
               isCopilotOpen
                 ? 'bg-sky-500/20 text-sky-300 border border-sky-400/30 font-semibold'
@@ -451,38 +623,60 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
       </div>
 
       {/* 2. 核心三栏/四栏布局 */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div ref={panelContainerRef} className="flex-1 flex min-h-0 overflow-hidden">
         {/* 栏 1: 左侧文件夹树 (Foxmail 风格，多账号管理) */}
-        <MailFolderNav
-          currentFolder={currentFolder}
-          onSelectFolder={handleSelectFolder}
-          accounts={accounts}
-          activeAccountId={activeAccountId}
-          onSelectAccount={(accId) => {
-            setActiveAccountId(accId);
-            const availableRemoteFolders = accId === 'all'
-              ? accounts.flatMap((account) => account.remoteFolders || []).map((folder) => folder.key)
-              : accounts.find((account) => account.id === accId)?.remoteFolders?.map((folder) => folder.key) || [];
-            const nextFolder = currentFolder.startsWith('imap:') && !availableRemoteFolders.some((key) => key === currentFolder)
-              ? 'inbox'
-              : currentFolder;
-            if (nextFolder !== currentFolder) setCurrentFolder(nextFolder);
-            const targetMails = (accId === 'all' ? emails : emails.filter((e) => e.accountId === accId))
-              .filter((e) => nextFolder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === nextFolder)
-              .sort((a, b) => (b.date || 0) - (a.date || 0));
-            void handleSelectEmail(targetMails[0]?.id || null, { markAsRead: false });
-          }}
-          emails={emails}
-          onOpenCompose={() => handleOpenCompose()}
-          onSyncEmails={() => handleSyncEmails({ mode: 'recent' })}
-          onOpenAddAccountModal={() => setIsAddAccountModalOpen(true)}
-          onDeleteAccount={handleDeleteAccount}
-          isSyncing={isSyncing}
-        />
+        {panelLayout.foldersCollapsed ? (
+          <div className="flex h-full w-11 shrink-0 flex-col items-center border-r border-slate-800 bg-[#0f172a] pt-2">
+            <button
+              type="button"
+              onClick={() => setPanelLayout((current) => ({ ...current, foldersCollapsed: false }))}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-slate-800 hover:text-white"
+              title="展开邮箱文件夹栏"
+              aria-label="展开邮箱文件夹栏"
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <div
+            ref={foldersPaneRef}
+            className="h-full min-w-[200px] shrink overflow-hidden"
+            style={{ width: panelLayout.foldersWidth, flexBasis: panelLayout.foldersWidth }}
+          >
+            <MailFolderNav
+              currentFolder={currentFolder}
+              onSelectFolder={handleSelectFolder}
+              accounts={accounts}
+              activeAccountId={activeAccountId}
+              onSelectAccount={(accId) => {
+                setActiveAccountId(accId);
+                const availableRemoteFolders = accId === 'all'
+                  ? accounts.flatMap((account) => account.remoteFolders || []).map((folder) => folder.key)
+                  : accounts.find((account) => account.id === accId)?.remoteFolders?.map((folder) => folder.key) || [];
+                const nextFolder = currentFolder.startsWith('imap:') && !availableRemoteFolders.some((key) => key === currentFolder)
+                  ? 'inbox'
+                  : currentFolder;
+                if (nextFolder !== currentFolder) setCurrentFolder(nextFolder);
+                const targetMails = (accId === 'all' ? emails : emails.filter((e) => e.accountId === accId))
+                  .filter((e) => nextFolder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === nextFolder)
+                  .sort((a, b) => (b.date || 0) - (a.date || 0));
+                void handleSelectEmail(targetMails[0]?.id || null, { markAsRead: false });
+              }}
+              emails={emails}
+              onOpenCompose={() => handleOpenCompose()}
+              onSyncEmails={() => handleSyncEmails({ mode: 'recent' })}
+              onOpenAddAccountModal={() => setIsAddAccountModalOpen(true)}
+              onDeleteAccount={handleDeleteAccount}
+              isSyncing={isSyncing}
+              onCollapse={() => setPanelLayout((current) => ({ ...current, foldersCollapsed: true }))}
+            />
+          </div>
+        )}
+        {!panelLayout.foldersCollapsed && renderResizeHandle('folders', '调整邮箱文件夹栏宽度', 1)}
 
         {accounts.length === 0 ? (
           /* 当没有任何账号时，居中展示纯净引导卡片 */
-          <div className="flex-1 h-full flex flex-col items-center justify-center p-8 bg-slate-50/50 text-center space-y-4">
+          <div className="flex-1 h-full min-w-[360px] flex flex-col items-center justify-center p-8 bg-slate-50/50 text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-sky-100 text-sky-600 flex items-center justify-center shadow-xs">
               <Inbox className="w-8 h-8" />
             </div>
@@ -508,18 +702,40 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
         ) : (
           <>
             {/* 栏 2: 中间邮件列表 */}
-            <MailListPane
-              emails={activeAccountId === 'all' ? emails : emails.filter((e) => e.accountId === activeAccountId)}
-              currentFolder={currentFolder}
-              currentFolderLabel={currentFolderLabel}
-              selectedEmailId={selectedEmailId}
-              onSelectEmail={handleSelectEmail}
-              onToggleStar={handleToggleStar}
-              onDeleteEmail={handleDeleteEmail}
-            />
+            {panelLayout.listCollapsed ? (
+              <div className="flex h-full w-11 shrink-0 flex-col items-center border-r border-slate-200 bg-slate-50 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPanelLayout((current) => ({ ...current, listCollapsed: false }))}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-200 hover:text-slate-900"
+                  title="展开邮件列表"
+                  aria-label="展开邮件列表"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div
+                ref={listPaneRef}
+                className="h-full min-w-[280px] shrink overflow-hidden"
+                style={{ width: panelLayout.listWidth, flexBasis: panelLayout.listWidth }}
+              >
+                <MailListPane
+                  emails={activeAccountId === 'all' ? emails : emails.filter((e) => e.accountId === activeAccountId)}
+                  currentFolder={currentFolder}
+                  currentFolderLabel={currentFolderLabel}
+                  selectedEmailId={selectedEmailId}
+                  onSelectEmail={handleSelectEmail}
+                  onToggleStar={handleToggleStar}
+                  onDeleteEmail={handleDeleteEmail}
+                  onCollapse={() => setPanelLayout((current) => ({ ...current, listCollapsed: true }))}
+                />
+              </div>
+            )}
+            {!panelLayout.listCollapsed && renderResizeHandle('list', '调整邮件列表宽度', 1)}
 
             {/* 栏 3: 右侧邮件正文查看器 */}
-            <div className="flex-1 h-full min-w-0 flex flex-col overflow-hidden">
+            <div className="flex-1 h-full min-w-[360px] flex flex-col overflow-hidden">
               <MailDetailPane
                 email={selectedEmail}
                 currentUserEmail={accounts.find((a) => a.id === (selectedEmail?.accountId || activeAccountId))?.email || accounts[0]?.email}
@@ -534,13 +750,20 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
 
             {/* 栏 4: 右侧展开的 AI 智能副驾驶协同栏 (需求分析 / 智能回复 / 人物画像) */}
             {isCopilotOpen && (
-              <div className="w-80 md:w-96 h-full shrink-0 animate-in slide-in-from-right-4 duration-200">
+              <>
+                {renderResizeHandle('copilot', '调整 AI 副驾驶宽度', -1)}
+                <div
+                  ref={copilotPaneRef}
+                  className="h-full min-w-[280px] shrink overflow-hidden animate-in slide-in-from-right-4 duration-200"
+                  style={{ width: panelLayout.copilotWidth, flexBasis: panelLayout.copilotWidth }}
+                >
                 <MailAiCopilot
                   email={selectedEmail}
                   onOpenReplyCompose={(replyData) => handleOpenCompose(replyData)}
                   showToast={showToast}
                 />
-              </div>
+                </div>
+              </>
             )}
           </>
         )}

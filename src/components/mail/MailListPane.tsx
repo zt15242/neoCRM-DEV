@@ -10,7 +10,8 @@ import {
   CheckCheck, 
   Trash2,
   BrainCircuit,
-  Tag
+  Tag,
+  PanelLeftClose
 } from 'lucide-react';
 import { EmailItem, EmailFolder } from '../../../shared/mailTypes';
 
@@ -22,6 +23,7 @@ interface MailListPaneProps {
   onSelectEmail: (emailId: string | null, options?: { markAsRead?: boolean }) => void;
   onToggleStar: (emailId: string) => void;
   onDeleteEmail: (emailId: string) => void;
+  onCollapse?: () => void;
 }
 
 export const MailListPane: React.FC<MailListPaneProps> = ({
@@ -32,6 +34,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
   onSelectEmail,
   onToggleStar,
   onDeleteEmail,
+  onCollapse,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'starred' | 'urgent' | 'analyzed'>('all');
@@ -129,60 +132,67 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
   };
 
   return (
-    <div className="w-80 md:w-96 h-full flex flex-col bg-slate-50/50 border-r border-slate-200 shrink-0 font-sans select-none overflow-hidden text-xs">
+    <div className="w-full h-full min-w-0 flex flex-col bg-slate-50/50 border-r border-slate-200 font-sans select-none overflow-hidden text-xs">
       {/* 1. 顶部标题栏与搜索框 */}
       <div className="p-3 border-b border-slate-200 bg-white space-y-2.5 shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-1.5">
-            <h3 className="font-bold text-slate-800 text-sm">
-              {folderTitles[currentFolder] || currentFolderLabel || '邮件列表'}
-            </h3>
-            <span className="text-[11px] text-slate-400 font-mono">({filteredEmails.length})</span>
-          </div>
+        <div className="flex min-w-0 items-center space-x-1.5">
+          <h3 className="min-w-0 truncate font-bold text-slate-800 text-sm">
+            {folderTitles[currentFolder] || currentFolderLabel || '邮件列表'}
+          </h3>
+          <span className="text-[11px] text-slate-400 font-mono">({filteredEmails.length})</span>
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            title="折叠邮件列表"
+            aria-label="折叠邮件列表"
+          >
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
+        </div>
 
-          {/* 筛选切换胶囊 (支持显式全部 / 未读 / 紧急 / 已分析) */}
-          <div className="flex items-center space-x-1 text-[11px]">
-            <button
-              type="button"
-              aria-pressed={filterType === 'all'}
-              onClick={() => setFilterType('all')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                filterType === 'all' ? 'bg-slate-200 text-slate-900 font-bold' : 'text-slate-500 hover:bg-slate-100'
-              }`}
-            >
-              全部
-            </button>
-            <button
-              type="button"
-              aria-pressed={filterType === 'unread'}
-              onClick={() => setFilterType(filterType === 'unread' ? 'all' : 'unread')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                filterType === 'unread' ? 'bg-sky-100 text-sky-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
-              }`}
-            >
-              未读
-            </button>
-            <button
-              type="button"
-              aria-pressed={filterType === 'urgent'}
-              onClick={() => setFilterType(filterType === 'urgent' ? 'all' : 'urgent')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                filterType === 'urgent' ? 'bg-rose-100 text-rose-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
-              }`}
-            >
-              紧急
-            </button>
-            <button
-              type="button"
-              aria-pressed={filterType === 'analyzed'}
-              onClick={() => setFilterType(filterType === 'analyzed' ? 'all' : 'analyzed')}
-              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
-                filterType === 'analyzed' ? 'bg-indigo-100 text-indigo-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
-              }`}
-            >
-              已分析
-            </button>
-          </div>
+        {/* 筛选切换胶囊 (支持显式全部 / 未读 / 紧急 / 已分析) */}
+        <div aria-label="邮件筛选" className="flex min-w-0 items-center space-x-1 overflow-x-auto pb-0.5 text-[11px]">
+          <button
+            type="button"
+            aria-pressed={filterType === 'all'}
+            onClick={() => setFilterType('all')}
+            className={`shrink-0 whitespace-nowrap px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+              filterType === 'all' ? 'bg-slate-200 text-slate-900 font-bold' : 'text-slate-500 hover:bg-slate-100'
+            }`}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            aria-pressed={filterType === 'unread'}
+            onClick={() => setFilterType(filterType === 'unread' ? 'all' : 'unread')}
+            className={`shrink-0 whitespace-nowrap px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+              filterType === 'unread' ? 'bg-sky-100 text-sky-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
+            }`}
+          >
+            未读
+          </button>
+          <button
+            type="button"
+            aria-pressed={filterType === 'urgent'}
+            onClick={() => setFilterType(filterType === 'urgent' ? 'all' : 'urgent')}
+            className={`shrink-0 whitespace-nowrap px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+              filterType === 'urgent' ? 'bg-rose-100 text-rose-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
+            }`}
+          >
+            紧急
+          </button>
+          <button
+            type="button"
+            aria-pressed={filterType === 'analyzed'}
+            onClick={() => setFilterType(filterType === 'analyzed' ? 'all' : 'analyzed')}
+            className={`shrink-0 whitespace-nowrap px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+              filterType === 'analyzed' ? 'bg-indigo-100 text-indigo-800 font-bold' : 'text-slate-500 hover:bg-slate-100'
+            }`}
+          >
+            已分析
+          </button>
         </div>
 
         {/* 搜索框 */}

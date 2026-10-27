@@ -113,6 +113,17 @@ function createWindow() {
     return { action: "deny" };
   });
 
+  // Keep the app UI at a stable scale; Electron otherwise persists accidental zoom changes.
+  win.webContents.setZoomFactor(1);
+  win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  win.webContents.on("before-input-event", (event, input) => {
+    if (!(input.control || input.meta) || input.alt) return;
+    if (["+", "=", "-", "_", "0"].includes(input.key)) {
+      event.preventDefault();
+      win?.webContents.setZoomFactor(1);
+    }
+  });
+
   // 生产环境安全加固: 禁用开发者工具快捷键与右键审查，防止逆向破解探查
   if (app.isPackaged) {
     win.webContents.on("before-input-event", (event, input) => {
