@@ -2,7 +2,13 @@
  * Foxmail 风格企业级邮件客户端与 AI 智能副驾驶类型定义
  */
 
-export type EmailFolder = 'inbox' | 'sent' | 'drafts' | 'starred' | 'trash';
+export type EmailFolder = 'inbox' | 'sent' | 'drafts' | 'starred' | 'trash' | `imap:${string}`;
+
+export interface EmailMailboxFolder {
+  key: `imap:${string}`;
+  path: string;
+  name: string;
+}
 
 /**
  * 对应用户截图中的 8 大主流邮件服务商
@@ -223,6 +229,9 @@ export interface EmailItem {
   id: string;
   accountId: string;
   folder: EmailFolder;
+  mailboxPath?: string;
+  mailboxName?: string;
+  imapUid?: number;
   from: EmailContact;
   to: EmailContact[];
   cc?: EmailContact[];
@@ -287,6 +296,12 @@ export interface EmailAccount {
   authPassword?: string;
   authStatus?: 'connected' | 'auth_failed' | 'untested';
   lastSyncAt?: number;
+  inboxUidValidity?: string;
+  lastInboxUid?: number;
+  sentUidValidity?: string;
+  lastSentUid?: number;
+  mailboxSyncState?: Record<string, { uidValidity: string; lastUid: number }>;
+  remoteFolders?: EmailMailboxFolder[];
   lastError?: string;
 }
 

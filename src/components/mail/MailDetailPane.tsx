@@ -245,10 +245,10 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
                 ? 'bg-rose-50 text-rose-700 border-rose-200'
                 : 'bg-sky-50 text-sky-700 border-sky-200'
             }`}>
-              {email.folder === 'sent' ? '📤 已发送邮件' : email.folder === 'drafts' ? '📝 草稿箱' : email.folder === 'trash' ? '🗑️ 已删除' : '📥 收件箱'}
+              {email.folder === 'sent' ? '📤 已发送邮件' : email.folder === 'drafts' ? '📝 草稿箱' : email.folder === 'trash' ? '🗑️ 已删除' : email.mailboxName || '📥 收件箱'}
             </span>
 
-            {email.tags && email.tags.filter(t => t !== '收件箱' && t !== '已发送').map((t, idx) => (
+            {email.tags && email.tags.filter(t => t !== '收件箱' && t !== '已发送' && t !== email.mailboxName).map((t, idx) => (
               <span
                 key={idx}
                 className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200"

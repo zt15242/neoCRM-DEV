@@ -61,6 +61,16 @@ export const MailFolderNav: React.FC<MailFolderNavProps> = ({
   const draftsCount = scopedEmails.filter((e) => e.folder === 'drafts').length;
   const sentCount = scopedEmails.filter((e) => e.folder === 'sent').length;
   const trashCount = scopedEmails.filter((e) => e.folder === 'trash').length;
+  const visibleAccounts = activeAccountId === 'all'
+    ? accounts
+    : accounts.filter((account) => account.id === activeAccountId);
+  const remoteFolders = visibleAccounts.flatMap((account) =>
+    (account.remoteFolders || []).map((folder) => ({
+      ...folder,
+      accountName: account.name || account.email,
+      count: scopedEmails.filter((email) => email.folder === folder.key).length,
+    }))
+  );
 
   return (
     <div className="w-60 h-full flex flex-col bg-[#0f172a] text-slate-300 border-r border-slate-800 select-none shrink-0 font-sans">
@@ -335,6 +345,35 @@ export const MailFolderNav: React.FC<MailFolderNavProps> = ({
             </span>
           )}
         </button>
+
+        {remoteFolders.length > 0 && (
+          <>
+            <div className="px-2 pt-3 pb-1 text-[10px] uppercase tracking-wider font-mono text-slate-400 font-bold">
+              邮箱文件夹
+            </div>
+            {remoteFolders.map((folder) => (
+              <button
+                key={folder.key}
+                type="button"
+                onClick={() => onSelectFolder(folder.key)}
+                title={`${folder.path} · ${folder.accountName}`}
+                className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                  currentFolder === folder.key
+                    ? 'bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30'
+                    : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <Mail className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <span className="truncate">
+                    {activeAccountId === 'all' ? `${folder.name} · ${folder.accountName}` : folder.name}
+                  </span>
+                </div>
+                {folder.count > 0 && <span className="text-[10px] font-mono text-slate-400">{folder.count}</span>}
+              </button>
+            ))}
+          </>
+        )}
 
         <div className="pt-3 pb-1 px-2 text-[10px] uppercase tracking-wider font-mono text-slate-400 font-bold">
           AI 智能增效 (Intelligence)

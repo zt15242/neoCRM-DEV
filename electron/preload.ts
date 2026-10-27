@@ -172,7 +172,8 @@ export const neoApi = {
   mailTestAndSaveAccount: (payload: any) => ipcRenderer.invoke('mail:testAndSaveAccount', payload),
   mailDeleteAccount: (accountId: string) => ipcRenderer.invoke('mail:deleteAccount', accountId),
   mailSetDefaultAccount: (accountId: string) => ipcRenderer.invoke('mail:setDefaultAccount', accountId),
-  mailSyncEmailsForAccount: (accountId: string) => ipcRenderer.invoke('mail:syncEmailsForAccount', accountId),
+  mailSyncEmailsForAccount: (accountId: string, options?: { mode?: 'recent' | 'all'; maxBodyFetch?: number }) =>
+    ipcRenderer.invoke('mail:syncEmailsForAccount', accountId, options),
   mailFetchEmailBody: (accountId: string, emailId: string) => ipcRenderer.invoke('mail:fetchEmailBody', accountId, emailId),
   mailSaveAccounts: (accounts: any[]) => ipcRenderer.invoke('mail:saveAccounts', accounts),
   mailGetEmails: () => ipcRenderer.invoke('mail:getEmails'),

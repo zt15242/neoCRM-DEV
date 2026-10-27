@@ -134,6 +134,9 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
 
   // 当前选中的邮件
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) || null;
+  const currentFolderLabel = accounts
+    .flatMap((account) => account.remoteFolders || [])
+    .find((folder) => folder.key === currentFolder)?.name;
 
   // 3. 选中某封邮件 (自动标为已读，且若无正文则毫秒级按需拉取正文)
   const handleSelectEmail = async (emailId: string | null, options: { markAsRead?: boolean } = {}) => {
@@ -204,7 +207,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
     } catch {}
   };
 
-  // 4. 真实收取邮件 (全量目录构建 + 增量最新正文)
+  // 4. 真实收取邮件 (UID 增量同步，支持手动全量归档)
   const handleSyncEmails = async (options: { mode?: 'recent' | 'all'; silent?: boolean } = {}) => {
     if (isSyncing) return;
     if (accounts.length === 0) {
@@ -457,8 +460,15 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
           activeAccountId={activeAccountId}
           onSelectAccount={(accId) => {
             setActiveAccountId(accId);
+            const availableRemoteFolders = accId === 'all'
+              ? accounts.flatMap((account) => account.remoteFolders || []).map((folder) => folder.key)
+              : accounts.find((account) => account.id === accId)?.remoteFolders?.map((folder) => folder.key) || [];
+            const nextFolder = currentFolder.startsWith('imap:') && !availableRemoteFolders.some((key) => key === currentFolder)
+              ? 'inbox'
+              : currentFolder;
+            if (nextFolder !== currentFolder) setCurrentFolder(nextFolder);
             const targetMails = (accId === 'all' ? emails : emails.filter((e) => e.accountId === accId))
-              .filter((e) => currentFolder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === currentFolder)
+              .filter((e) => nextFolder === 'starred' ? e.isStarred && e.folder !== 'trash' : e.folder === nextFolder)
               .sort((a, b) => (b.date || 0) - (a.date || 0));
             void handleSelectEmail(targetMails[0]?.id || null, { markAsRead: false });
           }}
@@ -501,6 +511,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             <MailListPane
               emails={activeAccountId === 'all' ? emails : emails.filter((e) => e.accountId === activeAccountId)}
               currentFolder={currentFolder}
+              currentFolderLabel={currentFolderLabel}
               selectedEmailId={selectedEmailId}
               onSelectEmail={handleSelectEmail}
               onToggleStar={handleToggleStar}
@@ -541,7 +552,6 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
         onClose={() => setIsAddAccountModalOpen(false)}
         onAccountCreated={() => {
           loadData();
-          handleSyncEmails({ mode: 'all' });
         }}
         showToast={showToast}
       />

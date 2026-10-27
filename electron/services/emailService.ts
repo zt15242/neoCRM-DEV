@@ -227,6 +227,7 @@ export class EmailService {
     const existingIndex = accounts.findIndex((a) => a.email.toLowerCase() === cleanEmail);
 
     const newAccount: EmailAccount = {
+      ...(existingIndex >= 0 ? accounts[existingIndex] : {}),
       id: existingIndex >= 0 ? accounts[existingIndex].id : `acc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name: payload.name.trim() || cleanEmail.split('@')[0],
       email: cleanEmail,
@@ -253,8 +254,8 @@ export class EmailService {
     }
     this.saveAccounts(accounts);
 
-    // 3. 异步触发首次收取该真实邮箱最近邮件
-    this.syncEmailsForAccount(newAccount.id).catch((err) => {
+    // 首次只取最近邮件，避免新账号添加后扫描整箱历史邮件
+    this.syncEmailsForAccount(newAccount.id, { mode: 'recent', maxBodyFetch: 30 }).catch((err) => {
       console.warn('[Email Service] 新增账号初次收取邮件提示:', err.message);
     });
 
@@ -317,7 +318,7 @@ export class EmailService {
     let newFetchedCount = 0;
 
     try {
-      console.log(`[Email Service] 正在连接 ${account.imapHost} 真实同步全量邮件...`);
+      console.log(`[Email Service] 正在连接 ${account.imapHost}，同步模式: ${options.mode || 'all'}`);
       await client.connect();
 
       // ================= 1. 同步收件箱 (INBOX) =================
@@ -325,23 +326,31 @@ export class EmailService {
       try {
         const status = client.mailbox;
         const totalExists = typeof status === 'object' && status !== null ? status.exists : 0;
+        const uidValidity = typeof status === 'object' && status !== null ? String(status.uidValidity) : '';
+        const cursorValid = account.inboxUidValidity === uidValidity;
         console.log(`[Email Service] 线上收件箱邮件总数: ${totalExists}`);
 
         if (totalExists > 0) {
-          // 阶段 A: 全量极速扫描信头 (1:totalExists)，构建完整邮件目录
+          const isRecent = options.mode === 'recent';
+          const lastUid = cursorValid ? account.lastInboxUid : undefined;
+          const firstUid = isRecent && lastUid
+            ? lastUid + 1
+            : isRecent
+              ? Math.max(1, status.uidNext - 60)
+              : 1;
+          const fetchRange = firstUid < status.uidNext ? `${firstUid}:${status.uidNext - 1}` : null;
           const envelopeMap = new Map<number, any>();
-          const fetchRange = options.mode === 'recent'
-            ? `${Math.max(1, totalExists - 60)}:${totalExists}`
-            : `1:${totalExists}`;
 
-          console.log(`[Email Service] 正在拉取信头清单 (范围: ${fetchRange})...`);
-          for await (const msg of client.fetch(fetchRange, {
-            envelope: true,
-            internalDate: true,
-            flags: true,
-            uid: true,
-          })) {
-            envelopeMap.set(msg.seq, msg);
+          console.log(`[Email Service] 正在按 UID 拉取收件箱信头 (范围: ${fetchRange || '无新 UID'})...`);
+          if (fetchRange) {
+            for await (const msg of client.fetch(fetchRange, {
+              envelope: true,
+              internalDate: true,
+              flags: true,
+              uid: true,
+            }, { uid: true })) {
+              envelopeMap.set(msg.uid, msg);
+            }
           }
 
           console.log(`[Email Service] 成功检索到 ${envelopeMap.size} 封线上邮件信头`);
@@ -351,17 +360,31 @@ export class EmailService {
           let bodyFetchCount = 0;
 
           // 倒序遍历（从最大 seq 最新的邮件开始）
-          const sortedSeqs = Array.from(envelopeMap.keys()).sort((a, b) => b - a);
+          const sortedUids = Array.from(envelopeMap.keys()).sort((a, b) => b - a);
+          const inboxEmails: EmailItem[] = [];
+          const existingById = new Map<string, number>();
+          for (let index = 0; index < localEmails.length; index++) {
+            const email = localEmails[index];
+            if (email.accountId === account.id && email.folder === 'inbox') {
+              inboxEmails.push(email);
+              existingById.set(email.id, index);
+            }
+          }
+          const newInboxEmails: EmailItem[] = [];
 
-          for (const seq of sortedSeqs) {
-            const msg = envelopeMap.get(seq);
+          for (const uid of sortedUids) {
+            const msg = envelopeMap.get(uid);
             const env = msg.envelope;
-            const messageId = env.messageId || `imap_${account.id}_${msg.uid || seq}`;
+            const messageId = env.messageId || `imap_${account.id}_${uid}`;
             const dateTimestamp = msg.internalDate ? msg.internalDate.getTime() : (env.date ? new Date(env.date).getTime() : Date.now());
 
-            const existingIdx = localEmails.findIndex(
-              (e) => e.folder === 'inbox' && (e.id === messageId || (e.subject === env.subject && Math.abs(e.date - dateTimestamp) < 3000))
-            );
+            let existingIdx = existingById.get(messageId) ?? -1;
+            if (existingIdx < 0) {
+              existingIdx = inboxEmails.findIndex((email) =>
+                email.subject === env.subject && Math.abs(email.date - dateTimestamp) < 3000
+              );
+              if (existingIdx >= 0) existingIdx = localEmails.indexOf(inboxEmails[existingIdx]);
+            }
 
             const isSeen = msg.flags ? msg.flags.has('\\Seen') : false;
             const isFlagged = msg.flags ? msg.flags.has('\\Flagged') : false;
@@ -381,7 +404,7 @@ export class EmailService {
 
             if (bodyFetchCount < maxBodyToFetch) {
               try {
-                const download = await client.download(String(seq));
+                const download = await client.download(String(uid), undefined, { uid: true });
                 if (download && download.content) {
                   const parsed = await simpleParser(download.content);
                   bodyText = parsed.text || '';
@@ -419,6 +442,9 @@ export class EmailService {
               id: messageId,
               accountId: account.id,
               folder: 'inbox',
+              mailboxPath: 'INBOX',
+              mailboxName: '收件箱',
+              imapUid: uid,
               from: { name: senderName, email: senderEmail },
               to: toList.length > 0 ? toList : [{ name: account.name, email: account.email }],
               cc: ccList.length > 0 ? ccList : undefined,
@@ -441,9 +467,16 @@ export class EmailService {
                 bodyHtml: bodyHtml || localEmails[existingIdx].bodyHtml,
               };
             } else {
-              localEmails.unshift(emailItem);
+              newInboxEmails.push(emailItem);
               newFetchedCount++;
             }
+          }
+
+          if (newInboxEmails.length > 0) localEmails.unshift(...newInboxEmails);
+
+          if (typeof status === 'object' && status !== null) {
+            account.inboxUidValidity = uidValidity;
+            account.lastInboxUid = Math.max(cursorValid ? account.lastInboxUid || 0 : 0, ...sortedUids, status.uidNext - 1);
           }
         }
       } finally {
@@ -461,39 +494,55 @@ export class EmailService {
           const sentLock = await client.getMailboxLock(sentBox.path);
           try {
             const sentExists = client.mailbox ? client.mailbox.exists : 0;
+            const sentMailbox = client.mailbox;
+            const sentUidValidity = sentMailbox ? String(sentMailbox.uidValidity) : '';
+            const sentCursorValid = account.sentUidValidity === sentUidValidity;
             if (sentExists > 0) {
-              const fetchFrom = Math.max(1, sentExists - 30);
-              for await (const msg of client.fetch(`${fetchFrom}:${sentExists}`, {
-                envelope: true,
-                internalDate: true,
-                flags: true,
-                uid: true,
-              })) {
-                const env = msg.envelope;
-                const messageId = env.messageId || `sent_${account.id}_${msg.uid || msg.seq}`;
-                const existingSentIdx = localEmails.findIndex((e) => e.folder === 'sent' && (e.id === messageId || (e.subject === env.subject && Math.abs(e.date - (msg.internalDate?.getTime() || 0)) < 3000)));
-                if (existingSentIdx < 0) {
-                  const toList = (env.to || []).map((t: any) => ({
-                    name: t.name || t.address?.split('@')[0] || '收件人',
-                    email: t.address || '',
-                  }));
-                  const sentSenderName = account.name || account.email.split('@')[0];
-                  localEmails.push({
-                    id: messageId,
-                    accountId: account.id,
-                    folder: 'sent',
-                    from: { name: sentSenderName, email: account.email },
-                    to: toList.length > 0 ? toList : [{ name: '收件人', email: 'recipient@domain.com' }],
-                    subject: env.subject || '（无主题）',
-                    date: msg.internalDate ? msg.internalDate.getTime() : Date.now(),
-                    snippet: env.subject || '已发送邮件',
-                    bodyText: env.subject || '',
-                    isRead: true,
-                    isStarred: false,
-                    tags: ['已发送'],
-                  });
+              const sentFetchRange = account.lastSentUid && sentCursorValid
+                ? account.lastSentUid + 1 < (sentMailbox?.uidNext || 1)
+                  ? `${account.lastSentUid + 1}:${(sentMailbox?.uidNext || 1) - 1}`
+                  : null
+                : `${Math.max(1, (sentMailbox?.uidNext || sentExists + 1) - 30)}:${(sentMailbox?.uidNext || sentExists + 1) - 1}`;
+              let maxSentUid = sentCursorValid ? account.lastSentUid || 0 : 0;
+              if (sentFetchRange) {
+                for await (const msg of client.fetch(sentFetchRange, {
+                  envelope: true,
+                  internalDate: true,
+                  flags: true,
+                  uid: true,
+                }, { uid: true })) {
+                  maxSentUid = Math.max(maxSentUid, msg.uid);
+                  const env = msg.envelope;
+                  const messageId = env.messageId || `sent_${account.id}_${msg.uid || msg.seq}`;
+                  const existingSentIdx = localEmails.findIndex((e) => e.folder === 'sent' && (e.id === messageId || (e.subject === env.subject && Math.abs(e.date - (msg.internalDate?.getTime() || 0)) < 3000)));
+                  if (existingSentIdx < 0) {
+                    const toList = (env.to || []).map((t: any) => ({
+                      name: t.name || t.address?.split('@')[0] || '收件人',
+                      email: t.address || '',
+                    }));
+                    const sentSenderName = account.name || account.email.split('@')[0];
+                    localEmails.push({
+                      id: messageId,
+                      accountId: account.id,
+                      folder: 'sent',
+                      mailboxPath: sentBox.path,
+                      mailboxName: sentBox.name || '已发送',
+                      imapUid: msg.uid,
+                      from: { name: sentSenderName, email: account.email },
+                      to: toList.length > 0 ? toList : [{ name: '收件人', email: 'recipient@domain.com' }],
+                      subject: env.subject || '（无主题）',
+                      date: msg.internalDate ? msg.internalDate.getTime() : Date.now(),
+                      snippet: env.subject || '已发送邮件',
+                      bodyText: env.subject || '',
+                      isRead: true,
+                      isStarred: false,
+                      tags: ['已发送'],
+                    });
+                  }
                 }
               }
+              account.sentUidValidity = sentUidValidity;
+              account.lastSentUid = Math.max(maxSentUid, (sentMailbox?.uidNext || 1) - 1);
             }
           } finally {
             sentLock.release();
@@ -501,6 +550,136 @@ export class EmailService {
         }
       } catch (sentErr: any) {
         console.warn('[Email Service] 同步发件箱提示:', sentErr.message);
+      }
+
+      // 同步其余 IMAP 文件夹，文件夹邮件按 UID 游标增量收取。
+      try {
+        const mailboxes = await client.list();
+        const isInbox = (box: typeof mailboxes[number]) => box.path.toLocaleLowerCase() === 'inbox';
+        const isSent = (box: typeof mailboxes[number]) =>
+          box.specialUse === '\\Sent' || /sent|已发送|发件箱/i.test(`${box.name} ${box.path}`);
+        const isDrafts = (box: typeof mailboxes[number]) =>
+          box.specialUse === '\\Drafts' || /draft|草稿/i.test(`${box.name} ${box.path}`);
+        const isTrash = (box: typeof mailboxes[number]) =>
+          box.specialUse === '\\Trash' || /trash|deleted|废件|已删除|垃圾箱/i.test(`${box.name} ${box.path}`);
+        const selectableMailboxes = mailboxes.filter((box) => !box.flags?.has('\\Noselect'));
+        account.remoteFolders = selectableMailboxes
+          .filter((box) => !isInbox(box) && !isSent(box) && !isDrafts(box) && !isTrash(box))
+          .map((box) => ({
+            key: `imap:${account.id}:${encodeURIComponent(box.path)}`,
+            path: box.path,
+            name: box.name || box.path,
+          }));
+
+        account.mailboxSyncState ||= {};
+        for (const box of selectableMailboxes) {
+          if (isInbox(box) || isSent(box)) continue;
+
+          const customFolder = !isDrafts(box) && !isTrash(box);
+          const folderKey = customFolder
+            ? `imap:${account.id}:${encodeURIComponent(box.path)}` as const
+            : isDrafts(box) ? 'drafts' as const : 'trash' as const;
+          const mailboxName = box.name || box.path;
+          const lock = await client.getMailboxLock(box.path);
+          try {
+            const mailbox = client.mailbox;
+            if (!mailbox) continue;
+
+            const uidValidity = String(mailbox.uidValidity);
+            const previousState = account.mailboxSyncState[box.path];
+            const cursorValid = previousState?.uidValidity === uidValidity;
+            const firstUid = options.mode === 'recent'
+              ? cursorValid && previousState.lastUid
+                ? previousState.lastUid + 1
+                : Math.max(1, mailbox.uidNext - 60)
+              : 1;
+            const fetchRange = firstUid < mailbox.uidNext ? `${firstUid}:${mailbox.uidNext - 1}` : null;
+            const envelopeMap = new Map<number, any>();
+
+            if (fetchRange) {
+              for await (const msg of client.fetch(fetchRange, {
+                envelope: true,
+                internalDate: true,
+                flags: true,
+                uid: true,
+              }, { uid: true })) {
+                envelopeMap.set(msg.uid, msg);
+              }
+            }
+
+            const existingById = new Map<string, number>();
+            for (let index = 0; index < localEmails.length; index++) {
+              const email = localEmails[index];
+              if (email.accountId === account.id && email.mailboxPath === box.path) {
+                existingById.set(email.id, index);
+              }
+            }
+
+            for (const uid of Array.from(envelopeMap.keys()).sort((a, b) => b - a)) {
+              const msg = envelopeMap.get(uid);
+              const env = msg.envelope;
+              const baseId = env.messageId || `imap_${account.id}_${uid}`;
+              const messageId = `${baseId}::${encodeURIComponent(box.path)}`;
+              const dateTimestamp = msg.internalDate?.getTime()
+                || (env.date ? new Date(env.date).getTime() : Date.now());
+              const existingIndex = existingById.get(messageId) ?? -1;
+
+              const email: EmailItem = {
+                id: messageId,
+                accountId: account.id,
+                folder: folderKey,
+                mailboxPath: box.path,
+                mailboxName,
+                imapUid: uid,
+                from: {
+                  name: env.from?.[0]?.name || env.from?.[0]?.address?.split('@')[0] || '未知发件人',
+                  email: env.from?.[0]?.address || 'unknown@domain.com',
+                },
+                to: (env.to || []).map((contact: any) => ({
+                  name: contact.name || contact.address?.split('@')[0] || '收件人',
+                  email: contact.address || '',
+                })).filter((contact: any) => Boolean(contact.email)),
+                cc: (env.cc || []).map((contact: any) => ({
+                  name: contact.name || contact.address?.split('@')[0] || '抄送人',
+                  email: contact.address || '',
+                })).filter((contact: any) => Boolean(contact.email)),
+                subject: env.subject || '（无主题）',
+                date: dateTimestamp,
+                snippet: env.subject || mailboxName,
+                bodyText: '',
+                isRead: Boolean(msg.flags?.has('\\Seen')),
+                isStarred: Boolean(msg.flags?.has('\\Flagged')),
+                tags: [mailboxName],
+              };
+
+              if (existingIndex >= 0) {
+                const existing = localEmails[existingIndex];
+                localEmails[existingIndex] = {
+                  ...existing,
+                  ...email,
+                  bodyText: existing.bodyText,
+                  bodyHtml: existing.bodyHtml,
+                  snippet: existing.snippet || email.snippet,
+                  attachments: existing.attachments,
+                  analysis: existing.analysis,
+                };
+              } else {
+                localEmails.push(email);
+                existingById.set(messageId, localEmails.length - 1);
+                newFetchedCount++;
+              }
+            }
+
+            account.mailboxSyncState[box.path] = {
+              uidValidity,
+              lastUid: Math.max(cursorValid ? previousState?.lastUid || 0 : 0, ...envelopeMap.keys(), mailbox.uidNext - 1),
+            };
+          } finally {
+            lock.release();
+          }
+        }
+      } catch (folderErr: any) {
+        console.warn('[Email Service] 同步其他邮箱文件夹提示:', folderErr.message);
       }
 
       await client.logout();
@@ -556,11 +735,12 @@ export class EmailService {
 
     try {
       await client.connect();
-      const targetMailbox = target.folder === 'sent' ? 'Sent Messages' : 'INBOX';
+      const targetMailbox = target.mailboxPath || (target.folder === 'sent' ? 'Sent Messages' : 'INBOX');
       const lock = await client.getMailboxLock(targetMailbox);
       try {
-        let seqToDownload: number | null = null;
-        if (target.id.startsWith('imap_') || target.id.startsWith('sent_')) {
+        let seqToDownload: number | null = target.imapUid || null;
+        const useUid = Boolean(target.imapUid);
+        if (!seqToDownload && (target.id.startsWith('imap_') || target.id.startsWith('sent_'))) {
           const parts = target.id.split('_');
           const lastNum = Number(parts[parts.length - 1]);
           if (!isNaN(lastNum)) seqToDownload = lastNum;
@@ -575,7 +755,7 @@ export class EmailService {
         }
 
         if (seqToDownload) {
-          const download = await client.download(String(seqToDownload));
+          const download = await client.download(String(seqToDownload), undefined, useUid ? { uid: true } : undefined);
           if (download && download.content) {
             const parsed = await simpleParser(download.content);
             target.bodyText = parsed.text || target.subject;

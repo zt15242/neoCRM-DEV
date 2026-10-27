@@ -17,6 +17,7 @@ import { EmailItem, EmailFolder } from '../../../shared/mailTypes';
 interface MailListPaneProps {
   emails: EmailItem[];
   currentFolder: EmailFolder | 'personas';
+  currentFolderLabel?: string;
   selectedEmailId: string | null;
   onSelectEmail: (emailId: string | null, options?: { markAsRead?: boolean }) => void;
   onToggleStar: (emailId: string) => void;
@@ -26,6 +27,7 @@ interface MailListPaneProps {
 export const MailListPane: React.FC<MailListPaneProps> = ({
   emails,
   currentFolder,
+  currentFolderLabel,
   selectedEmailId,
   onSelectEmail,
   onToggleStar,
@@ -133,7 +135,7 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-1.5">
             <h3 className="font-bold text-slate-800 text-sm">
-              {folderTitles[currentFolder] || '邮件列表'}
+              {folderTitles[currentFolder] || currentFolderLabel || '邮件列表'}
             </h3>
             <span className="text-[11px] text-slate-400 font-mono">({filteredEmails.length})</span>
           </div>
@@ -221,14 +223,14 @@ export const MailListPane: React.FC<MailListPaneProps> = ({
             )}
           </div>
         ) : (
-          filteredEmails.map((email) => {
+          filteredEmails.map((email, index) => {
             const isSelected = email.id === selectedEmailId;
             const hasAnalysis = Boolean(email.analysis);
             const isUrgent = email.analysis?.urgencyLevel === 'high' || email.tags?.includes('紧急');
 
             return (
               <div
-                key={email.id}
+                key={`${email.accountId}:${email.folder}:${email.id}:${email.date}:${index}`}
                 onClick={() => onSelectEmail(email.id)}
                 className={`p-3 transition-all cursor-pointer relative group ${
                   isSelected

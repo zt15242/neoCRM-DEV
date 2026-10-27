@@ -821,7 +821,9 @@ ipcMain.handle('mail:getAccounts', async () => emailService.getAccounts());
 ipcMain.handle('mail:testAndSaveAccount', async (_, payload) => emailService.testAndSaveAccount(payload));
 ipcMain.handle('mail:deleteAccount', async (_, accountId: string) => emailService.deleteAccount(accountId));
 ipcMain.handle('mail:setDefaultAccount', async (_, accountId: string) => emailService.setDefaultAccount(accountId));
-ipcMain.handle('mail:syncEmailsForAccount', async (_, accountId: string) => emailService.syncEmailsForAccount(accountId));
+ipcMain.handle('mail:syncEmailsForAccount', async (_, accountId: string, options?: { mode?: 'recent' | 'all'; maxBodyFetch?: number }) =>
+  emailService.syncEmailsForAccount(accountId, options)
+);
 ipcMain.handle('mail:fetchEmailBody', async (_, accountId: string, emailId: string) => emailService.fetchEmailBody(accountId, emailId));
 ipcMain.handle('mail:saveAccounts', async (_, accounts) => emailService.saveAccounts(accounts));
 ipcMain.handle('mail:getEmails', async () => emailService.getEmails());
