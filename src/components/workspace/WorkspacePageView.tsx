@@ -313,6 +313,7 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
       key={settingWidgetId}
       widget={page.widgets.find((widget) => widget.id === settingWidgetId)!}
       sources={sources}
+      projectPath={activeProject?.localPath}
       busy={busy}
       onClose={() => setSettingWidgetId(null)}
       onSave={(widget) => void saveWidgetSettings(widget)}
@@ -589,6 +590,7 @@ const ExecutionLogsModal: React.FC<{
 interface WidgetSettingsModalProps {
   widget: WorkspaceWidget;
   sources: WorkspaceDataSources;
+  projectPath?: string;
   busy: boolean;
   onClose: () => void;
   onSave: (widget: WorkspaceWidget) => void;
