@@ -22,6 +22,39 @@ import {
 } from 'lucide-react';
 import { EmailItem } from '../../../shared/mailTypes';
 
+const sanitizeEmailHtml = (html: string): string => {
+  if (typeof document === 'undefined') return html;
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  // Email HTML is untrusted content. Remove document-level styles/scripts before rendering it inside the app.
+  template.content.querySelectorAll('style, script, iframe, object, embed, link, meta, base').forEach((node) => node.remove());
+
+  template.content.querySelectorAll('*').forEach((element) => {
+    Array.from(element.attributes).forEach((attribute) => {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (name.startsWith('on') || ((name === 'href' || name === 'src' || name === 'action') && /^javascript:/i.test(value))) {
+        element.removeAttribute(attribute.name);
+      }
+      if (name === 'size' || name === 'face') {
+        element.removeAttribute(attribute.name);
+      }
+      if (name === 'style') {
+        const normalizedStyle = value
+          .replace(/(?:^|;)\s*(?:font-size|font-family|line-height|text-size-adjust)\s*:[^;]*/gi, '')
+          .replace(/^\s*;|;\s*$/g, '')
+          .trim();
+        if (normalizedStyle) element.setAttribute('style', normalizedStyle);
+        else element.removeAttribute('style');
+      }
+    });
+  });
+
+  return template.innerHTML;
+};
+
 interface MailDetailPaneProps {
   email: EmailItem | null;
   currentUserEmail?: string;
@@ -43,6 +76,7 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
   onOpenPersonaDrawer,
   showToast,
 }) => {
+  const safeBodyHtml = email?.bodyHtml ? sanitizeEmailHtml(email.bodyHtml) : '';
   // 计算单人回复数据
   const getSingleReplyData = () => {
     if (!email) return { to: '', subject: '', body: '' };
@@ -358,10 +392,10 @@ export const MailDetailPane: React.FC<MailDetailPaneProps> = ({
 
         {/* 正文呈现区 (支持 HTML / 纯文本规范渲染) */}
         <div className="pt-2 text-slate-800 leading-relaxed select-text font-sans text-xs">
-          {email.bodyHtml ? (
+          {safeBodyHtml ? (
             <div
-              className="prose prose-sm max-w-none text-slate-800"
-              dangerouslySetInnerHTML={{ __html: email.bodyHtml }}
+              className="mail-body-html max-w-none text-slate-800"
+              dangerouslySetInnerHTML={{ __html: safeBodyHtml }}
             />
           ) : email.bodyText ? (
             <div className="whitespace-pre-wrap leading-relaxed space-y-2">

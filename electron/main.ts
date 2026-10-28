@@ -113,9 +113,15 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  // Keep the app UI at a stable scale; Electron otherwise persists accidental zoom changes.
-  win.webContents.setZoomFactor(1);
-  win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  // Keep the app UI at a stable scale; Electron may restore a persisted zoom after navigation.
+  const normalizeWindowScale = () => {
+    if (!win || win.isDestroyed()) return;
+    win.webContents.setZoomFactor(1);
+    win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  };
+  normalizeWindowScale();
+  win.webContents.on("did-finish-load", normalizeWindowScale);
+  win.webContents.on("did-navigate", normalizeWindowScale);
   win.webContents.on("before-input-event", (event, input) => {
     if (!(input.control || input.meta) || input.alt) return;
     if (["+", "=", "-", "_", "0"].includes(input.key)) {
