@@ -22,7 +22,9 @@ import {
   ChevronRight,
   Search,
   QrCode,
-  Smartphone
+  Smartphone,
+  RefreshCw,
+  Coins
 } from 'lucide-react';
 
 interface ModelProviderSettingsProps {
@@ -61,22 +63,35 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
   // WorkBuddy 扫码模态框与账号状态
   const [wbAuthModalOpen, setWbAuthModalOpen] = useState(false);
   const [wbAccount, setWbAccount] = useState<any>(null);
+  const [wbStatus, setWbStatus] = useState<any>(null);
 
-  const fetchWbStatus = async () => {
+  const fetchWbStatus = async (refresh = false) => {
     try {
-      if (window.neoApi?.workbuddyGetStatus) {
-        const res = await window.neoApi.workbuddyGetStatus();
+      const api = refresh ? window.neoApi?.workbuddyRefreshStatus : window.neoApi?.workbuddyGetStatus;
+      if (api) {
+        const res = await api();
+        setWbStatus(res);
         if (res.loggedIn && res.account) {
           setWbAccount(res.account);
         } else {
           setWbAccount(null);
         }
+        if (Array.isArray(res.models) && res.models.length > 0) {
+          const currentProvider = providers.find((provider) => provider.id === 'workbuddy');
+          const currentIds = (currentProvider?.models || []).map((model) => model.id).join('|');
+          const liveIds = res.models.map((model: AiModelItem) => model.id).join('|');
+          if (currentProvider && currentIds !== liveIds) {
+            await onSaveProvider({ ...currentProvider, models: res.models });
+          }
+        }
+        return res;
       }
     } catch {}
+    return null;
   };
 
   React.useEffect(() => {
-    fetchWbStatus();
+    fetchWbStatus(true);
   }, []);
 
 
@@ -329,6 +344,8 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
                 onTest={handleTestProvider}
                 showToast={showToast}
                 wbAccount={provider.id === 'workbuddy' ? wbAccount : undefined}
+                wbStatus={provider.id === 'workbuddy' ? wbStatus : undefined}
+                onRefreshWbStatus={() => fetchWbStatus(true)}
                 onOpenWbAuth={() => setWbAuthModalOpen(true)}
               />
             );
@@ -398,7 +415,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         isOpen={wbAuthModalOpen}
         onClose={() => setWbAuthModalOpen(false)}
         onSuccess={() => {
-          fetchWbStatus();
+          fetchWbStatus(true);
         }}
         showToast={showToast}
       />
@@ -437,6 +454,8 @@ const ThirdPartyProviderCard: React.FC<{
   onTest: (provider: AiProviderConfig, key: string, url: string) => Promise<void>;
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
   wbAccount?: any;
+  wbStatus?: any;
+  onRefreshWbStatus?: () => Promise<any>;
   onOpenWbAuth?: () => void;
 }> = ({
   provider,
@@ -451,6 +470,8 @@ const ThirdPartyProviderCard: React.FC<{
   onTest,
   showToast,
   wbAccount,
+  wbStatus,
+  onRefreshWbStatus,
   onOpenWbAuth,
 }) => {
   const [localKey, setLocalKey] = useState(provider.apiKey || '');
@@ -475,6 +496,28 @@ const ThirdPartyProviderCard: React.FC<{
     }
     setFetching(true);
     try {
+      if (isWorkBuddy && onRefreshWbStatus) {
+        const refreshStartedAt = Date.now();
+        const status = await onRefreshWbStatus();
+        const refreshedModels = status?.models?.length && !status.modelsSyncError && status.modelsSyncedAt >= refreshStartedAt
+          ? status.models
+          : null;
+        if (refreshedModels) {
+          setLocalModels(refreshedModels);
+          await onSave(provider, localKey, localUrl, refreshedModels);
+          const remaining = status.quota?.remainingPoints;
+          showToast(
+            'success',
+            `已同步 ${refreshedModels.length} 个最新模型${remaining !== undefined ? `，剩余积分 ${remaining} ${status.quota?.unit || '积分'}` : status.quotaSyncError ? '，积分查询失败' : ''}`
+          );
+        } else {
+          const quotaSummary = status?.quotaSyncedAt >= refreshStartedAt && status?.quota?.remainingPoints !== undefined
+            ? `积分已更新为 ${status.quota.remainingPoints} ${status.quota.unit || '积分'}；`
+            : '';
+          showToast('error', `${quotaSummary}${status?.modelsSyncError || '上游未返回可用模型'}`);
+        }
+        return;
+      }
       const temp: AiProviderConfig = {
         ...provider,
         apiKey: localKey.trim(),
@@ -681,6 +724,43 @@ const ThirdPartyProviderCard: React.FC<{
                   检查网关状态
                 </button>
               </div>
+
+              {wbStatus && (
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="rounded-lg border border-cyan-200 bg-white/80 px-2.5 py-2">
+                    <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                      <Coins className="w-3 h-3 text-amber-500" />
+                      <span>剩余积分</span>
+                    </div>
+                    <div className="mt-0.5 text-sm font-bold text-slate-800">
+                      {wbStatus.quota?.remainingPoints !== undefined
+                        ? `${wbStatus.quota.remainingPoints} ${wbStatus.quota.unit || '积分'}`
+                        : '未获取'}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {wbStatus.quotaSyncError
+                        ? `同步失败：${wbStatus.quotaSyncError}`
+                        : wbStatus.quotaSyncedAt
+                        ? `更新于 ${new Date(wbStatus.quotaSyncedAt).toLocaleTimeString()}`
+                        : '尚未同步'}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-cyan-200 bg-white/80 px-2.5 py-2">
+                    <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                      <Cpu className="w-3 h-3 text-cyan-600" />
+                      <span>实时模型</span>
+                    </div>
+                    <div className="mt-0.5 text-sm font-bold text-slate-800">{wbStatus.models?.length || 0} 个</div>
+                    <div className="text-[10px] text-slate-400">
+                      {wbStatus.modelsSyncError
+                        ? `同步失败：${wbStatus.modelsSyncError}`
+                        : wbStatus.modelsSyncedAt
+                        ? `更新于 ${new Date(wbStatus.modelsSyncedAt).toLocaleTimeString()}`
+                        : '尚未同步'}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -728,7 +808,7 @@ const ThirdPartyProviderCard: React.FC<{
               className="text-[11px] text-sky-600 hover:text-sky-700 font-medium flex items-center space-x-1"
             >
               {fetching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-              <span>探测可用模型</span>
+              <span>{isWorkBuddy ? '刷新积分与最新模型' : '探测可用模型'}</span>
             </button>
             <div className="flex items-center space-x-2">
               <button

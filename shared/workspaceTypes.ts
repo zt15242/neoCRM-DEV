@@ -1,11 +1,21 @@
 import type { CrmProductType } from './types';
 
-export type WorkspaceWidgetType = 'text' | 'crm-query' | 'mail-list' | 'async-apex-dashboard';
+export type WorkspaceWidgetType =
+  | 'text'
+  | 'crm-query'
+  | 'mail-list'
+  | 'async-apex-dashboard'
+  | 'custom-html'
+  | 'custom-tsx';
 
 export interface WorkspaceWidget {
   id: string;
   type: WorkspaceWidgetType;
   title: string;
+  projectId?: string;
+  relativePath?: string;
+  buildStatus?: 'pending' | 'ready' | 'error';
+  buildError?: string;
   text?: string;
   accountId?: string;
   connectorId?: string;
@@ -23,6 +33,7 @@ export interface WorkspaceWidget {
 export interface WorkspacePage {
   id: string;
   name: string;
+  projectId?: string;
   description?: string;
   widgets: WorkspaceWidget[];
   createdAt: number;
@@ -47,6 +58,9 @@ export interface WorkspaceWidgetResult {
   records?: Array<Record<string, unknown>>;
   fields?: string[];
   totalSize?: number;
+  content?: string;
+  sourcePath?: string;
+  buildStatus?: 'ready' | 'error';
   error?: string;
   updatedAt: number;
 }

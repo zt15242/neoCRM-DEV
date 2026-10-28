@@ -223,10 +223,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   // 多会话并发安全与流式状态字典：按 sessionId 独立记录正在生成的 { requestId, messageId }
   const [activeStreams, setActiveStreams] = useState<Record<string, { requestId: string; messageId: string }>>({});
+  const activeStreamsRef = useRef<Record<string, { requestId: string; messageId: string }>>({});
+  activeStreamsRef.current = activeStreams;
   const currentSessionStream = activeSessionId ? activeStreams[activeSessionId] : null;
   const isCurrentSessionStreaming = Boolean(currentSessionStream);
   const streamingMessageId = currentSessionStream?.messageId || null;
-  const reasoningStartTimeRef = useRef<number | null>(null);
+  const reasoningStartTimesRef = useRef<Record<string, number>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // 判断供应商是否已配置完成
@@ -377,9 +379,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             if (msg.id !== messageId) return msg;
 
             if (type === 'reasoning_delta' && delta) {
-              if (!reasoningStartTimeRef.current) {
-                reasoningStartTimeRef.current = Date.now();
-              }
+              reasoningStartTimesRef.current[sessionId] ||= Date.now();
               return {
                 ...msg,
                 reasoningContent: (msg.reasoningContent || '') + delta,
@@ -388,8 +388,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
             if (type === 'content_delta' && delta) {
               let duration = msg.reasoningDurationMs;
-              if (reasoningStartTimeRef.current && !duration) {
-                duration = Date.now() - reasoningStartTimeRef.current;
+              const reasoningStartedAt = reasoningStartTimesRef.current[sessionId];
+              if (reasoningStartedAt && !duration) {
+                duration = Date.now() - reasoningStartedAt;
               }
               return {
                 ...msg,
@@ -442,12 +443,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
       if (type === 'done' || type === 'error') {
         setActiveStreams((prev) => {
-          if (!prev[sessionId]) return prev;
+          if (prev[sessionId]?.requestId !== event.requestId) return prev;
           const next = { ...prev };
           delete next[sessionId];
+          activeStreamsRef.current = next;
           return next;
         });
-        reasoningStartTimeRef.current = null;
+        delete reasoningStartTimesRef.current[sessionId];
       }
     });
 
@@ -546,7 +548,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     skillIds?: string[],
     mcpIds?: string[]
   ) => {
-    let targetSession = sessionsRef.current.find((s) => s.id === activeSessionId) || activeSession;
+    const currentStream = activeSessionId ? activeStreamsRef.current[activeSessionId] : null;
+    if (currentStream) {
+      showToast('info', '当前对话仍在运行，请先停止当前回复，或切换到其他对话继续。');
+      return;
+    }
+
+    let targetSession = activeSessionId ? sessionsRef.current.find((s) => s.id === activeSessionId) || null : null;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
 
     // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
@@ -630,12 +638,16 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
     setActiveSessionId(updatedSession.id);
 
-    const requestId = `req_${Date.now()}`;
+    const requestId = `req_${Date.now()}_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10)}`;
     setActiveStreams((prev) => ({
       ...prev,
       [updatedSession.id]: { requestId, messageId: assistantMsgId },
     }));
-    reasoningStartTimeRef.current = null;
+    activeStreamsRef.current = {
+      ...activeStreamsRef.current,
+      [updatedSession.id]: { requestId, messageId: assistantMsgId },
+    };
+    delete reasoningStartTimesRef.current[updatedSession.id];
 
     const effectiveMcpIds = mcpIds !== undefined ? mcpIds : activeMcpServerIds;
     await window.neoApi.aiStartChatStream({
@@ -658,14 +670,20 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   // 停止生成
   const handleStopStream = async (targetSessionId?: string) => {
     const sId = targetSessionId || activeSessionId;
-    const stream = sId ? activeStreams[sId] : null;
+    const stream = sId ? activeStreamsRef.current[sId] : null;
     if (stream) {
-      await window.neoApi.aiAbortChatStream(stream.requestId);
-      setActiveStreams((prev) => {
-        const next = { ...prev };
-        if (sId) delete next[sId];
-        return next;
-      });
+      try {
+        await window.neoApi.aiAbortChatStream(stream.requestId);
+      } finally {
+        setActiveStreams((prev) => {
+          if (!sId || prev[sId]?.requestId !== stream.requestId) return prev;
+          const next = { ...prev };
+          delete next[sId];
+          activeStreamsRef.current = next;
+          return next;
+        });
+        if (sId) delete reasoningStartTimesRef.current[sId];
+      }
     }
   };
 

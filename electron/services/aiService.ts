@@ -78,9 +78,9 @@ export class AiService {
 
   private workbuddyService?: any;
   private workspaceService?: {
-    listPages(): WorkspacePage[];
+    listPages(projectId?: string): WorkspacePage[];
     getDataSources(): any;
-    savePage(page: WorkspacePage): WorkspacePage[];
+    savePage(page: WorkspacePage, projectPath?: string): WorkspacePage[];
     listConnectorEntities(accountId: string): Promise<any[]>;
     getConnectorEntityFields(accountId: string, entityApiKey: string): Promise<any[]>;
   };
@@ -851,6 +851,10 @@ ${dialogHistoryText}`;
   }
 
   public async fetchAvailableModels(provider: AiProviderConfig): Promise<{ success: boolean; models: AiModelItem[]; error?: string }> {
+    if (provider.id === 'workbuddy' && this.workbuddyService?.fetchLiveModels) {
+      return this.workbuddyService.fetchLiveModels();
+    }
+
     const baseUrl = provider.baseUrl?.trim().replace(/\/+$/, '') || '';
     if (!baseUrl) {
       return { success: false, models: [], error: 'Base URL 地址不能为空' };
@@ -1010,6 +1014,21 @@ ${dialogHistoryText}`;
   ): Promise<void> {
     const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
 
+    // 必须在任何压缩、MCP 探测或模型校验前注册控制器，否则用户在准备阶段点击停止时没有可取消句柄。
+    const controller = new AbortController();
+    const previousController = this.activeControllers.get(requestId);
+    previousController?.abort();
+    this.activeControllers.set(requestId, controller);
+    const throwIfAborted = () => {
+      if (controller.signal.aborted) {
+        const error = new Error('对话已停止');
+        error.name = 'AbortError';
+        throw error;
+      }
+    };
+
+    throwIfAborted();
+
     // 提取本轮会话中用户显式上传/引用的文件路径白名单（单文件安全豁免）
     const sessionAllowedFiles = (messages || [])
       .flatMap((m) => m.attachments || [])
@@ -1098,9 +1117,6 @@ ${dialogHistoryText}`;
         currentSession.environment = freshEnv;
       }
     }
-    const controller = new AbortController();
-    this.activeControllers.set(requestId, controller);
-
     try {
       // 筛选当前对话激活的外部自定义 MCP 服务
       const allCustomMcp = (config.mcpServers || []).filter(
@@ -1113,6 +1129,7 @@ ${dialogHistoryText}`;
 
       // 若自定义 MCP 尚未探测工具列表，在对话前快速探测一次
       for (const srv of activeCustomMcp) {
+        throwIfAborted();
         const hasOnlyDefault =
           !srv.tools ||
           srv.tools.length === 0 ||
@@ -1392,14 +1409,15 @@ declare const tools: {
         systemParts.push(`【用户自定义追加规范】\n${config.settings.customSystemPrompt.trim()}`);
       }
 
-      systemParts.push(`【自定义工作台页面创建规则】
+systemParts.push(`【自定义工作台页面创建规则】
 当用户要求“创建工作台组件/看板/业务页面”时，目标是应用内的自定义工作台，不是仅生成项目源代码。
 1. 必须先调用 workspace_list_pages 获取当前页面及真实 CRM/邮箱账号；涉及 Salesforce 对象/字段时，先用对应账号调用 workspace_list_entities / workspace_get_entity_fields 核实，系统对象 AsyncApexJob 可直接按 Salesforce SOQL 查询。
-2. 生成页面配置后必须调用 workspace_save_page 保存，组件 type 必须使用受支持值。针对 AsyncApexJob BI 请求，使用 async-apex-dashboard，并绑定 workspace_list_pages 返回的 Salesforce accountId。
-3. 除非用户明确要求定时订阅或飞书推送，所有新组件的 subscription.enabled 和 subscription.feishuEnabled 必须默认 false；不得替用户开启自动任务或外部群消息。
-4. subscription.intervalMinutes 只接受 15、30、60、240、1440、10080 这些频率；文本组件不支持订阅。飞书推送需用户明确要求且飞书机器人已配置。
-5. 只有 workspace_save_page 工具成功返回后，才能告诉用户页面/组件已出现在工作台；写了 .tsx 文件、执行了 SQL、或在回复中描述方案，都不代表已创建到工作台。
-6. 若查询工具没有真实返回数据，不得声称已执行或编造行数、KPI、统计结论；应在页面保存后让组件通过绑定连接器真实加载数据，并明确报告加载状态。`);
+2. 组件 type 支持 text、crm-query、mail-list、async-apex-dashboard、custom-html、custom-tsx。custom-html/custom-tsx 必须使用当前项目内的相对路径 relativePath；HTML 可直接挂载，TSX 必须是提供 default React 组件的 .tsx 文件，保存后还要由工作台实际构建预览。
+3. 生成页面配置后必须调用 workspace_save_page 保存，组件 type 必须使用受支持值。针对 AsyncApexJob BI 请求，使用 async-apex-dashboard，并绑定 workspace_list_pages 返回的 Salesforce accountId。创建自定义 HTML/TSX 组件时，必须同时写入真实项目文件（如用户要求生成）并保存页面配置；写文件不等于挂载。
+4. 除非用户明确要求定时订阅或飞书推送，所有新组件的 subscription.enabled 和 subscription.feishuEnabled 必须默认 false；不得替用户开启自动任务或外部群消息。
+5. subscription.intervalMinutes 只接受 15、30、60、240、1440、10080 这些频率；文本组件不支持订阅。飞书推送需用户明确要求且飞书机器人已配置。
+6. 只有 workspace_save_page 工具成功返回后，才能告诉用户页面/组件已出现在工作台；写了 .tsx 文件、执行了 SQL、或在回复中描述方案，都不代表已创建到工作台。
+7. 若查询工具没有真实返回数据，不得声称已执行或编造行数、KPI、统计结论；应在页面保存后让组件通过绑定连接器真实加载数据，并明确报告加载状态。`);
 
       // 注入已挂载的 Skill 技能指令 (仅允许用户个人专属技能动态挂载；系统内置技能受内核安全保护，禁止在普通对话中随意挂载)
       if (activeSkillIds && activeSkillIds.length > 0) {
@@ -1704,6 +1722,7 @@ ${mcpInfoText}
       const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
 
       while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
+        throwIfAborted();
         stepCount++;
         const isSafetyFuseTurn = stepCount >= maxSafetySteps; // 仅在达到60步安全熔断时强制收敛
 
@@ -2016,7 +2035,9 @@ ${mcpInfoText}
             let isError = false;
 
             try {
-              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath, sessionAllowedFiles);
+              throwIfAborted();
+              const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath, currentSession.projectId, sessionAllowedFiles, controller.signal);
+              throwIfAborted();
               toolResult = res.data;
               resultSummary = res.summary;
               executedToolsLog.push({
@@ -2026,6 +2047,7 @@ ${mcpInfoText}
                 data: res.data,
               });
             } catch (toolErr: any) {
+              if (controller.signal.aborted || toolErr?.name === 'AbortError') throw toolErr;
               isError = true;
               toolResult = { error: toolErr.message };
               resultSummary = `调用失败: ${toolErr.message}`;
@@ -2268,6 +2290,10 @@ ${safeToolDataContext}
         }
       }
 
+      if (controller.signal.aborted) {
+        sendEvent({ requestId, sessionId, messageId, type: 'done' });
+        return;
+      }
       sendEvent({
         requestId,
         sessionId,
@@ -2292,7 +2318,9 @@ ${safeToolDataContext}
         error: err.message || '对话生成异常中断',
       });
     } finally {
-      this.activeControllers.delete(requestId);
+      if (this.activeControllers.get(requestId) === controller) {
+        this.activeControllers.delete(requestId);
+      }
     }
   }
 
@@ -2578,11 +2606,14 @@ ${safeToolDataContext}
               currentSession.environment,
               currentSession.tokenData,
               projectPath,
-              sessionAllowedFiles
+              currentSession.projectId,
+              sessionAllowedFiles,
+              controller.signal
             );
             toolResult = res.data;
             resultSummary = res.summary;
           } catch (toolErr: any) {
+            if (controller.signal.aborted || toolErr?.name === 'AbortError') throw toolErr;
             isError = true;
             toolResult = { error: toolErr.message };
             resultSummary = `调用失败: ${toolErr.message}`;
@@ -2680,11 +2711,18 @@ ${safeToolDataContext}
     env?: NeoEnvironment,
     tokenData?: TokenData,
     projectPath?: string,
-    sessionAllowedFiles?: string[]
+    projectId?: string,
+    sessionAllowedFiles?: string[],
+    signal?: AbortSignal
   ): Promise<{ data: any; summary: string }> {
+    if (signal?.aborted) {
+      const error = new Error('对话已停止');
+      error.name = 'AbortError';
+      throw error;
+    }
     if (name === 'workspace_list_pages') {
       if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
-      const pages = this.workspaceService.listPages();
+      const pages = this.workspaceService.listPages(projectId);
       const dataSources = this.workspaceService.getDataSources();
       return { data: { pages, dataSources }, summary: `读取工作台配置成功：${pages.length} 个页面、${dataSources.crmAccounts.length} 个 CRM 账号、${dataSources.mailAccounts.length} 个邮箱账号` };
     }
@@ -2692,7 +2730,7 @@ ${safeToolDataContext}
       if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
       const page = args.page as WorkspacePage;
       if (!page || !Array.isArray(page.widgets)) throw new Error('缺少有效的页面配置');
-      const pages = this.workspaceService.savePage(page);
+      const pages = this.workspaceService.savePage(page, projectPath);
       return { data: { page: pages.find((item) => item.id === page.id), pages }, summary: `页面 [${page.name}] 已保存，包含 ${page.widgets.length} 个组件` };
     }
     if (name === 'workspace_list_entities') {
@@ -2712,7 +2750,7 @@ ${safeToolDataContext}
     // 1. 判断是否为销售易本地 Harness 工具
     const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
     if (isCrmTool) {
-      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles);
+      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles, signal);
     }
 
     // 2. 匹配外部 MCP 服务
@@ -2727,7 +2765,7 @@ ${safeToolDataContext}
       throw new Error(`未找到能够处理工具 [${name}] 的 MCP 服务或本地驱动`);
     }
 
-    const res = await this.mcpClientService.callTool(targetServer, name, args);
+    const res = await this.mcpClientService.callTool(targetServer, name, args, signal);
     if (!res.success) {
       throw new Error(res.error || res.summary || `调用 MCP 工具 ${name} 失败`);
     }
@@ -2937,12 +2975,13 @@ ${safeToolDataContext}
     env?: NeoEnvironment,
     tokenData?: TokenData,
     projectPath?: string,
-    sessionAllowedFiles?: string[]
+    sessionAllowedFiles?: string[],
+    signal?: AbortSignal
   ): Promise<{ data: any; summary: string }> {
     // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
     if (name === "run_code") {
       const toolsContext: Record<string, Function> = {
-        bash: async (params: any) => this.dshToolService.executeBash(params, projectPath),
+        bash: async (params: any) => this.dshToolService.executeBash(params, projectPath, signal),
         read: async (params: any) => this.dshToolService.readFile(params, projectPath, sessionAllowedFiles),
         write: async (params: any) => this.dshToolService.writeFile(params, projectPath),
         edit: async (params: any) => this.dshToolService.editFile(params, projectPath),
@@ -3003,7 +3042,7 @@ ${safeToolDataContext}
         };
       }
 
-      const res = await this.dshToolService.executePtcCode(args, toolsContext);
+      const res = await this.dshToolService.executePtcCode(args, toolsContext, 60000, signal);
       const logSummary = res.logs.length > 0 ? ` (输出了 ${res.logs.length} 行日志)` : '';
       return {
         data: res,
@@ -3018,7 +3057,8 @@ ${safeToolDataContext}
           ...args,
           workdir: args.workdir || projectPath,
         },
-        projectPath
+        projectPath,
+        signal
       );
       return {
         data: res,
