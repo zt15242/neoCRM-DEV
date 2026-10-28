@@ -6,6 +6,8 @@ import {
   GenerateReplyOptions, 
   GeneratedReplyResult 
 } from '../../shared/mailTypes';
+import type { WorkspaceDataSources, WorkspacePage, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
+import type { FeishuWorkspaceSettings } from '../../shared/feishuTypes';
 import { 
   NeoEnvironment, 
   SessionState, 
@@ -272,6 +274,16 @@ declare global {
       mailGetPersonas?: () => Promise<ContactPersona[]>;
       mailAnalyzePersonaByEmail?: (email: string, hints?: string) => Promise<ContactPersona>;
       mailSavePersonaNotes?: (email: string, notes: string) => Promise<ContactPersona | null>;
+
+      workspaceListPages?: () => Promise<WorkspacePage[]>;
+      workspaceSavePage?: (page: WorkspacePage) => Promise<WorkspacePage[]>;
+      workspaceDeletePage?: (pageId: string) => Promise<WorkspacePage[]>;
+      workspaceGetDataSources?: () => Promise<WorkspaceDataSources>;
+      workspaceRunPage?: (pageId: string) => Promise<WorkspaceWidgetResult[]>;
+      workspaceQueryConnector?: (accountId: string, query: string) => Promise<{ success: boolean; data?: { records: any[]; totalSize: number; fields: string[] }; error?: string }>;
+      feishuGetSettings?: () => Promise<FeishuWorkspaceSettings>;
+      feishuSaveSettings?: (settings: { webhookUrl?: string }) => Promise<FeishuWorkspaceSettings>;
+      feishuTestMessage?: () => Promise<{ success: boolean; message: string }>;
 
     };
   }

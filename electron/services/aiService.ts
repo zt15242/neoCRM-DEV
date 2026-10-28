@@ -63,6 +63,7 @@ import { MetadataService } from './metadataService';
 import { DataService } from './dataService';
 import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
+import type { WorkspacePage } from '../../shared/workspaceTypes';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -76,8 +77,19 @@ export class AiService {
   private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
 
   private workbuddyService?: any;
+  private workspaceService?: {
+    listPages(): WorkspacePage[];
+    getDataSources(): any;
+    savePage(page: WorkspacePage): WorkspacePage[];
+    listConnectorEntities(accountId: string): Promise<any[]>;
+    getConnectorEntityFields(accountId: string, entityApiKey: string): Promise<any[]>;
+  };
   public setWorkBuddyService(service: any) {
     this.workbuddyService = service;
+  }
+
+  public setWorkspaceService(service: any) {
+    this.workspaceService = service;
   }
 
   constructor(
@@ -1380,6 +1392,15 @@ declare const tools: {
         systemParts.push(`【用户自定义追加规范】\n${config.settings.customSystemPrompt.trim()}`);
       }
 
+      systemParts.push(`【自定义工作台页面创建规则】
+当用户要求“创建工作台组件/看板/业务页面”时，目标是应用内的自定义工作台，不是仅生成项目源代码。
+1. 必须先调用 workspace_list_pages 获取当前页面及真实 CRM/邮箱账号；涉及 Salesforce 对象/字段时，先用对应账号调用 workspace_list_entities / workspace_get_entity_fields 核实，系统对象 AsyncApexJob 可直接按 Salesforce SOQL 查询。
+2. 生成页面配置后必须调用 workspace_save_page 保存，组件 type 必须使用受支持值。针对 AsyncApexJob BI 请求，使用 async-apex-dashboard，并绑定 workspace_list_pages 返回的 Salesforce accountId。
+3. 除非用户明确要求定时订阅或飞书推送，所有新组件的 subscription.enabled 和 subscription.feishuEnabled 必须默认 false；不得替用户开启自动任务或外部群消息。
+4. subscription.intervalMinutes 只接受 15、30、60、240、1440、10080 这些频率；文本组件不支持订阅。飞书推送需用户明确要求且飞书机器人已配置。
+5. 只有 workspace_save_page 工具成功返回后，才能告诉用户页面/组件已出现在工作台；写了 .tsx 文件、执行了 SQL、或在回复中描述方案，都不代表已创建到工作台。
+6. 若查询工具没有真实返回数据，不得声称已执行或编造行数、KPI、统计结论；应在页面保存后让组件通过绑定连接器真实加载数据，并明确报告加载状态。`);
+
       // 注入已挂载的 Skill 技能指令 (仅允许用户个人专属技能动态挂载；系统内置技能受内核安全保护，禁止在普通对话中随意挂载)
       if (activeSkillIds && activeSkillIds.length > 0) {
         for (const sid of activeSkillIds) {
@@ -2661,6 +2682,33 @@ ${safeToolDataContext}
     projectPath?: string,
     sessionAllowedFiles?: string[]
   ): Promise<{ data: any; summary: string }> {
+    if (name === 'workspace_list_pages') {
+      if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
+      const pages = this.workspaceService.listPages();
+      const dataSources = this.workspaceService.getDataSources();
+      return { data: { pages, dataSources }, summary: `读取工作台配置成功：${pages.length} 个页面、${dataSources.crmAccounts.length} 个 CRM 账号、${dataSources.mailAccounts.length} 个邮箱账号` };
+    }
+    if (name === 'workspace_save_page') {
+      if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
+      const page = args.page as WorkspacePage;
+      if (!page || !Array.isArray(page.widgets)) throw new Error('缺少有效的页面配置');
+      const pages = this.workspaceService.savePage(page);
+      return { data: { page: pages.find((item) => item.id === page.id), pages }, summary: `页面 [${page.name}] 已保存，包含 ${page.widgets.length} 个组件` };
+    }
+    if (name === 'workspace_list_entities') {
+      if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
+      const accountId = String(args.accountId || '');
+      if (!this.workspaceService.getDataSources().crmAccounts.some((item: any) => item.accountId === accountId)) throw new Error('该 CRM 账号不存在');
+      const entities = await this.workspaceService.listConnectorEntities(accountId);
+      return { data: { entities: entities.map(({ apiKey, label, isStandard }: any) => ({ apiKey, label, isStandard })) }, summary: `获取该连接器对象清单成功，共 ${entities.length} 个对象` };
+    }
+    if (name === 'workspace_get_entity_fields') {
+      if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
+      const accountId = String(args.accountId || '');
+      if (!this.workspaceService.getDataSources().crmAccounts.some((item: any) => item.accountId === accountId)) throw new Error('该 CRM 账号不存在');
+      const fields = await this.workspaceService.getConnectorEntityFields(accountId, String(args.entityApiKey || ''));
+      return { data: { fields: fields.map(({ apiKey, label, typeName, itemType, referObjectApiKey }: any) => ({ apiKey, label, typeName, itemType, referObjectApiKey })) }, summary: `获取对象真实字段成功，共 ${fields.length} 个字段` };
+    }
     // 1. 判断是否为销售易本地 Harness 工具
     const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
     if (isCrmTool) {

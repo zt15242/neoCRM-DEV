@@ -17,6 +17,7 @@ import { McpSettings } from './McpSettings';
 import { SkillSettings } from './SkillSettings';
 import { AgentHarnessSettings } from './AgentHarnessSettings';
 import { GeneralSettings } from './GeneralSettings';
+import { FeishuWorkspaceSettings } from './FeishuWorkspaceSettings';
 import { PluginManagerPage } from '../plugins/PluginManagerPage';
 import { 
   Cpu, 
@@ -26,10 +27,11 @@ import {
   Plug,
   Lightbulb,
   X,
-  FileText
+  FileText,
+  MessageSquare,
 } from 'lucide-react';
 
-export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general' | 'logs';
+export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general' | 'logs' | 'feishu';
 
 interface SettingsManagerProps {
   isOpen: boolean;
@@ -234,6 +236,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 <Sliders className="w-4 h-4 shrink-0" />
                 <span>通用与工作台偏好</span>
               </button>
+
+              <button
+                onClick={() => setActiveSubTab('feishu')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${activeSubTab === 'feishu' ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'}`}
+              >
+                <MessageSquare className="w-4 h-4 shrink-0" />
+                <span>飞书推送</span>
+              </button>
             </div>
 
             {/* 底部信息 */}
@@ -306,6 +316,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
               </div>
             )}
+
+            {activeSubTab === 'feishu' && <div className="p-6"><FeishuWorkspaceSettings showToast={showToast} /></div>}
 
             {activeSubTab === 'logs' && (
               <div className="p-6 max-w-5xl">

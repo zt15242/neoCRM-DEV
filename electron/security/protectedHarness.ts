@@ -377,6 +377,81 @@ export const CRM_HARNESS_TOOLS_SPEC = [
   {
     type: 'function',
     function: {
+      name: 'workspace_list_entities',
+      description: '读取指定工作台 CRM 账号绑定环境中的真实对象清单。创建或调整 CRM 查询组件时，先用 workspace_list_pages 选择账号，再调用本工具确认对象 API 名。',
+      parameters: { type: 'object', properties: { accountId: { type: 'string', description: 'workspace_list_pages 返回的真实 CRM 账号 ID' } }, required: ['accountId'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_get_entity_fields',
+      description: '读取指定工作台 CRM 账号及对象下的真实字段元数据。生成查询前必须调用，严禁猜测字段名。',
+      parameters: { type: 'object', properties: { accountId: { type: 'string' }, entityApiKey: { type: 'string' } }, required: ['accountId', 'entityApiKey'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_list_pages',
+      description: '读取当前本地自定义工作台页面及可用 CRM 连接器账号、邮箱账号。用户提出创建或调整业务页面前先调用，使用返回的真实账号 ID 绑定数据源，不要臆造连接器、邮箱或字段。',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_save_page',
+      description: '保存自定义工作台页面配置。仅在用户明确要求创建/修改并确认展示的页面方案后调用。CRM 查询必须绑定 workspace_list_pages 返回的 accountId，并使用只读 SELECT 和 LIMIT 不超过 500；邮件组件绑定真实邮件账号 ID。subscription.enabled 与 subscription.feishuEnabled 默认必须为 false，除非用户明确要求订阅或飞书推送。',
+      parameters: {
+        type: 'object',
+        properties: {
+          page: {
+            type: 'object',
+            description: '页面配置。页面 id 可复用现有页面 ID，创建时使用唯一字符串。',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              description: { type: 'string' },
+              createdAt: { type: 'number' },
+              updatedAt: { type: 'number' },
+              widgets: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    type: { type: 'string', enum: ['text', 'crm-query', 'mail-list', 'async-apex-dashboard'] },
+                    title: { type: 'string' },
+                    text: { type: 'string' },
+                    accountId: { type: 'string' },
+                    connectorId: { type: 'string' },
+                    query: { type: 'string' },
+                    limit: { type: 'number' },
+                    subscription: {
+                      type: 'object',
+                      description: '组件级定时订阅。只有用户明确要求时才启用；新建组件默认全部关闭。文本组件不支持订阅。',
+                      properties: {
+                        enabled: { type: 'boolean' },
+                        intervalMinutes: { type: 'number', enum: [15, 30, 60, 240, 1440, 10080] },
+                        feishuEnabled: { type: 'boolean', description: '仅在用户明确要求飞书推送并且已配置机器人时启用。' },
+                      },
+                    },
+                  },
+                  required: ['id', 'type', 'title'],
+                },
+              },
+            },
+            required: ['id', 'name', 'widgets'],
+          },
+        },
+        required: ['page'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'run_code',
       description: '【DeepSeek Harness 官方高级 PTC 模式 (Program-Through-Chat)】执行一段异步 JavaScript/TypeScript 脚本程序。代码运行在隔离环境中，可直接通过全局 `await tools.<toolName>(args)` 并行、循环或条件组合调用任何本地与 CRM 工具，支持控制台日志 console.log 与最终返回值 return。适用于多步骤批量处理、复杂管道与数据转换，一次性高效完成。',
       parameters: {

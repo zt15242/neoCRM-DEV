@@ -79,6 +79,23 @@ export class EmailService {
     return defaults;
   }
 
+  public getDashboardMailData(accountId?: string, limit = 10): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(Number(limit) || 10)));
+    return this.getEmails()
+      .filter((email) => (!accountId || email.accountId === accountId) && email.folder !== 'trash' && email.folder !== 'drafts')
+      .sort((a, b) => b.date - a.date)
+      .slice(0, safeLimit)
+      .map((email) => ({
+        id: email.id,
+        accountId: email.accountId,
+        from: email.from?.name || email.from?.email || '',
+        subject: email.subject,
+        date: email.date,
+        snippet: String(email.snippet || '').slice(0, 280),
+        isRead: email.isRead,
+      }));
+  }
+
   public saveEmails(emails: EmailItem[]): EmailItem[] {
     fs.writeFileSync(this.getEmailsFilePath(), JSON.stringify(emails, null, 2), 'utf-8');
     return emails;

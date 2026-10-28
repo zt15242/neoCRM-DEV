@@ -8,6 +8,7 @@ import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
 import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
 import { MailClientView } from './components/mail/MailClientView';
+import { WorkspacePageView } from './components/workspace/WorkspacePageView';
 import { SettingsManager, SettingsSubTab } from './components/settings/SettingsManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
@@ -590,6 +591,8 @@ export const App: React.FC = () => {
                   ? '对象与字段管理'
                   : activeTab === 'mail'
                   ? '智能邮件中心 (Foxmail)'
+                  : activeTab === 'workspace'
+                  ? '自定义工作台'
                   : '数据中心 (DML/SQL)'}
               </span>
             </div>
@@ -738,6 +741,12 @@ export const App: React.FC = () => {
         {activeTab === 'mail' && (
           <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
             <MailClientView showToast={showToast} />
+          </div>
+        )}
+
+        {activeTab === 'workspace' && (
+          <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
+            <WorkspacePageView showToast={showToast} />
           </div>
         )}
 

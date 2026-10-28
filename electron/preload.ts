@@ -189,6 +189,17 @@ export const neoApi = {
   mailAnalyzePersonaByEmail: (email: string, hints?: string) => ipcRenderer.invoke('mail:analyzePersonaByEmail', email, hints),
   mailSavePersonaNotes: (email: string, notes: string) => ipcRenderer.invoke('mail:savePersonaNotes', email, notes),
 
+  // 自定义业务页面与组件数据
+  workspaceListPages: () => ipcRenderer.invoke('workspace:listPages'),
+  workspaceSavePage: (page: any) => ipcRenderer.invoke('workspace:savePage', page),
+  workspaceDeletePage: (pageId: string) => ipcRenderer.invoke('workspace:deletePage', pageId),
+  workspaceGetDataSources: () => ipcRenderer.invoke('workspace:getDataSources'),
+  workspaceRunPage: (pageId: string) => ipcRenderer.invoke('workspace:runPage', pageId),
+  workspaceQueryConnector: (accountId: string, query: string) => ipcRenderer.invoke('workspace:queryConnector', accountId, query),
+  feishuGetSettings: () => ipcRenderer.invoke('feishu:getSettings'),
+  feishuSaveSettings: (settings: any) => ipcRenderer.invoke('feishu:saveSettings', settings),
+  feishuTestMessage: () => ipcRenderer.invoke('feishu:testMessage'),
+
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);

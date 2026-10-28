@@ -21,6 +21,8 @@ import { WorkBuddyService } from './services/workbuddyService';
 import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { EmailService } from './services/emailService';
+import { WorkspaceService } from './services/workspaceService';
+import { FeishuService } from './services/feishuService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 
@@ -65,6 +67,9 @@ const nexService = new NexService(metadataService);
 const workbuddyService = new WorkBuddyService();
 aiService.setWorkBuddyService(workbuddyService);
 const emailService = new EmailService(aiService);
+const workspaceService = new WorkspaceService(sessionStore, dataService, emailService, metadataService);
+aiService.setWorkspaceService(workspaceService);
+const feishuService = new FeishuService(workspaceService);
 const projectService = new ProjectService();
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
@@ -855,3 +860,15 @@ ipcMain.handle('mail:generateReply', async (_, options) => emailService.generate
 ipcMain.handle('mail:getPersonas', async () => emailService.getPersonas());
 ipcMain.handle('mail:analyzePersonaByEmail', async (_, email: string, hints?: string) => emailService.analyzePersonaByEmail(email, hints));
 ipcMain.handle('mail:savePersonaNotes', async (_, email: string, notes: string) => emailService.savePersonaNotes(email, notes));
+
+// ================= 自定义业务页面与组件数据 =================
+ipcMain.handle('workspace:listPages', async () => workspaceService.listPages());
+ipcMain.handle('workspace:savePage', async (_, page) => workspaceService.savePage(page));
+ipcMain.handle('workspace:deletePage', async (_, pageId: string) => workspaceService.deletePage(pageId));
+ipcMain.handle('workspace:getDataSources', async () => workspaceService.getDataSources());
+ipcMain.handle('workspace:runPage', async (_, pageId: string) => workspaceService.runPage(pageId));
+ipcMain.handle('workspace:queryConnector', async (_, accountId: string, query: string) => workspaceService.queryConnector(accountId, query));
+ipcMain.handle('feishu:getSettings', async () => feishuService.getSettings());
+ipcMain.handle('feishu:saveSettings', async (_, settings) => feishuService.saveSettings(settings));
+ipcMain.handle('feishu:testMessage', async () => feishuService.testMessage());
+setInterval(() => { void feishuService.runScheduler(); }, 60_000);

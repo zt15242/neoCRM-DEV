@@ -84,7 +84,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
   if (isUser) {
     return (
       <div className="group flex justify-end my-4 pl-12">
-        <div className="max-w-[85%] md:max-w-[75%] space-y-1.5">
+        <div className="min-w-0 max-w-[85%] md:max-w-[75%] space-y-1.5">
           {((message.entityRefs && message.entityRefs.length > 0) || (message.attachments && message.attachments.length > 0)) && (
             <div className="flex flex-wrap gap-1.5 justify-end">
               {message.attachments?.map((att) => (
@@ -121,7 +121,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
             </button>
 
             {/* 用户消息气泡 (支持鼠标拖拽划选复制与 select-text) */}
-            <div className="bg-sky-600 text-white rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs text-xs md:text-sm leading-relaxed whitespace-pre-wrap select-text selection:bg-sky-800 selection:text-white">
+            <div className="min-w-0 max-w-full bg-sky-600 text-white rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs text-xs md:text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] select-text selection:bg-sky-800 selection:text-white">
               {message.content}
             </div>
           </div>
