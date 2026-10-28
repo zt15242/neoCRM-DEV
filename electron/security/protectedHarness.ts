@@ -428,6 +428,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
                     connectorId: { type: 'string' },
                     query: { type: 'string' },
                     limit: { type: 'number' },
+                    feishuIncludeRecords: { type: 'boolean', description: '飞书推送中是否附带最多 6 行数据预览；必须用户明确要求后才启用，默认关闭。邮件组件不得包含邮件明细。' },
                     subscription: {
                       type: 'object',
                       description: '组件级定时订阅。只有用户明确要求时才启用；新建组件默认全部关闭。文本组件不支持订阅。',
@@ -435,6 +436,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
                         enabled: { type: 'boolean' },
                         intervalMinutes: { type: 'number', enum: [15, 30, 60, 240, 1440, 10080] },
                         feishuEnabled: { type: 'boolean', description: '仅在用户明确要求飞书推送并且已配置机器人时启用。' },
+                        feishuBotId: { type: 'string', description: '从设置中已配置的飞书机器人 ID 中选择推送目标；多机器人时必须明确指定。' },
                       },
                     },
                   },

@@ -10,7 +10,7 @@ interface Props {
 
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const makePage = (): WorkspacePage => ({ id: newId(), name: '新建业务页面', description: '', widgets: [], createdAt: Date.now(), updatedAt: Date.now() });
-const defaultSubscription = () => ({ enabled: false, intervalMinutes: 60, feishuEnabled: false });
+const defaultSubscription = (): NonNullable<WorkspaceWidget['subscription']> => ({ enabled: false, intervalMinutes: 60, feishuEnabled: false });
 
 const widgetDefaults: Record<WorkspaceWidgetType, Omit<WorkspaceWidget, 'id'>> = {
   text: { type: 'text', title: '说明', text: '', subscription: defaultSubscription() },
@@ -213,13 +213,14 @@ interface WidgetSettingsModalProps {
 
 const WidgetSettingsModal: React.FC<WidgetSettingsModalProps> = ({ widget: initialWidget, sources, busy, onClose, onSave, showToast }) => {
   const [widget, setWidget] = useState<WorkspaceWidget>({ ...initialWidget, subscription: initialWidget.subscription || defaultSubscription() });
-  const [feishu, setFeishu] = useState<FeishuWorkspaceSettings>({ configured: false });
+  const [feishu, setFeishu] = useState<FeishuWorkspaceSettings>({ configured: false, bots: [] });
   const subscription = widget.subscription || defaultSubscription();
+  const selectedFeishuBotId = subscription.feishuBotId || (feishu.bots.length === 1 ? feishu.bots[0].id : '');
   const patch = (values: Partial<WorkspaceWidget>) => setWidget((current) => ({ ...current, ...values }));
   const patchSubscription = (values: Partial<NonNullable<WorkspaceWidget['subscription']>>) => setWidget((current) => ({ ...current, subscription: { ...(current.subscription || defaultSubscription()), ...values } }));
 
   useEffect(() => {
-    void window.neoApi.feishuGetSettings?.().then((value) => setFeishu(value || { configured: false })).catch((error: any) => showToast('error', error?.message || '读取飞书设置失败'));
+    void window.neoApi.feishuGetSettings?.().then((value) => setFeishu(value || { configured: false, bots: [] })).catch((error: any) => showToast('error', error?.message || '读取飞书设置失败'));
   }, []);
 
   const isText = widget.type === 'text';
@@ -253,8 +254,10 @@ const WidgetSettingsModal: React.FC<WidgetSettingsModalProps> = ({ widget: initi
 
         <section className="space-y-3 border-t border-slate-100 pt-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Send size={15} className="text-sky-700"/>飞书推送</div>
-          <label className="flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" disabled={!subscription.enabled || !feishu.configured || isText} checked={subscription.feishuEnabled} onChange={(event) => patchSubscription({ feishuEnabled: event.target.checked })}/>运行后向飞书群发送摘要</label>
-          {!feishu.configured ? <p className="text-xs text-amber-700">尚未配置机器人 Webhook，请先在设置 → 飞书机器人中完成配置。</p> : <p className="text-xs leading-5 text-slate-500">推送仅包含组件标题、运行状态和结果数量，不会发送 CRM 记录内容、查询结果明细或邮件正文。</p>}
+          <label className="flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" disabled={!subscription.enabled || !feishu.configured || isText || !selectedFeishuBotId} checked={subscription.feishuEnabled} onChange={(event) => patchSubscription({ feishuEnabled: event.target.checked, feishuBotId: selectedFeishuBotId || undefined })}/>运行后向飞书群发送看板卡片</label>
+          {feishu.configured && <label className="block pl-5 text-xs text-slate-700">推送目标<select disabled={!subscription.enabled} value={selectedFeishuBotId} onChange={(event) => patchSubscription({ feishuBotId: event.target.value || undefined })} className="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"><option value="">选择机器人</option>{feishu.bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label>}
+          <label className="flex items-start gap-2 pl-5 text-xs text-slate-700"><input type="checkbox" className="mt-0.5" disabled={!subscription.feishuEnabled || !feishu.configured || isText || widget.type === 'mail-list'} checked={!!widget.feishuIncludeRecords} onChange={(event) => patch({ feishuIncludeRecords: event.target.checked })}/>在卡片中附带最多 6 行数据预览</label>
+          {!feishu.configured ? <p className="text-xs text-amber-700">尚未配置机器人 Webhook，请先在设置 → 飞书机器人中完成配置。</p> : <p className="text-xs leading-5 text-slate-500">飞书卡片包含运行指标和可生成的图表。明细默认关闭，开启后最多发送 6 行、5 列；邮件卡片始终隐藏邮件内容。</p>}
           {!subscription.enabled && <p className="text-xs text-slate-400">启用订阅后可选择是否同步推送到飞书。</p>}
         </section>
       </div>

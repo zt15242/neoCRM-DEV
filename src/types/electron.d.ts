@@ -282,8 +282,9 @@ declare global {
       workspaceRunPage?: (pageId: string) => Promise<WorkspaceWidgetResult[]>;
       workspaceQueryConnector?: (accountId: string, query: string) => Promise<{ success: boolean; data?: { records: any[]; totalSize: number; fields: string[] }; error?: string }>;
       feishuGetSettings?: () => Promise<FeishuWorkspaceSettings>;
-      feishuSaveSettings?: (settings: { webhookUrl?: string }) => Promise<FeishuWorkspaceSettings>;
-      feishuTestMessage?: () => Promise<{ success: boolean; message: string }>;
+      feishuAddBot?: (settings: { name: string; webhookUrl: string }) => Promise<FeishuWorkspaceSettings>;
+      feishuRemoveBot?: (botId: string) => Promise<FeishuWorkspaceSettings>;
+      feishuTestMessage?: (botId: string) => Promise<{ success: boolean; message: string }>;
 
     };
   }

@@ -11,10 +11,12 @@ export interface WorkspaceWidget {
   connectorId?: string;
   query?: string;
   limit?: number;
+  feishuIncludeRecords?: boolean;
   subscription?: {
     enabled: boolean;
     intervalMinutes: number;
     feishuEnabled: boolean;
+    feishuBotId?: string;
   };
 }
 

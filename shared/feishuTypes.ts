@@ -1,4 +1,4 @@
 export interface FeishuWorkspaceSettings {
   configured: boolean;
-  webhookUrl?: string;
+  bots: Array<{ id: string; name: string }>;
 }

@@ -197,8 +197,9 @@ export const neoApi = {
   workspaceRunPage: (pageId: string) => ipcRenderer.invoke('workspace:runPage', pageId),
   workspaceQueryConnector: (accountId: string, query: string) => ipcRenderer.invoke('workspace:queryConnector', accountId, query),
   feishuGetSettings: () => ipcRenderer.invoke('feishu:getSettings'),
-  feishuSaveSettings: (settings: any) => ipcRenderer.invoke('feishu:saveSettings', settings),
-  feishuTestMessage: () => ipcRenderer.invoke('feishu:testMessage'),
+  feishuAddBot: (settings: { name: string; webhookUrl: string }) => ipcRenderer.invoke('feishu:addBot', settings),
+  feishuRemoveBot: (botId: string) => ipcRenderer.invoke('feishu:removeBot', botId),
+  feishuTestMessage: (botId: string) => ipcRenderer.invoke('feishu:testMessage', botId),
 
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);

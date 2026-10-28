@@ -191,12 +191,14 @@ export class WorkspaceService {
   private validateWidgetConfig(widget: WorkspaceWidget): WorkspaceWidget {
     if (!widget?.id || !['text', 'crm-query', 'mail-list', 'async-apex-dashboard'].includes(widget.type)) throw new Error('页面中包含无效组件');
     const normalized = { ...widget, title: String(widget.title || '').trim().slice(0, 120) || '未命名组件' };
+    normalized.feishuIncludeRecords = !!normalized.feishuIncludeRecords && normalized.type !== 'text' && normalized.type !== 'mail-list';
     if (normalized.subscription) {
       const intervalMinutes = Number(normalized.subscription.intervalMinutes);
       normalized.subscription = {
         enabled: !!normalized.subscription.enabled && normalized.type !== 'text',
         intervalMinutes: Number.isFinite(intervalMinutes) ? Math.max(15, Math.min(10080, Math.floor(intervalMinutes))) : 60,
         feishuEnabled: !!normalized.subscription.feishuEnabled && normalized.type !== 'text',
+        feishuBotId: normalized.subscription.feishuBotId || undefined,
       };
       if (!normalized.subscription.enabled) normalized.subscription.feishuEnabled = false;
     }
