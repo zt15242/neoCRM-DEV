@@ -195,8 +195,10 @@ export class DshToolService {
       workdir?: string;
       background?: boolean;
     },
-    projectRoot?: string
+    projectRoot?: string,
+    signal?: AbortSignal
   ): Promise<{ stdout: string; stderr: string; exitCode: number; jobId?: string; isBackground?: boolean }> {
+    if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
     const root = path.resolve(this.resolveWorkspaceDir(projectRoot));
     const cwd = params.workdir
       ? this.assertPathWithinProject(params.workdir, root)
@@ -246,6 +248,13 @@ export class DshToolService {
       };
       DshToolService.registerJob(job);
 
+      const abortHandler = () => {
+        if (child.exitCode === null) child.kill();
+        job.status = 'killed';
+        job.endTime = Date.now();
+      };
+      signal?.addEventListener('abort', abortHandler, { once: true });
+
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString();
         job.outputBuffer = (job.outputBuffer + text).slice(-100000);
@@ -259,7 +268,10 @@ export class DshToolService {
       });
 
       child.on('close', (code) => {
-        job.status = code === 0 ? 'completed' : 'error';
+        signal?.removeEventListener('abort', abortHandler);
+        if (job.status !== 'killed') {
+          job.status = code === 0 ? 'completed' : 'error';
+        }
         job.exitCode = code || 0;
         job.endTime = Date.now();
       });
@@ -293,7 +305,7 @@ export class DshToolService {
     };
     DshToolService.registerJob(job);
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const child = exec(
         params.command,
         {
@@ -329,6 +341,15 @@ export class DshToolService {
         }
       );
       job.process = child;
+      const abortHandler = () => {
+        if (child.exitCode === null) child.kill();
+      };
+      if (signal?.aborted) {
+        abortHandler();
+        reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
+        return;
+      }
+      signal?.addEventListener('abort', abortHandler, { once: true });
     });
   }
 
@@ -990,8 +1011,10 @@ export class DshToolService {
   public async executePtcCode(
     params: { code: string; description?: string },
     toolsContext: Record<string, Function>,
-    timeoutMs = 60000
+    timeoutMs = 60000,
+    signal?: AbortSignal
   ): Promise<{ value: any; logs: string[]; executionTimeMs: number; error?: string }> {
+    if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
     const startTime = Date.now();
     const logs: string[] = [];
     const ptcJobId = `ptc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -1040,8 +1063,11 @@ export class DshToolService {
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`PTC 程序执行超时 (${timeoutMs}ms)`)), timeoutMs)
       );
+      const abortPromise = new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' })), { once: true });
+      });
 
-      const result = await Promise.race([execPromise, timeoutPromise]);
+      const result = await Promise.race([execPromise, timeoutPromise, abortPromise]);
       const duration = Date.now() - startTime;
       ptcJob.status = 'completed';
       ptcJob.exitCode = 0;

@@ -154,6 +154,7 @@ export const neoApi = {
   printRenderDocument: (params: any) => ipcRenderer.invoke("print:renderDocument", params),
   // WorkBuddy 反代与扫码登录
   workbuddyGetStatus: () => ipcRenderer.invoke("workbuddy:getStatus"),
+  workbuddyRefreshStatus: () => ipcRenderer.invoke("workbuddy:refreshStatus"),
   workbuddyStartLogin: (realm?: "intl" | "cn") => ipcRenderer.invoke("workbuddy:startLogin", realm),
   workbuddyPollLogin: (state: string, realm?: "intl" | "cn") => ipcRenderer.invoke("workbuddy:pollLogin", state, realm),
   workbuddyLogout: () => ipcRenderer.invoke("workbuddy:logout"),
@@ -190,11 +191,12 @@ export const neoApi = {
   mailSavePersonaNotes: (email: string, notes: string) => ipcRenderer.invoke('mail:savePersonaNotes', email, notes),
 
   // 自定义业务页面与组件数据
-  workspaceListPages: () => ipcRenderer.invoke('workspace:listPages'),
-  workspaceSavePage: (page: any) => ipcRenderer.invoke('workspace:savePage', page),
+  workspaceListPages: (projectId?: string) => ipcRenderer.invoke('workspace:listPages', projectId),
+  workspaceSavePage: (page: any, projectPath?: string) => ipcRenderer.invoke('workspace:savePage', page, projectPath),
   workspaceDeletePage: (pageId: string) => ipcRenderer.invoke('workspace:deletePage', pageId),
   workspaceGetDataSources: () => ipcRenderer.invoke('workspace:getDataSources'),
-  workspaceRunPage: (pageId: string) => ipcRenderer.invoke('workspace:runPage', pageId),
+  workspaceRunPage: (pageId: string, projectPath?: string) => ipcRenderer.invoke('workspace:runPage', pageId, projectPath),
+  workspacePreviewWidget: (pageId: string, widgetId: string, projectPath?: string) => ipcRenderer.invoke('workspace:previewWidget', pageId, widgetId, projectPath),
   workspaceQueryConnector: (accountId: string, query: string) => ipcRenderer.invoke('workspace:queryConnector', accountId, query),
   feishuGetSettings: () => ipcRenderer.invoke('feishu:getSettings'),
   feishuAddBot: (settings: { name: string; webhookUrl: string }) => ipcRenderer.invoke('feishu:addBot', settings),

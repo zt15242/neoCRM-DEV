@@ -67,10 +67,10 @@ const nexService = new NexService(metadataService);
 const workbuddyService = new WorkBuddyService();
 aiService.setWorkBuddyService(workbuddyService);
 const emailService = new EmailService(aiService);
-const workspaceService = new WorkspaceService(sessionStore, dataService, emailService, metadataService);
+const projectService = new ProjectService();
+const workspaceService = new WorkspaceService(sessionStore, dataService, emailService, metadataService, projectService);
 aiService.setWorkspaceService(workspaceService);
 const feishuService = new FeishuService(workspaceService);
-const projectService = new ProjectService();
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
 
@@ -780,6 +780,10 @@ ipcMain.handle("workbuddy:getStatus", async () => {
   return workbuddyService.getStatus();
 });
 
+ipcMain.handle("workbuddy:refreshStatus", async () => {
+  return workbuddyService.refreshStatus();
+});
+
 ipcMain.handle("workbuddy:startLogin", async (_, realm?: "intl" | "cn") => {
   return workbuddyService.startLogin(realm);
 });
@@ -862,11 +866,12 @@ ipcMain.handle('mail:analyzePersonaByEmail', async (_, email: string, hints?: st
 ipcMain.handle('mail:savePersonaNotes', async (_, email: string, notes: string) => emailService.savePersonaNotes(email, notes));
 
 // ================= 自定义业务页面与组件数据 =================
-ipcMain.handle('workspace:listPages', async () => workspaceService.listPages());
-ipcMain.handle('workspace:savePage', async (_, page) => workspaceService.savePage(page));
+ipcMain.handle('workspace:listPages', async (_, projectId?: string) => workspaceService.listPages(projectId));
+ipcMain.handle('workspace:savePage', async (_, page, projectPath?: string) => workspaceService.savePage(page, projectPath));
 ipcMain.handle('workspace:deletePage', async (_, pageId: string) => workspaceService.deletePage(pageId));
 ipcMain.handle('workspace:getDataSources', async () => workspaceService.getDataSources());
-ipcMain.handle('workspace:runPage', async (_, pageId: string) => workspaceService.runPage(pageId));
+ipcMain.handle('workspace:runPage', async (_, pageId: string, projectPath?: string) => workspaceService.runPage(pageId, projectPath));
+ipcMain.handle('workspace:previewWidget', async (_, pageId: string, widgetId: string, projectPath?: string) => workspaceService.previewWidget(pageId, widgetId, projectPath));
 ipcMain.handle('workspace:queryConnector', async (_, accountId: string, query: string) => workspaceService.queryConnector(accountId, query));
 ipcMain.handle('feishu:getSettings', async () => feishuService.getSettings());
 ipcMain.handle('feishu:addBot', async (_, settings) => feishuService.addBot(settings));

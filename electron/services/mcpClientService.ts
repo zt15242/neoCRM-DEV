@@ -57,7 +57,8 @@ export class McpClientService {
   public async callTool(
     srv: McpServerConfig,
     toolName: string,
-    args: Record<string, any>
+    args: Record<string, any>,
+    signal?: AbortSignal
   ): Promise<{
     success: boolean;
     data: any;
@@ -66,9 +67,9 @@ export class McpClientService {
   }> {
     try {
       if (srv.type === 'sse') {
-        return await this.callSseTool(srv, toolName, args);
+        return await this.callSseTool(srv, toolName, args, signal);
       } else if (srv.type === 'stdio') {
-        return await this.callStdioTool(srv, toolName, args);
+        return await this.callStdioTool(srv, toolName, args, signal);
       }
       throw new Error(`不支持的 MCP 传输类型: ${srv.type}`);
     } catch (e: any) {
@@ -86,7 +87,8 @@ export class McpClientService {
   private async executeSseSession<T>(
     srv: McpServerConfig,
     action: (sendRpc: (method: string, params?: any, isNotify?: boolean) => Promise<any>) => Promise<T>,
-    timeoutMs = 25000
+    timeoutMs = 25000,
+    externalSignal?: AbortSignal
   ): Promise<T> {
     const rawUrl = srv.url?.trim();
     if (!rawUrl) {
@@ -95,6 +97,8 @@ export class McpClientService {
 
     const baseHeaders = this.buildHeaders(srv);
     const controller = new AbortController();
+    const abortHandler = () => controller.abort();
+    externalSignal?.addEventListener('abort', abortHandler, { once: true });
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const pendingRequests = new Map<
@@ -308,6 +312,7 @@ export class McpClientService {
       return result;
     } finally {
       clearTimeout(timer);
+      externalSignal?.removeEventListener('abort', abortHandler);
       controller.abort();
     }
   }
@@ -337,13 +342,15 @@ export class McpClientService {
   private async callSseTool(
     srv: McpServerConfig,
     toolName: string,
-    args: Record<string, any>
+    args: Record<string, any>,
+    signal?: AbortSignal
   ): Promise<{
     success: boolean;
     data: any;
     summary: string;
   }> {
     return await this.executeSseSession(srv, async (sendRpc) => {
+      if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
       const res = await sendRpc('tools/call', {
         name: toolName,
         arguments: args || {},
@@ -372,7 +379,7 @@ export class McpClientService {
           ? `MCP 工具 [${toolName}] 返回错误`
           : `MCP [${srv.name}] 执行 ${toolName} 成功 (${textOutput.length} 字符)`,
       };
-    });
+    }, 25000, signal);
   }
 
   // ================= Stdio 本地子进程协议实现 =================
@@ -380,7 +387,8 @@ export class McpClientService {
   private async executeStdioSession<T>(
     srv: McpServerConfig,
     action: (sendRpc: (method: string, params?: any, isNotify?: boolean) => Promise<any>) => Promise<T>,
-    timeoutMs = 20000
+    timeoutMs = 20000,
+    externalSignal?: AbortSignal
   ): Promise<T> {
     const cmd = srv.command?.trim();
     if (!cmd) throw new Error('Stdio 启动命令不能为空');
@@ -402,6 +410,12 @@ export class McpClientService {
         child.kill();
         reject(new Error(`Stdio MCP 进程响应超时 (${timeoutMs}ms)`));
       }, timeoutMs);
+      const abortHandler = () => {
+        child.kill();
+        clearTimeout(timer);
+        reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
+      };
+      externalSignal?.addEventListener('abort', abortHandler, { once: true });
 
       child.stdout.on('data', (chunk) => {
         stdoutBuf += chunk.toString('utf-8');
@@ -428,6 +442,7 @@ export class McpClientService {
 
       child.on('error', (err) => {
         clearTimeout(timer);
+        externalSignal?.removeEventListener('abort', abortHandler);
         reject(new Error(`启动 Stdio 进程失败: ${err.message}`));
       });
 
@@ -465,10 +480,12 @@ export class McpClientService {
           await sendRpc('notifications/initialized', undefined, true).catch(() => {});
           const out = await action(sendRpc);
           clearTimeout(timer);
+          externalSignal?.removeEventListener('abort', abortHandler);
           child.kill();
           resolve(out);
         } catch (e) {
           clearTimeout(timer);
+          externalSignal?.removeEventListener('abort', abortHandler);
           child.kill();
           reject(e);
         }
@@ -497,13 +514,15 @@ export class McpClientService {
   private async callStdioTool(
     srv: McpServerConfig,
     toolName: string,
-    args: Record<string, any>
+    args: Record<string, any>,
+    signal?: AbortSignal
   ): Promise<{
     success: boolean;
     data: any;
     summary: string;
   }> {
     return await this.executeStdioSession(srv, async (sendRpc) => {
+      if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
       const res = await sendRpc('tools/call', {
         name: toolName,
         arguments: args || {},
@@ -523,6 +542,6 @@ export class McpClientService {
         data: res?.content ? { content: textOutput, raw: res } : res,
         summary: `MCP [${srv.name}] 执行 ${toolName} 完成`,
       };
-    });
+    }, 20000, signal);
   }
 }

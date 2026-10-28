@@ -236,7 +236,44 @@ declare global {
       printDeleteTemplate: (templatePrintId: string | number) => Promise<{ success: boolean; error?: string }>;
       printRenderDocument: (params: { entityApiKey: string; recordId: string | number; templateId: string | number; exportType?: 1 | 2 | 3 }) => Promise<{ success: boolean; data?: any; error?: string }>;
       // WorkBuddy 反代与扫码登录
-      workbuddyGetStatus: () => Promise<{ loggedIn: boolean; account?: any; proxyPort: number; proxyUrl: string }>;
+      workbuddyGetStatus: () => Promise<{
+        loggedIn: boolean;
+        account?: any;
+        proxyPort: number;
+        proxyUrl: string;
+        models: AiModelItem[];
+        modelsSyncedAt?: number;
+        quota?: {
+          totalPoints?: number;
+          usedPoints?: number;
+          remainingPoints?: number;
+          unit?: string;
+          packages: Array<{ name?: string; totalPoints?: number; usedPoints?: number; remainingPoints?: number; expiresAt?: number }>;
+          syncedAt: number;
+        };
+        quotaSyncedAt?: number;
+        modelsSyncError?: string;
+        quotaSyncError?: string;
+      }>;
+      workbuddyRefreshStatus: () => Promise<{
+        loggedIn: boolean;
+        account?: any;
+        proxyPort: number;
+        proxyUrl: string;
+        models: AiModelItem[];
+        modelsSyncedAt?: number;
+        quota?: {
+          totalPoints?: number;
+          usedPoints?: number;
+          remainingPoints?: number;
+          unit?: string;
+          packages: Array<{ name?: string; totalPoints?: number; usedPoints?: number; remainingPoints?: number; expiresAt?: number }>;
+          syncedAt: number;
+        };
+        quotaSyncedAt?: number;
+        modelsSyncError?: string;
+        quotaSyncError?: string;
+      }>;
       workbuddyStartLogin: (realm?: "intl" | "cn") => Promise<{ state: string; authUrl: string; qrDataUrl: string; realm: "intl" | "cn" }>;
       workbuddyPollLogin: (state: string, realm?: "intl" | "cn") => Promise<{ status: "pending" | "ok" | "expired" | "error"; message?: string; account?: any }>;
       workbuddyLogout: () => Promise<boolean>;
@@ -275,11 +312,12 @@ declare global {
       mailAnalyzePersonaByEmail?: (email: string, hints?: string) => Promise<ContactPersona>;
       mailSavePersonaNotes?: (email: string, notes: string) => Promise<ContactPersona | null>;
 
-      workspaceListPages?: () => Promise<WorkspacePage[]>;
-      workspaceSavePage?: (page: WorkspacePage) => Promise<WorkspacePage[]>;
+      workspaceListPages?: (projectId?: string) => Promise<WorkspacePage[]>;
+      workspaceSavePage?: (page: WorkspacePage, projectPath?: string) => Promise<WorkspacePage[]>;
       workspaceDeletePage?: (pageId: string) => Promise<WorkspacePage[]>;
       workspaceGetDataSources?: () => Promise<WorkspaceDataSources>;
-      workspaceRunPage?: (pageId: string) => Promise<WorkspaceWidgetResult[]>;
+      workspaceRunPage?: (pageId: string, projectPath?: string) => Promise<WorkspaceWidgetResult[]>;
+      workspacePreviewWidget?: (pageId: string, widgetId: string, projectPath?: string) => Promise<WorkspaceWidgetResult>;
       workspaceQueryConnector?: (accountId: string, query: string) => Promise<{ success: boolean; data?: { records: any[]; totalSize: number; fields: string[] }; error?: string }>;
       feishuGetSettings?: () => Promise<FeishuWorkspaceSettings>;
       feishuAddBot?: (settings: { name: string; webhookUrl: string }) => Promise<FeishuWorkspaceSettings>;

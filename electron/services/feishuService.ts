@@ -208,7 +208,7 @@ export class FeishuService {
   }
 
   private widgetTypeName(type: WorkspaceWidget['type']): string {
-    return ({ 'crm-query': 'CRM 查询', 'mail-list': '邮件列表', 'async-apex-dashboard': 'BI 看板', text: '文本' })[type];
+    return ({ 'crm-query': 'CRM 查询', 'mail-list': '邮件列表', 'async-apex-dashboard': 'BI 看板', 'custom-html': '自定义 HTML', 'custom-tsx': '自定义 TSX', text: '文本' })[type];
   }
 
   private buildChart(records: Array<Record<string, unknown>>, fields: string[]): Record<string, unknown> | undefined {

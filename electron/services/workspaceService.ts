@@ -1,16 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { createRequire } from 'node:module';
 import { app } from 'electron';
+import { build } from 'esbuild';
 import type { AccountRecord, CrmProductType } from '../types';
 import type { EmailAccount } from '../../shared/mailTypes';
-import type { WorkspaceDataSources, WorkspacePage, WorkspaceWidget, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
+import type { WorkspaceDataSources, WorkspacePage, WorkspaceWidget, WorkspaceWidgetResult, WorkspaceWidgetType } from '../../shared/workspaceTypes';
 import { DataService } from './dataService';
 import { EmailService } from './emailService';
 import { SessionStore } from './sessionStore';
 import { MetadataService } from './metadataService';
+import { ProjectService } from './projectService';
 import type { NeoEnvironment, TokenData } from '../types';
 
 const MAX_QUERY_ROWS = 500;
+const runtimeRequire = createRequire(import.meta.url);
 
 export class WorkspaceService {
   constructor(
@@ -18,6 +23,7 @@ export class WorkspaceService {
     private dataService: DataService,
     private emailService: EmailService,
     private metadataService: MetadataService,
+    private projectService?: ProjectService,
   ) {}
 
   private getFilePath(): string {
@@ -25,27 +31,31 @@ export class WorkspaceService {
     return path.join(userData, 'neocrm_workspace_pages.json');
   }
 
-  public listPages(): WorkspacePage[] {
+  public listPages(projectId?: string): WorkspacePage[] {
     try {
       const raw = fs.readFileSync(this.getFilePath(), 'utf-8');
       const pages = JSON.parse(raw);
-      return Array.isArray(pages) ? pages : [];
+      if (!Array.isArray(pages)) return [];
+      return projectId ? pages.filter((page) => !page.projectId || page.projectId === projectId) : pages;
     } catch {
       return [];
     }
   }
 
-  public savePage(input: WorkspacePage): WorkspacePage[] {
+  public savePage(input: WorkspacePage, projectRoot?: string): WorkspacePage[] {
     if (!input || !input.id || !input.name?.trim()) throw new Error('页面名称不能为空');
     if (!Array.isArray(input.widgets) || input.widgets.length > 40) throw new Error('页面组件数量无效');
     const now = Date.now();
     const pages = this.listPages();
     const previous = pages.find((page) => page.id === input.id);
+    const resolvedProjectRoot = projectRoot || this.getProjectRoot(input.projectId);
+    const resolvedProjectId = input.projectId || (resolvedProjectRoot && this.projectService?.getProjects().find((project) => path.resolve(project.localPath) === path.resolve(resolvedProjectRoot))?.id);
     const page: WorkspacePage = {
       ...input,
+      projectId: resolvedProjectId,
       name: input.name.trim().slice(0, 80),
       description: input.description?.slice(0, 500),
-      widgets: input.widgets.map((widget) => this.validateWidgetConfig(widget)),
+      widgets: input.widgets.map((widget) => this.validateWidgetConfig(widget, resolvedProjectRoot)),
       createdAt: previous?.createdAt || input.createdAt || now,
       updatedAt: now,
     };
@@ -134,22 +144,30 @@ export class WorkspaceService {
     };
   }
 
-  public async runPage(pageId: string): Promise<WorkspaceWidgetResult[]> {
+  public async runPage(pageId: string, projectRoot?: string): Promise<WorkspaceWidgetResult[]> {
     const page = this.listPages().find((item) => item.id === pageId);
     if (!page) throw new Error('找不到该自定义页面');
-    return Promise.all(page.widgets.filter((widget) => widget.type !== 'text').map((widget) => this.runWidget(widget)));
+    const root = projectRoot || this.getProjectRoot(page.projectId);
+    return Promise.all(page.widgets.filter((widget) => widget.type !== 'text').map((widget) => this.runWidget(widget, root)));
   }
 
-  public async runWidgetById(pageId: string, widgetId: string): Promise<WorkspaceWidgetResult> {
+  public async runWidgetById(pageId: string, widgetId: string, projectRoot?: string): Promise<WorkspaceWidgetResult> {
     const page = this.listPages().find((item) => item.id === pageId);
     const widget = page?.widgets.find((item) => item.id === widgetId);
     if (!widget) throw new Error('找不到该工作台组件');
-    return this.runWidget(widget);
+    return this.runWidget(widget, projectRoot || this.getProjectRoot(page?.projectId));
   }
 
-  private async runWidget(widget: WorkspaceWidget): Promise<WorkspaceWidgetResult> {
+  public async previewWidget(pageId: string, widgetId: string, projectRoot?: string): Promise<WorkspaceWidgetResult> {
+    return this.runWidgetById(pageId, widgetId, projectRoot);
+  }
+
+  private async runWidget(widget: WorkspaceWidget, projectRoot?: string): Promise<WorkspaceWidgetResult> {
     const updatedAt = Date.now();
     try {
+      if (widget.type === 'custom-html' || widget.type === 'custom-tsx') {
+        return await this.renderCustomWidget(widget, projectRoot, updatedAt);
+      }
       if (widget.type === 'mail-list') {
         const records = this.emailService.getDashboardMailData(widget.accountId, this.clampLimit(widget.limit, 10, 50));
         return { widgetId: widget.id, success: true, records, fields: ['from', 'subject', 'date', 'snippet', 'isRead'], totalSize: records.length, updatedAt };
@@ -188,8 +206,14 @@ export class WorkspaceService {
     return { environment, tokenData };
   }
 
-  private validateWidgetConfig(widget: WorkspaceWidget): WorkspaceWidget {
-    if (!widget?.id || !['text', 'crm-query', 'mail-list', 'async-apex-dashboard'].includes(widget.type)) throw new Error('页面中包含无效组件');
+  private getProjectRoot(projectId?: string): string | undefined {
+    if (!projectId || !this.projectService) return undefined;
+    return this.projectService.getProjects().find((project) => project.id === projectId)?.localPath;
+  }
+
+  private validateWidgetConfig(widget: WorkspaceWidget, projectRoot?: string): WorkspaceWidget {
+    const supportedTypes: WorkspaceWidgetType[] = ['text', 'crm-query', 'mail-list', 'async-apex-dashboard', 'custom-html', 'custom-tsx'];
+    if (!widget?.id || !supportedTypes.includes(widget.type)) throw new Error('页面中包含无效组件');
     const normalized = { ...widget, title: String(widget.title || '').trim().slice(0, 120) || '未命名组件' };
     normalized.feishuIncludeRecords = !!normalized.feishuIncludeRecords && normalized.type !== 'text' && normalized.type !== 'mail-list';
     if (normalized.subscription) {
@@ -216,7 +240,96 @@ export class WorkspaceService {
       if (account?.productType !== 'salesforce') throw new Error(`组件“${normalized.title}”仅能绑定 Salesforce 账号`);
     }
     if (normalized.type === 'text') normalized.text = String(normalized.text || '').slice(0, 3000);
+    if (normalized.type === 'custom-html' || normalized.type === 'custom-tsx') {
+      const relativePath = String(normalized.relativePath || '').trim();
+      if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('\\') && path.sep !== '\\') {
+        throw new Error(`组件“${normalized.title}”必须引用当前项目内的相对路径文件`);
+      }
+      const expectedExtension = normalized.type === 'custom-html' ? ['.html', '.htm'] : ['.tsx'];
+      if (!expectedExtension.includes(path.extname(relativePath).toLowerCase())) {
+        throw new Error(`组件“${normalized.title}”的文件类型必须是 ${expectedExtension.join(' 或 ')}`);
+      }
+      if (projectRoot) this.resolveProjectFile(relativePath, projectRoot, expectedExtension);
+      normalized.relativePath = relativePath;
+      normalized.buildStatus = 'pending';
+      normalized.buildError = undefined;
+    }
     return normalized;
+  }
+
+  private resolveProjectFile(relativePath: string, projectRoot: string, allowedExtensions: string[]): string {
+    const root = path.resolve(projectRoot);
+    const cleanRelative = relativePath.trim();
+    if (!cleanRelative || path.isAbsolute(cleanRelative)) throw new Error('自定义组件只能引用当前项目内的相对路径');
+    const resolved = path.resolve(root, cleanRelative);
+    const relative = path.relative(root, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('自定义组件文件超出当前项目目录');
+    if (!allowedExtensions.includes(path.extname(resolved).toLowerCase())) throw new Error('自定义组件文件扩展名不匹配');
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) throw new Error(`自定义组件文件不存在: ${cleanRelative}`);
+    try {
+      const real = fs.realpathSync(resolved);
+      const realRelative = path.relative(root, real);
+      if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) throw new Error('自定义组件文件通过软链接越出当前项目目录');
+    } catch (error: any) {
+      if (error?.message?.includes('越出当前项目')) throw error;
+    }
+    return resolved;
+  }
+
+  private async renderCustomWidget(widget: WorkspaceWidget, projectRoot: string | undefined, updatedAt: number): Promise<WorkspaceWidgetResult> {
+    if (!projectRoot) return { widgetId: widget.id, success: false, buildStatus: 'error', error: '自定义组件没有绑定当前项目目录', updatedAt };
+    try {
+      const allowedExtensions = widget.type === 'custom-html' ? ['.html', '.htm'] : ['.tsx'];
+      const sourcePath = this.resolveProjectFile(widget.relativePath || '', projectRoot, allowedExtensions);
+      const stat = fs.statSync(sourcePath);
+      if (stat.size > 2 * 1024 * 1024) throw new Error('自定义组件文件超过 2MB，未加载');
+      if (widget.type === 'custom-html') {
+        return {
+          widgetId: widget.id,
+          success: true,
+          content: fs.readFileSync(sourcePath, 'utf-8'),
+          sourcePath: widget.relativePath,
+          buildStatus: 'ready',
+          updatedAt: Date.now(),
+        };
+      }
+
+      const relativeImport = `./${path.relative(path.resolve(projectRoot), sourcePath).split(path.sep).join('/')}`;
+      const entry = `import React from 'react';\nimport { createRoot } from 'react-dom/client';\nimport Component from ${JSON.stringify(relativeImport)};\nconst value = Component && Component.default ? Component.default : Component;\nif (typeof value !== 'function') throw new Error('TSX 文件必须提供 default React 组件');\ncreateRoot(document.getElementById('root')).render(React.createElement(value));`;
+      const result = await build({
+        stdin: { contents: entry, resolveDir: path.resolve(projectRoot), sourcefile: '__neo_workspace_entry.tsx', loader: 'tsx' },
+        bundle: true,
+        write: false,
+        outfile: path.join(os.tmpdir(), `neo-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`),
+        nodePaths: this.getRuntimeNodePaths(),
+        format: 'iife',
+        platform: 'browser',
+        target: 'es2020',
+        jsx: 'automatic',
+        logLevel: 'silent',
+      });
+      const jsOutput = result.outputFiles?.find((file) => file.path.toLowerCase().endsWith('.js'));
+      const cssOutput = result.outputFiles?.filter((file) => file.path.toLowerCase().endsWith('.css')) || [];
+      const js = jsOutput?.text;
+      if (!js) throw new Error('TSX 构建没有生成可预览内容');
+      const safeScript = js.replaceAll('</script', '<\\/script');
+      const css = cssOutput.map((file) => file.text).join('\n').replaceAll('</style', '<\\/style');
+      const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,#root{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{padding:16px;box-sizing:border-box;color:#0f172a}</style>${css ? `<style>${css}</style>` : ''}</head><body><div id="root"></div><script>${safeScript}</script></body></html>`;
+      return { widgetId: widget.id, success: true, content: html, sourcePath: widget.relativePath, buildStatus: 'ready', updatedAt: Date.now() };
+    } catch (error: any) {
+      return { widgetId: widget.id, success: false, sourcePath: widget.relativePath, buildStatus: 'error', error: error?.message || '自定义组件构建失败', updatedAt };
+    }
+  }
+
+  private getRuntimeNodePaths(): string[] {
+    const paths = [path.resolve(process.cwd(), 'node_modules')];
+    try {
+      const reactEntry = runtimeRequire.resolve('react');
+      paths.push(path.dirname(path.dirname(reactEntry)));
+    } catch {
+      // 运行时依赖缺失时交给 esbuild 返回明确的构建错误。
+    }
+    return Array.from(new Set(paths));
   }
 
   private validateCrmQuery(widget: WorkspaceWidget): { query: string; accountId: string } {

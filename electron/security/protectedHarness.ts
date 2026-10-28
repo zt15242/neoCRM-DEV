@@ -402,7 +402,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'workspace_save_page',
-      description: '保存自定义工作台页面配置。仅在用户明确要求创建/修改并确认展示的页面方案后调用。CRM 查询必须绑定 workspace_list_pages 返回的 accountId，并使用只读 SELECT 和 LIMIT 不超过 500；邮件组件绑定真实邮件账号 ID。subscription.enabled 与 subscription.feishuEnabled 默认必须为 false，除非用户明确要求订阅或飞书推送。',
+      description: '保存自定义工作台页面配置。仅在用户明确要求创建/修改并确认展示的页面方案后调用。支持内置数据组件以及当前项目内的 custom-html/custom-tsx 文件挂载；CRM 查询必须绑定 workspace_list_pages 返回的 accountId，并使用只读 SELECT 和 LIMIT 不超过 500；邮件组件绑定真实邮件账号 ID。subscription.enabled 与 subscription.feishuEnabled 默认必须为 false，除非用户明确要求订阅或飞书推送。',
       parameters: {
         type: 'object',
         properties: {
@@ -412,6 +412,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
             properties: {
               id: { type: 'string' },
               name: { type: 'string' },
+              projectId: { type: 'string', description: '当前工作台所属项目 ID。' },
               description: { type: 'string' },
               createdAt: { type: 'number' },
               updatedAt: { type: 'number' },
@@ -421,11 +422,14 @@ export const CRM_HARNESS_TOOLS_SPEC = [
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
-                    type: { type: 'string', enum: ['text', 'crm-query', 'mail-list', 'async-apex-dashboard'] },
+                    type: { type: 'string', enum: ['text', 'crm-query', 'mail-list', 'async-apex-dashboard', 'custom-html', 'custom-tsx'] },
                     title: { type: 'string' },
                     text: { type: 'string' },
                     accountId: { type: 'string' },
                     connectorId: { type: 'string' },
+                    projectId: { type: 'string', description: '当前项目 ID；自定义组件用于记录组件属于哪个项目。' },
+                    relativePath: { type: 'string', description: '当前项目内的相对文件路径。custom-html 必须是 .html/.htm，custom-tsx 必须是 .tsx，禁止绝对路径和项目外路径。' },
+                    buildStatus: { type: 'string', enum: ['pending', 'ready', 'error'] },
                     query: { type: 'string' },
                     limit: { type: 'number' },
                     feishuIncludeRecords: { type: 'boolean', description: '飞书推送中是否附带最多 6 行数据预览；必须用户明确要求后才启用，默认关闭。邮件组件不得包含邮件明细。' },

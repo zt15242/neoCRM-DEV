@@ -746,7 +746,10 @@ export const App: React.FC = () => {
 
         {activeTab === 'workspace' && (
           <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
-            <WorkspacePageView showToast={showToast} />
+            <WorkspacePageView
+              showToast={showToast}
+              activeProject={projects.find((p) => p.id === activeProjectId) || projects[0]}
+            />
           </div>
         )}
 

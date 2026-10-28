@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { app } from 'electron';
 import axios from 'axios';
 import QRCode from 'qrcode';
+import { AiModelItem } from '../../shared/types';
 
 export interface WorkBuddyAccount {
   uid: string;
@@ -13,9 +14,31 @@ export interface WorkBuddyAccount {
   domain: string;
   accessToken: string;
   refreshToken: string;
+  enterpriseId?: string;
   expiresAt: number; // 秒级时间戳
   enabled: boolean;
   updatedAt: number;
+  models?: AiModelItem[];
+  modelsSyncedAt?: number;
+  quota?: WorkBuddyQuota;
+  quotaSyncedAt?: number;
+}
+
+export interface WorkBuddyQuotaPackage {
+  name?: string;
+  totalPoints?: number;
+  usedPoints?: number;
+  remainingPoints?: number;
+  expiresAt?: number;
+}
+
+export interface WorkBuddyQuota {
+  totalPoints?: number;
+  usedPoints?: number;
+  remainingPoints?: number;
+  unit?: string;
+  packages: WorkBuddyQuotaPackage[];
+  syncedAt: number;
 }
 
 export interface WorkBuddyLoginInit {
@@ -29,6 +52,19 @@ export interface WorkBuddyPollResult {
   status: 'pending' | 'ok' | 'expired' | 'error';
   message?: string;
   account?: WorkBuddyAccount;
+}
+
+interface WorkBuddyStatus {
+  loggedIn: boolean;
+  account?: any;
+  proxyPort: number;
+  proxyUrl: string;
+  models: AiModelItem[];
+  modelsSyncedAt?: number;
+  quota?: WorkBuddyQuota;
+  quotaSyncedAt?: number;
+  modelsSyncError?: string;
+  quotaSyncError?: string;
 }
 
 const REALM_CONFIGS = {
@@ -54,26 +90,15 @@ const REALM_CONFIGS = {
   },
 };
 
-const DEFAULT_MODELS = [
-  { id: 'default-model', name: 'Auto (智能自动调度)', contextWindow: 176000, maxOutputTokens: 24000 },
-  { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash (全能极速)', contextWindow: 176000, maxOutputTokens: 24000 },
-  { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro (国内旗舰)', contextWindow: 176000, maxOutputTokens: 24000 },
-  { id: 'deepseek-r1-0528', name: 'DeepSeek-R1 (深度推理)', contextWindow: 65536, maxOutputTokens: 8192 },
-  { id: 'gpt-6-astra', name: 'GPT-6-Astra (前沿预览)', contextWindow: 200000, maxOutputTokens: 32000 },
-  { id: 'gpt-5.3-codex', name: 'GPT-5.3-Codex (代码专精)', contextWindow: 200000, maxOutputTokens: 32000 },
-  { id: 'glm-5.3', name: 'GLM-5.3 (智谱旗舰)', contextWindow: 128000, maxOutputTokens: 16384 },
-  { id: 'kimi-k3', name: 'Kimi-K3 (长文本推理)', contextWindow: 200000, maxOutputTokens: 32000 },
-  { id: 'hy4-preview', name: '腾讯混元 Hy4 Preview', contextWindow: 176000, maxOutputTokens: 24000 },
-  { id: 'fast-model', name: 'Fast (轻量速答)', contextWindow: 200000, maxOutputTokens: 32000 },
-  { id: 'primary-model', name: 'Primary (主力编码)', contextWindow: 200000, maxOutputTokens: 32000 },
-  { id: 'deep-model', name: 'Deep (深度思考)', contextWindow: 200000, maxOutputTokens: 32000 },
-];
-
 export class WorkBuddyService {
   private account: WorkBuddyAccount | null = null;
   private server: http.Server | null = null;
   private port = 8788;
   private pendingLogins = new Map<string, { state: string; realm: 'intl' | 'cn'; createdAt: number }>();
+  private modelsSyncError = '';
+  private quotaSyncError = '';
+  private readonly liveModelsTtlMs = 5 * 60 * 1000;
+  private tokenRefreshPromise: Promise<string> | null = null;
 
   constructor() {
     this.loadAccount();
@@ -115,7 +140,7 @@ export class WorkBuddyService {
     return this.account;
   }
 
-  public getStatus(): { loggedIn: boolean; account?: any; proxyPort: number; proxyUrl: string } {
+  public getStatus(): WorkBuddyStatus {
     return {
       loggedIn: Boolean(this.account && this.account.accessToken),
       account: this.account
@@ -131,10 +156,16 @@ export class WorkBuddyService {
         : undefined,
       proxyPort: this.port,
       proxyUrl: `http://127.0.0.1:${this.port}/v1`,
+      models: this.account?.models || [],
+      modelsSyncedAt: this.account?.modelsSyncedAt,
+      quota: this.account?.quota,
+      quotaSyncedAt: this.account?.quotaSyncedAt,
+      modelsSyncError: this.modelsSyncError || undefined,
+      quotaSyncError: this.quotaSyncError || undefined,
     };
   }
 
-  private parseJwt(token: string): { sub?: string; exp?: number; iss?: string } {
+  private parseJwt(token: string): { sub?: string; exp?: number; iss?: string; enterprise_id?: string } {
     try {
       const seg = token.split('.')[1];
       if (!seg) return {};
@@ -144,6 +175,257 @@ export class WorkBuddyService {
     } catch {
       return {};
     }
+  }
+
+  private buildAuthenticatedHeaders(token: string, includeJson = false, originOverride?: string): Record<string, string> {
+    const realm = this.account?.realm || 'cn';
+    const cfg = REALM_CONFIGS[realm];
+    const headers: Record<string, string> = {
+      Accept: 'application/json, text/plain, */*',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': includeJson ? cfg.billing_ua : cfg.chat_ua,
+      Origin: originOverride || cfg.origin,
+      Referer: `${originOverride || cfg.origin}/`,
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-User-Id': this.account?.uid || '',
+      'X-Domain': this.account?.domain || cfg.domain,
+      'X-IDE-Name': 'WorkBuddy',
+      'X-IDE-Type': 'WorkBuddy',
+      'X-IDE-Version': cfg.client_ver,
+      'X-Product': 'SaaS',
+      'X-CodeBuddy-Request': '1',
+    };
+    if (includeJson) headers['Content-Type'] = 'application/json';
+    return headers;
+  }
+
+  private numberValue(...values: any[]): number | undefined {
+    for (const value of values) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
+    }
+    return undefined;
+  }
+
+  private sumDecimalValues(values: any[]): number | undefined {
+    const decimals = values
+      .filter((value) => value !== undefined && value !== null && value !== '')
+      .map((value) => String(value).trim());
+    if (!decimals.length) return undefined;
+    const precision = Math.min(8, Math.max(...decimals.map((value) => value.split('.')[1]?.length || 0)));
+    const scale = 10 ** precision;
+    const sum = decimals.reduce((total, value) => total + Math.round(Number(value) * scale), 0);
+    return sum / scale;
+  }
+
+  private collectModelCandidates(value: any, output: any[] = []): any[] {
+    if (!value) return output;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string' || (item && typeof item === 'object' && (item.id || item.model || item.modelId || item.name))) {
+          output.push(item);
+        }
+      }
+      return output;
+    }
+    if (typeof value !== 'object') return output;
+    for (const key of ['models', 'modelList', 'model_list', 'availableModels', 'available_models']) {
+      if (!value[key]) continue;
+      if (Array.isArray(value[key])) {
+        this.collectModelCandidates(value[key], output);
+      } else if (typeof value[key] === 'object') {
+        for (const [id, item] of Object.entries<any>(value[key])) {
+          if (typeof item === 'string') output.push(item);
+          else if (item && typeof item === 'object') output.push({ id, ...item });
+        }
+      }
+    }
+    return output;
+  }
+
+  private parseLiveModels(payload: any): AiModelItem[] {
+    const data = payload?.data?.data || payload?.data || payload;
+    const candidates: any[] = [];
+    this.collectModelCandidates(data, candidates);
+    if (data?.agents) {
+      const cliAgent = Array.isArray(data.agents)
+        ? data.agents.find((agent: any) => String(agent?.id || agent?.name || agent?.type || '').toLowerCase() === 'cli')
+        : data.agents.cli;
+      if (cliAgent) {
+        this.collectModelCandidates(cliAgent, candidates);
+      } else {
+        for (const agent of Object.values<any>(data.agents)) this.collectModelCandidates(agent, candidates);
+      }
+    }
+    if (data?.modelTiers) this.collectModelCandidates(data.modelTiers, candidates);
+    if (Array.isArray(data?.models)) this.collectModelCandidates(data.models, candidates);
+
+    const models: AiModelItem[] = [];
+    const seen = new Set<string>();
+    for (const item of candidates) {
+      const id = typeof item === 'string' ? item : String(item.id || item.modelId || item.model || item.name || '').trim();
+      if (!id || seen.has(id) || id.length > 200) continue;
+      seen.add(id);
+      const lowerId = id.toLowerCase();
+      const capabilities = typeof item === 'object' ? item.capabilities || item.features || [] : [];
+      const capabilityText = Array.isArray(capabilities) ? capabilities.join(' ').toLowerCase() : JSON.stringify(capabilities).toLowerCase();
+      models.push({
+        id,
+        name: typeof item === 'object' && item.displayName ? `${item.displayName} (${id})` : (typeof item === 'object' && item.name ? item.name : id),
+        reasoning: Boolean(typeof item === 'object' && (item.reasoning || item.thinking || item.supportsReasoning)) || /reason|think|r1|o1|o3|qwq/.test(lowerId),
+        tools: typeof item === 'object' && typeof item.tools === 'boolean'
+          ? item.tools
+          : !/embedding|image|speech|tts|reasoner|thinking/.test(lowerId) && (/tool|function|chat|completion/.test(capabilityText) || !capabilityText),
+        contextWindow: this.numberValue(
+          typeof item === 'object' ? item.contextWindow : undefined,
+          typeof item === 'object' ? item.context_window : undefined,
+          typeof item === 'object' ? item.maxInputTokens : undefined,
+          typeof item === 'object' ? item.inputTokenLimit : undefined,
+          typeof item === 'object' ? item.contextLength : undefined,
+        ) || 65536,
+        maxOutputTokens: this.numberValue(
+          typeof item === 'object' ? item.maxOutputTokens : undefined,
+          typeof item === 'object' ? item.max_output_tokens : undefined,
+          typeof item === 'object' ? item.outputTokenLimit : undefined,
+        ) || 8192,
+      });
+    }
+    return models;
+  }
+
+  private parseQuota(payload: any): WorkBuddyQuota | null {
+    if (payload?.code !== undefined && payload.code !== 0) return null;
+    let root = payload;
+    for (let depth = 0; depth < 4; depth += 1) {
+      if (root?.Response?.Data) root = root.Response.Data;
+      else if (root?.data) root = root.data;
+      else break;
+    }
+    const rawPackages = root?.Packages || root?.packages || root?.Accounts || root?.accounts || root?.Resources || root?.resources || root?.items || [];
+    const packageList = Array.isArray(rawPackages) ? rawPackages : [];
+    const packages: WorkBuddyQuotaPackage[] = packageList.map((item: any) => {
+      const totalPoints = this.numberValue(item?.CycleTotalCapacity, item?.cycleTotalCapacity, item?.CycleCapacitySizePrecise, item?.TotalCapacity, item?.totalCapacity, item?.total);
+      const remainingPoints = this.numberValue(item?.CycleRemainCapacity, item?.cycleRemainCapacity, item?.CycleCapacityRemainPrecise, item?.CapacityRemain, item?.RemainCapacity, item?.remainingCapacity, item?.remaining, item?.remain);
+      const usedPoints = this.numberValue(item?.CycleUsedCapacity, item?.cycleUsedCapacity, item?.CycleCapacityUsedPrecise, item?.UsedCapacity, item?.usedCapacity, item?.used);
+      return {
+        name: item?.Name || item?.name || item?.PackageName || item?.packageName || item?.PackageCode || item?.packageCode,
+        totalPoints,
+        usedPoints: usedPoints ?? (totalPoints !== undefined && remainingPoints !== undefined ? totalPoints - remainingPoints : undefined),
+        remainingPoints,
+        expiresAt: this.numberValue(item?.ExpireAt, item?.expireAt, item?.ExpiresAt, item?.expiresAt),
+      };
+    }).filter((item) => item.totalPoints !== undefined || item.remainingPoints !== undefined || item.usedPoints !== undefined);
+
+    const totalPoints = this.numberValue(root?.TotalCapacity, root?.totalCapacity, root?.total, root?.totalPoints, root?.LimitNum, root?.limitNum);
+    const remainingPoints = this.numberValue(root?.RemainCapacity, root?.remainingCapacity, root?.remaining, root?.remainingPoints, root?.Credit, root?.credit);
+    const usedPoints = this.numberValue(root?.UsedCapacity, root?.usedCapacity, root?.used, root?.usedPoints, root?.UsedNum, root?.usedNum);
+    const result = {
+      totalPoints: totalPoints ?? this.sumDecimalValues(packageList.map((item: any) => item?.CycleTotalCapacity ?? item?.cycleTotalCapacity ?? item?.CycleCapacitySizePrecise ?? item?.TotalCapacity ?? item?.totalCapacity ?? item?.total)),
+      usedPoints: usedPoints ?? this.sumDecimalValues(packageList.map((item: any) => item?.CycleUsedCapacity ?? item?.cycleUsedCapacity ?? item?.CycleCapacityUsedPrecise ?? item?.UsedCapacity ?? item?.usedCapacity ?? item?.used)),
+      remainingPoints: remainingPoints ?? this.sumDecimalValues(packageList.map((item: any) => item?.CycleRemainCapacity ?? item?.cycleRemainCapacity ?? item?.CycleCapacityRemainPrecise ?? item?.CapacityRemain ?? item?.RemainCapacity ?? item?.remainingCapacity ?? item?.remaining ?? item?.remain)),
+      unit: root?.Unit || root?.unit || packageList[0]?.CapacityUnit || packageList[0]?.capacityUnit || '积分',
+      packages,
+      syncedAt: Date.now(),
+    };
+    if (result.totalPoints === undefined && result.usedPoints === undefined && result.remainingPoints === undefined && packages.length === 0) return null;
+    return result;
+  }
+
+  public async fetchLiveModels(): Promise<{ success: boolean; models: AiModelItem[]; syncedAt?: number; error?: string }> {
+    if (!this.account?.accessToken) return { success: false, models: [], error: 'WorkBuddy 尚未登录' };
+    try {
+      const token = await this.ensureValidToken();
+      const cfg = REALM_CONFIGS[this.account.realm] || REALM_CONFIGS.cn;
+      let models: AiModelItem[] = [];
+      let lastError: any;
+      const paths = ['/v2/enterprises/personal/models', '/v3/config'];
+      const userAgents = [...new Set([cfg.chat_ua, cfg.billing_ua])];
+      for (const apiPath of paths) {
+        for (const userAgent of userAgents) {
+          try {
+            const res = await axios.get(`${cfg.chat_upstream}${apiPath}`, {
+              headers: { ...this.buildAuthenticatedHeaders(token), 'User-Agent': userAgent },
+              timeout: 10000,
+            });
+            models = this.parseLiveModels(res.data);
+            if (models.length) break;
+            lastError = new Error(`${apiPath} 未返回可用模型`);
+          } catch (e: any) {
+            lastError = e;
+            if (e.response?.status === 401) break;
+          }
+        }
+        if (models.length) break;
+      }
+      if (!models.length) throw lastError || new Error('上游配置接口未返回可用模型');
+      this.account.models = models;
+      this.account.modelsSyncedAt = Date.now();
+      this.modelsSyncError = '';
+      this.saveAccount(this.account);
+      return { success: true, models, syncedAt: this.account.modelsSyncedAt };
+    } catch (e: any) {
+      this.modelsSyncError = e.response?.data?.message || e.message || '获取 WorkBuddy 模型失败';
+      return { success: false, models: this.account?.models || [], syncedAt: this.account?.modelsSyncedAt, error: this.modelsSyncError };
+    }
+  }
+
+  public async fetchQuota(): Promise<{ success: boolean; quota?: WorkBuddyQuota; syncedAt?: number; error?: string }> {
+    if (!this.account?.accessToken) return { success: false, error: 'WorkBuddy 尚未登录' };
+    try {
+      const token = await this.ensureValidToken();
+      const cfg = REALM_CONFIGS[this.account.realm] || REALM_CONFIGS.cn;
+      const isEnterprise = Boolean(this.account.enterpriseId);
+      const paths = isEnterprise
+        ? ['/billing/meter/get-enterprise-user-usage']
+        : this.account.realm === 'cn'
+        ? ['/billing/meter/get-user-resource-summary', '/v2/billing/meter/get-user-resource']
+        : ['/billing/meter/get-user-resource', '/v2/billing/meter/get-user-resource'];
+      const billingBases = this.account.realm === 'cn'
+        ? ['https://www.workbuddy.cn', cfg.billing_upstream]
+        : [cfg.billing_upstream];
+      let lastError: any;
+      for (const base of billingBases) {
+        for (const apiPath of paths) {
+          try {
+            const body = isEnterprise ? {} : this.account.realm === 'intl' ? { PageNumber: 1, PageSize: 100 } : {};
+            const res = await axios.post(`${base}${apiPath}`, body, {
+              headers: this.buildAuthenticatedHeaders(token, true, base),
+              timeout: 15000,
+            });
+            const quota = this.parseQuota(res.data);
+            if (!quota) {
+              lastError = new Error(`${apiPath} 未返回可解析的积分余额`);
+              continue;
+            }
+            this.account.quota = quota;
+            this.account.quotaSyncedAt = quota.syncedAt;
+            this.quotaSyncError = '';
+            this.saveAccount(this.account);
+            return { success: true, quota, syncedAt: quota.syncedAt };
+          } catch (e: any) {
+            lastError = e;
+            if (e.response?.status !== 404) break;
+          }
+        }
+      }
+      throw lastError || new Error('积分接口调用失败');
+    } catch (e: any) {
+      this.quotaSyncError = e.response?.data?.message || e.message || '获取 WorkBuddy 剩余积分失败';
+      return { success: false, quota: this.account?.quota, syncedAt: this.account?.quotaSyncedAt, error: this.quotaSyncError };
+    }
+  }
+
+  public async refreshStatus(): Promise<WorkBuddyStatus> {
+    if (!this.account?.accessToken) return this.getStatus();
+    await Promise.allSettled([this.fetchLiveModels(), this.fetchQuota()]);
+    return this.getStatus();
+  }
+
+  private async getModelsForProxy(): Promise<AiModelItem[]> {
+    if (this.account?.accessToken && (!this.account.models?.length || Date.now() - (this.account.modelsSyncedAt || 0) > this.liveModelsTtlMs)) {
+      await this.fetchLiveModels();
+    }
+    return this.account?.models || [];
   }
 
   /**
@@ -271,6 +553,7 @@ export class WorkBuddyService {
         domain: data.domain || cfg.domain,
         accessToken,
         refreshToken: data.refreshToken || '',
+        enterpriseId: jwt.enterprise_id,
         expiresAt: expEpoch,
         enabled: true,
         updatedAt: Date.now(),
@@ -318,7 +601,21 @@ export class WorkBuddyService {
       return this.account.accessToken;
     }
 
-    const cfg = REALM_CONFIGS[this.account.realm] || REALM_CONFIGS.cn;
+    if (!this.tokenRefreshPromise) {
+      this.tokenRefreshPromise = this.refreshAccessToken();
+    }
+    try {
+      return await this.tokenRefreshPromise;
+    } finally {
+      this.tokenRefreshPromise = null;
+    }
+  }
+
+  private async refreshAccessToken(): Promise<string> {
+    const account = this.account;
+    if (!account?.accessToken) throw new Error('WorkBuddy 尚未登录，请在设置中扫码登录');
+
+    const cfg = REALM_CONFIGS[account.realm] || REALM_CONFIGS.cn;
     const refreshUrl = `${cfg.chat_upstream}/v2/plugin/auth/token/refresh`;
 
     const headers = {
@@ -328,22 +625,23 @@ export class WorkBuddyService {
       'User-Agent': cfg.billing_ua,
       'Origin': cfg.origin,
       'Referer': `${cfg.origin}/`,
-      'X-Refresh-Token': this.account.refreshToken,
-      'X-Auth-Refresh-Source': this.account.realm === 'cn' ? 'workbuddy' : 'plugin',
-      'X-User-Id': this.account.uid,
-      'X-Domain': this.account.domain || cfg.domain,
+      'X-Refresh-Token': account.refreshToken,
+      'X-Auth-Refresh-Source': account.realm === 'cn' ? 'workbuddy' : 'plugin',
+      'X-User-Id': account.uid,
+      'X-Domain': account.domain || cfg.domain,
       'X-CodeBuddy-Request': '1',
-      'Accept-Language': this.account.realm === 'intl' ? 'en-US' : 'zh-CN',
+      'Accept-Language': account.realm === 'intl' ? 'en-US' : 'zh-CN',
     };
 
     try {
-      console.log(`[WorkBuddy] 正在静默续期 Token (UID: ${this.account.uid})...`);
+      console.log(`[WorkBuddy] 正在静默续期 Token (UID: ${account.uid})...`);
       const res = await axios.post(refreshUrl, {}, { headers, timeout: 15000 });
       const rawData = res.data?.data || {};
       const data = rawData.data || rawData;
 
       if (data.accessToken) {
         const jwt = this.parseJwt(data.accessToken);
+        if (this.account?.uid !== account.uid) return this.account?.accessToken || data.accessToken;
         this.account.accessToken = data.accessToken;
         if (data.refreshToken) this.account.refreshToken = data.refreshToken;
         this.account.expiresAt = jwt.exp || Math.round(Date.now() / 1000 + 7200);
@@ -356,7 +654,7 @@ export class WorkBuddyService {
       console.warn(`[WorkBuddy] Token 续期失败:`, e.message);
     }
 
-    return this.account.accessToken;
+    return this.account?.accessToken || account.accessToken;
   }
 
   /**
@@ -538,19 +836,22 @@ export class WorkBuddyService {
 
         // 模型列表端点
         if (pathname === '/v1/models' || pathname === '/models') {
+          const models = await this.getModelsForProxy();
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(
-            JSON.stringify({
-              object: 'list',
-              data: DEFAULT_MODELS.map((m) => ({
-                id: m.id,
-                object: 'model',
-                created: 1710000000,
-                owned_by: 'workbuddy',
-                name: m.name,
-              })),
-            })
-          );
+          res.end(JSON.stringify({
+            object: 'list',
+            data: models.map((m) => ({
+              id: m.id,
+              object: 'model',
+              created: Math.floor((this.account?.modelsSyncedAt || Date.now()) / 1000),
+              owned_by: 'workbuddy',
+              name: m.name,
+              reasoning: Boolean(m.reasoning),
+              tools: Boolean(m.tools),
+              context_window: m.contextWindow,
+              max_output_tokens: m.maxOutputTokens,
+            })),
+          }));
           return;
         }
 

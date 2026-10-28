@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, AlignLeft, ArrowLeft, BarChart3, Check, Clock3, LayoutDashboard, Mail, Pencil, Play, Plus, Save, Send, Settings2, Trash2, X } from 'lucide-react';
+import { Activity, AlignLeft, ArrowLeft, BarChart3, Check, Clock3, Code2, FileCode2, LayoutDashboard, Mail, Pencil, Play, Plus, Save, Send, Settings2, Trash2, X } from 'lucide-react';
 import type { FeishuWorkspaceSettings } from '../../../shared/feishuTypes';
+import type { WorkspaceProject } from '../../../shared/types';
 import type { WorkspaceDataSources, WorkspacePage, WorkspaceWidget, WorkspaceWidgetResult, WorkspaceWidgetType } from '../../../shared/workspaceTypes';
 import { AsyncApexJobBIDashboard } from '../AsyncApexJobBIDashboard';
 
 interface Props {
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
+  activeProject?: WorkspaceProject;
 }
 
 const newId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const makePage = (): WorkspacePage => ({ id: newId(), name: '新建业务页面', description: '', widgets: [], createdAt: Date.now(), updatedAt: Date.now() });
+const makePage = (projectId?: string): WorkspacePage => ({ id: newId(), name: '新建业务页面', description: '', widgets: [], projectId, createdAt: Date.now(), updatedAt: Date.now() });
 const defaultSubscription = (): NonNullable<WorkspaceWidget['subscription']> => ({ enabled: false, intervalMinutes: 60, feishuEnabled: false });
 
 const widgetDefaults: Record<WorkspaceWidgetType, Omit<WorkspaceWidget, 'id'>> = {
@@ -17,13 +19,15 @@ const widgetDefaults: Record<WorkspaceWidgetType, Omit<WorkspaceWidget, 'id'>> =
   'crm-query': { type: 'crm-query', title: 'CRM 数据', query: '', limit: 20, subscription: defaultSubscription() },
   'mail-list': { type: 'mail-list', title: '最近邮件', limit: 10, subscription: defaultSubscription() },
   'async-apex-dashboard': { type: 'async-apex-dashboard', title: 'Apex 异步作业 BI 看板', query: 'SELECT ApexClass.Name, CompletedDate, CreatedBy.Name, CreatedDate, ExtendedStatus, Id, JobItemsProcessed, JobType, MethodName, NumberOfErrors, ParentJobId, Status, TotalJobItems FROM AsyncApexJob WHERE CreatedDate = YESTERDAY ORDER BY CreatedDate DESC', subscription: defaultSubscription() },
+  'custom-html': { type: 'custom-html', title: '自定义 HTML', relativePath: '', subscription: defaultSubscription() },
+  'custom-tsx': { type: 'custom-tsx', title: '自定义 TSX', relativePath: '', subscription: defaultSubscription() },
 };
 
-const widgetIcon = (type: WorkspaceWidgetType) => type === 'text' ? AlignLeft : type === 'mail-list' ? Mail : BarChart3;
-const widgetTypeLabel = (type: WorkspaceWidgetType) => ({ text: '文本', 'crm-query': 'CRM 查询', 'mail-list': '邮件列表', 'async-apex-dashboard': 'BI 看板' })[type];
+const widgetIcon = (type: WorkspaceWidgetType) => type === 'text' ? AlignLeft : type === 'mail-list' ? Mail : type === 'custom-html' ? Code2 : type === 'custom-tsx' ? FileCode2 : BarChart3;
+const widgetTypeLabel = (type: WorkspaceWidgetType) => ({ text: '文本', 'crm-query': 'CRM 查询', 'mail-list': '邮件列表', 'async-apex-dashboard': 'BI 看板', 'custom-html': '自定义 HTML', 'custom-tsx': '自定义 TSX' })[type];
 const intervalLabel = (minutes: number) => minutes < 60 ? `每 ${minutes} 分钟` : minutes % 1440 === 0 ? `每 ${minutes / 1440} 天` : minutes % 60 === 0 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
 
-export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
+export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject }) => {
   const [pages, setPages] = useState<WorkspacePage[]>([]);
   const [page, setPage] = useState<WorkspacePage | null>(null);
   const [sources, setSources] = useState<WorkspaceDataSources>({ crmAccounts: [], mailAccounts: [] });
@@ -35,21 +39,37 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
   const load = async () => {
     try {
       const [loadedPages, loadedSources] = await Promise.all([
-        window.neoApi.workspaceListPages?.() || Promise.resolve([]),
+        window.neoApi.workspaceListPages?.(activeProject?.id) || Promise.resolve([]),
         window.neoApi.workspaceGetDataSources?.() || Promise.resolve({ crmAccounts: [], mailAccounts: [] }),
       ]);
       setPages(loadedPages);
       setSources(loadedSources);
-      setPage((current) => current ? loadedPages.find((item) => item.id === current.id) || current : null);
+      setPage((current) => current ? loadedPages.find((item) => item.id === current.id) || null : null);
     } catch (error: any) {
       showToast('error', error?.message || '加载自定义页面失败');
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [activeProject?.id]);
+
+  useEffect(() => {
+    if (!page || !activeProject?.localPath || !window.neoApi.workspacePreviewWidget) return;
+    const customWidgets = page.widgets.filter((widget) => widget.type === 'custom-html' || widget.type === 'custom-tsx');
+    if (!customWidgets.length) return;
+    let cancelled = false;
+    void Promise.all(customWidgets.map((widget) => window.neoApi.workspacePreviewWidget!(page.id, widget.id, activeProject.localPath)))
+      .then((items) => {
+        if (cancelled) return;
+        setResults((current) => ({ ...current, ...Object.fromEntries(items.map((item) => [item.widgetId, item])) }));
+      })
+      .catch((error: any) => {
+        if (!cancelled) showToast('error', error?.message || '加载自定义组件失败');
+      });
+    return () => { cancelled = true; };
+  }, [page?.id, page?.updatedAt, activeProject?.localPath]);
 
   const persistPage = async (nextPage: WorkspacePage): Promise<WorkspacePage[]> => {
-    const updated = await window.neoApi.workspaceSavePage?.({ ...nextPage, updatedAt: Date.now() });
+    const updated = await window.neoApi.workspaceSavePage?.({ ...nextPage, projectId: nextPage.projectId || activeProject?.id, updatedAt: Date.now() }, activeProject?.localPath);
     const nextPages = updated || [nextPage, ...pages.filter((item) => item.id !== nextPage.id)];
     setPages(nextPages);
     setPage(nextPages.find((item) => item.id === nextPage.id) || nextPage);
@@ -69,8 +89,8 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
 
   const addWidget = (type: WorkspaceWidgetType) => {
     setPage((current) => {
-      const target = current || makePage();
-      const widget = { id: newId(), ...widgetDefaults[type] } as WorkspaceWidget;
+      const target = current || makePage(activeProject?.id);
+      const widget = { id: newId(), projectId: activeProject?.id, ...widgetDefaults[type] } as WorkspaceWidget;
       if (type === 'crm-query') widget.accountId = sources.crmAccounts[0]?.accountId;
       if (type === 'mail-list') widget.accountId = sources.mailAccounts[0]?.accountId;
       if (type === 'async-apex-dashboard') widget.accountId = sources.crmAccounts.find((source) => source.productType === 'salesforce')?.accountId;
@@ -83,7 +103,7 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
     setBusy(true);
     try {
       await persistPage(page);
-      const nextResults = await window.neoApi.workspaceRunPage?.(page.id) || [];
+      const nextResults = await window.neoApi.workspaceRunPage?.(page.id, activeProject?.localPath) || [];
       setResults(Object.fromEntries(nextResults.map((result) => [result.widgetId, result])));
       const failed = nextResults.filter((result) => !result.success).length;
       showToast(failed ? 'info' : 'success', failed ? `页面已运行，${failed} 个组件需要检查` : '页面数据已刷新');
@@ -106,6 +126,11 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
   const renderWidgetResult = (widget: WorkspaceWidget) => {
     if (widget.type === 'text') return <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{widget.text || '尚未填写说明内容'}</p>;
     const result = results[widget.id];
+    if (widget.type === 'custom-html' || widget.type === 'custom-tsx') {
+      if (!result) return <div className="py-12 text-center text-sm text-slate-400">正在加载自定义组件…</div>;
+      if (!result.success || !result.content) return <div className="m-4 rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"><div className="font-medium">{result.buildStatus === 'error' ? '组件构建/加载失败' : '组件加载失败'}</div><div className="mt-1 whitespace-pre-wrap">{result.error}</div></div>;
+      return <div className="min-h-72 bg-white"><iframe title={widget.title} sandbox="allow-scripts" srcDoc={result.content} className="block h-[420px] w-full border-0" /></div>;
+    }
     if (!result) return <div className="py-12 text-center text-sm text-slate-400">运行页面后将在这里显示数据</div>;
     if (!result.success) return <div className="m-4 rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{result.error}</div>;
     if (!result.records?.length) return <div className="py-10 text-center text-sm text-slate-400">没有匹配的数据</div>;
@@ -129,13 +154,13 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
     return <div className="flex h-full min-h-0 flex-col bg-slate-50">
       <header className="flex min-h-16 items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8">
         <div><h1 className="text-lg font-semibold text-slate-900">自定义工作台</h1><p className="mt-0.5 text-xs text-slate-500">业务页面与数据组件</p></div>
-        <button onClick={() => { setPage(makePage()); setEditing(true); setResults({}); }} className="inline-flex items-center gap-2 rounded bg-sky-700 px-3 py-2 text-xs font-medium text-white hover:bg-sky-800"><Plus size={15}/>新建页面</button>
+        <button onClick={() => { setPage(makePage(activeProject?.id)); setEditing(true); setResults({}); }} className="inline-flex items-center gap-2 rounded bg-sky-700 px-3 py-2 text-xs font-medium text-white hover:bg-sky-800"><Plus size={15}/>新建页面</button>
       </header>
       <div className="flex-1 overflow-y-auto p-5 md:p-8">
         {pages.length ? <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{pages.map((item) => <button key={item.id} onClick={() => { setPage(item); setEditing(false); setResults({}); }} className="group overflow-hidden rounded border border-slate-200 bg-white text-left transition-colors hover:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-300">
           <PageThumbnail page={item}/>
           <div className="border-t border-slate-100 px-4 py-3"><div className="flex items-center justify-between gap-3"><span className="truncate text-sm font-semibold text-slate-800">{item.name}</span><span className="shrink-0 text-[11px] text-slate-400">{item.widgets.length} 个组件</span></div><p className="mt-1 truncate text-xs text-slate-500">{item.description || item.widgets.map((widget) => widget.title).slice(0, 3).join(' · ') || '空白页面'}</p></div>
-        </button>)}</div> : <div className="mx-auto mt-24 max-w-sm text-center"><LayoutDashboard size={36} className="mx-auto mb-3 text-slate-300"/><h2 className="text-sm font-semibold text-slate-700">还没有工作台页面</h2><button onClick={() => { setPage(makePage()); setEditing(true); }} className="mt-4 inline-flex items-center gap-1.5 rounded bg-sky-700 px-3 py-2 text-xs text-white"><Plus size={14}/>新建页面</button></div>}
+        </button>)}</div> : <div className="mx-auto mt-24 max-w-sm text-center"><LayoutDashboard size={36} className="mx-auto mb-3 text-slate-300"/><h2 className="text-sm font-semibold text-slate-700">还没有工作台页面</h2><button onClick={() => { setPage(makePage(activeProject?.id)); setEditing(true); }} className="mt-4 inline-flex items-center gap-1.5 rounded bg-sky-700 px-3 py-2 text-xs text-white"><Plus size={14}/>新建页面</button></div>}
       </div>
     </div>;
   }
@@ -152,6 +177,8 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
         <button onClick={() => addWidget('mail-list')} title="添加邮件列表" className="rounded p-2 text-slate-600 hover:bg-slate-100"><Mail size={16}/></button>
         <button onClick={() => addWidget('text')} title="添加文本" className="rounded p-2 text-slate-600 hover:bg-slate-100"><AlignLeft size={16}/></button>
         <button onClick={() => addWidget('async-apex-dashboard')} title="添加 Apex BI 看板" className="rounded p-2 text-slate-600 hover:bg-slate-100"><Activity size={16}/></button>
+        <button onClick={() => addWidget('custom-html')} title="挂载项目内 HTML" className="rounded p-2 text-slate-600 hover:bg-slate-100"><Code2 size={16}/></button>
+        <button onClick={() => addWidget('custom-tsx')} title="挂载项目内 TSX" className="rounded p-2 text-slate-600 hover:bg-slate-100"><FileCode2 size={16}/></button>
       </div>}
       <button disabled={busy} onClick={() => void run()} title="刷新所有组件" className="inline-flex items-center gap-1.5 rounded border border-slate-200 px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"><Play size={14}/>运行</button>
       <button disabled={busy} onClick={() => editing ? void save() : setEditing(true)} title={editing ? '保存页面' : '编辑页面'} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-2 text-xs disabled:opacity-50 ${editing ? 'bg-sky-700 text-white hover:bg-sky-800' : 'border border-slate-200 text-slate-700 hover:bg-slate-50'}`}>{editing ? <><Save size={14}/>保存</> : <><Pencil size={14}/>编辑</>}</button>
@@ -172,7 +199,7 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
               <button onClick={() => setSettingWidgetId(widget.id)} title="组件设置：数据源、订阅与飞书" className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"><Settings2 size={16}/></button>
               {editing && <button onClick={() => setPage({ ...page, widgets: page.widgets.filter((item) => item.id !== widget.id) })} title="移除组件" className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"><X size={15}/></button>}
             </div>
-            {widget.type === 'async-apex-dashboard' ? widget.accountId ? <div className="min-h-[560px]"><AsyncApexJobBIDashboard accountId={widget.accountId}/></div> : <div className="p-10 text-center text-sm text-slate-500">请在组件设置中绑定 Salesforce 账号。</div> : widget.type === 'text' ? <div className="p-5">{renderWidgetResult(widget)}</div> : <div className="max-h-[70vh] min-h-44 overflow-auto">{renderWidgetResult(widget)}</div>}
+            {widget.type === 'async-apex-dashboard' ? widget.accountId ? <div className="min-h-[560px]"><AsyncApexJobBIDashboard accountId={widget.accountId}/></div> : <div className="p-10 text-center text-sm text-slate-500">请在组件设置中绑定 Salesforce 账号。</div> : widget.type === 'text' ? <div className="p-5">{renderWidgetResult(widget)}</div> : widget.type === 'custom-html' || widget.type === 'custom-tsx' ? renderWidgetResult(widget) : <div className="max-h-[70vh] min-h-44 overflow-auto">{renderWidgetResult(widget)}</div>}
           </article>;
         })}
         {page.widgets.length === 0 && <div className="flex min-h-56 flex-col items-center justify-center rounded border border-dashed border-slate-300 bg-white text-sm text-slate-500 xl:col-span-2"><Plus size={20} className="mb-2"/>{editing ? '使用上方工具栏添加组件' : '此页面暂无组件'}{!editing && <button onClick={() => setEditing(true)} className="mt-3 text-xs font-medium text-sky-700 hover:underline">编辑页面</button>}</div>}
@@ -183,6 +210,7 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
       key={settingWidgetId}
       widget={page.widgets.find((widget) => widget.id === settingWidgetId)!}
       sources={sources}
+      projectPath={activeProject?.localPath}
       busy={busy}
       onClose={() => setSettingWidgetId(null)}
       onSave={(widget) => void saveWidgetSettings(widget)}
@@ -192,7 +220,7 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast }) => {
 };
 
 const PageThumbnail: React.FC<{ page: WorkspacePage }> = ({ page }) => {
-  const colors: Record<WorkspaceWidgetType, string> = { text: 'bg-emerald-100', 'crm-query': 'bg-sky-100', 'mail-list': 'bg-amber-100', 'async-apex-dashboard': 'bg-indigo-100' };
+  const colors: Record<WorkspaceWidgetType, string> = { text: 'bg-emerald-100', 'crm-query': 'bg-sky-100', 'mail-list': 'bg-amber-100', 'async-apex-dashboard': 'bg-indigo-100', 'custom-html': 'bg-cyan-100', 'custom-tsx': 'bg-violet-100' };
   return <div className="relative h-40 overflow-hidden bg-slate-100 p-3 transition-colors group-hover:bg-slate-50">
     <div className="pointer-events-none absolute inset-x-6 top-4 bottom-3 rounded border border-slate-200 bg-white p-2 shadow-sm">
       <div className="mb-2 flex h-3 items-center gap-1 border-b border-slate-100 pb-1"><span className="h-1.5 w-1.5 rounded-full bg-slate-300"/><span className="h-1.5 w-1.5 rounded-full bg-slate-200"/><span className="ml-2 h-1 w-16 rounded bg-slate-200"/></div>
@@ -205,15 +233,17 @@ const PageThumbnail: React.FC<{ page: WorkspacePage }> = ({ page }) => {
 interface WidgetSettingsModalProps {
   widget: WorkspaceWidget;
   sources: WorkspaceDataSources;
+  projectPath?: string;
   busy: boolean;
   onClose: () => void;
   onSave: (widget: WorkspaceWidget) => void;
   showToast: Props['showToast'];
 }
 
-const WidgetSettingsModal: React.FC<WidgetSettingsModalProps> = ({ widget: initialWidget, sources, busy, onClose, onSave, showToast }) => {
+const WidgetSettingsModal: React.FC<WidgetSettingsModalProps> = ({ widget: initialWidget, sources, projectPath, busy, onClose, onSave, showToast }) => {
   const [widget, setWidget] = useState<WorkspaceWidget>({ ...initialWidget, subscription: initialWidget.subscription || defaultSubscription() });
   const [feishu, setFeishu] = useState<FeishuWorkspaceSettings>({ configured: false, bots: [] });
+  const [projectFiles, setProjectFiles] = useState<Array<{ relativePath: string; ext: string }>>([]);
   const subscription = widget.subscription || defaultSubscription();
   const selectedFeishuBotId = subscription.feishuBotId || (feishu.bots.length === 1 ? feishu.bots[0].id : '');
   const patch = (values: Partial<WorkspaceWidget>) => setWidget((current) => ({ ...current, ...values }));
@@ -223,7 +253,15 @@ const WidgetSettingsModal: React.FC<WidgetSettingsModalProps> = ({ widget: initi
     void window.neoApi.feishuGetSettings?.().then((value) => setFeishu(value || { configured: false, bots: [] })).catch((error: any) => showToast('error', error?.message || '读取飞书设置失败'));
   }, []);
 
+  useEffect(() => {
+    if (!projectPath || (widget.type !== 'custom-html' && widget.type !== 'custom-tsx') || !window.neoApi.projectListFiles) return;
+    void window.neoApi.projectListFiles({ folderPath: projectPath, maxFiles: 500 })
+      .then((files) => setProjectFiles(files.filter((file) => widget.type === 'custom-html' ? ['.html', '.htm'].includes(file.ext) : file.ext === '.tsx').map((file) => ({ relativePath: file.relativePath, ext: file.ext }))))
+      .catch((error: any) => showToast('error', error?.message || '读取项目组件文件失败'));
+  }, [projectPath, widget.type]);
+
   const isText = widget.type === 'text';
+  const isCustom = widget.type === 'custom-html' || widget.type === 'custom-tsx';
   return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section role="dialog" aria-modal="true" aria-label={`${widget.title}组件设置`} className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded border border-slate-200 bg-white shadow-2xl">
       <header className="flex items-center gap-3 border-b border-slate-200 px-5 py-4"><div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold text-slate-900">组件设置</h2><p className="mt-0.5 truncate text-xs text-slate-500">{widget.title} · {widgetTypeLabel(widget.type)}</p></div><button onClick={onClose} title="关闭" className="rounded p-1.5 text-slate-500 hover:bg-slate-100"><X size={17}/></button></header>
@@ -242,6 +280,14 @@ const WidgetSettingsModal: React.FC<WidgetSettingsModalProps> = ({ widget: initi
           {widget.type === 'mail-list' && <>
             <label className="block text-xs font-medium text-slate-700">邮箱账号<select value={widget.accountId || ''} onChange={(event) => patch({ accountId: event.target.value })} className="mt-1 block w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">所有邮箱账号</option>{sources.mailAccounts.map((source) => <option key={source.accountId} value={source.accountId}>{source.name} · {source.email}</option>)}</select></label>
             <label className="block text-xs font-medium text-slate-700">显示数量<input type="number" min={1} max={50} value={widget.limit || 10} onChange={(event) => patch({ limit: Math.max(1, Math.min(50, Number(event.target.value) || 1)) })} className="mt-1 block w-36 rounded border border-slate-300 px-3 py-2 text-sm"/></label>
+          </>}
+          {isCustom && <>
+            <label className="block text-xs font-medium text-slate-700">项目内文件路径
+              <input list="workspace-component-files" value={widget.relativePath || ''} onChange={(event) => patch({ relativePath: event.target.value, buildStatus: 'pending', buildError: undefined })} placeholder={widget.type === 'custom-html' ? '例如: dashboard/index.html' : '例如: src/components/Dashboard.tsx'} className="mt-1 block w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs outline-none focus:border-sky-500"/>
+            </label>
+            <datalist id="workspace-component-files">{projectFiles.map((file) => <option key={file.relativePath} value={file.relativePath}/>)}</datalist>
+            <p className="text-xs leading-5 text-slate-500">只允许当前项目内的相对路径。{widget.type === 'custom-tsx' ? 'TSX 文件必须 export default 一个 React 组件，保存后会实际构建。' : 'HTML 会在隔离的沙箱 iframe 中预览。'}</p>
+            {widget.buildError && <p className="whitespace-pre-wrap text-xs text-rose-700">上次构建错误：{widget.buildError}</p>}
           </>}
         </section>
 
