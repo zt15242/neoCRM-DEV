@@ -6,7 +6,7 @@ import {
   GenerateReplyOptions, 
   GeneratedReplyResult 
 } from '../../shared/mailTypes';
-import type { WorkspaceDataSources, WorkspacePage, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
+import type { WorkspaceDataSources, WorkspaceExecutionLog, WorkspacePage, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
 import type { FeishuWorkspaceSettings } from '../../shared/feishuTypes';
 import { 
   NeoEnvironment, 
@@ -38,6 +38,24 @@ import {
 } from '../../shared/types';
 
 declare global {
+  interface Window {
+    neoCRMData?: {
+      connector: { accountId: string; connectorName: string; productType: string } | null;
+      query: string | null;
+      records: Array<Record<string, unknown>>;
+      fields: string[];
+      totalSize: number;
+      updatedAt: number;
+    };
+    neoCRM?: {
+      query: (query: string) => Promise<{
+        records: Array<Record<string, unknown>>;
+        fields?: string[];
+        totalSize?: number;
+      }>;
+    };
+  }
+
   interface Window {
     neoApi: {
       getEnvironments: () => Promise<NeoEnvironment[]>;
@@ -319,6 +337,14 @@ declare global {
       workspaceRunPage?: (pageId: string, projectPath?: string) => Promise<WorkspaceWidgetResult[]>;
       workspacePreviewWidget?: (pageId: string, widgetId: string, projectPath?: string) => Promise<WorkspaceWidgetResult>;
       workspaceQueryConnector?: (accountId: string, query: string) => Promise<{ success: boolean; data?: { records: any[]; totalSize: number; fields: string[] }; error?: string }>;
+      workspaceQueryComponentConnector?: (pageId: string, widgetId: string, executionId: string, accountId: string, query: string) => Promise<{ success: boolean; data?: { records: any[]; totalSize: number; fields: string[] }; error?: string }>;
+      workspaceListComponentExecutionLogs?: (pageId: string, widgetId: string, limit?: number) => Promise<WorkspaceExecutionLog[]>;
+      workspaceAppendComponentExecutionLog?: (pageId: string, widgetId: string, executionId: string, stage: string, status: string, message: string, durationMs?: number) => Promise<WorkspaceExecutionLog | undefined>;
+      workspaceClearComponentExecutionLogs?: (pageId: string, widgetId: string) => Promise<number>;
+      workspaceListComponentFiles?: () => Promise<{ rootPath: string; files: Array<{ relativePath: string; ext: string; size: number }> }>;
+      workspaceImportComponentFile?: () => Promise<{ canceled: boolean; relativePath?: string; fileName?: string }>;
+      workspaceExportPagePackage?: (pageId: string) => Promise<{ canceled: boolean; filePath?: string }>;
+      workspaceImportPagePackage?: (projectId?: string) => Promise<{ canceled: boolean; page?: WorkspacePage; pages?: WorkspacePage[] }>;
       feishuGetSettings?: () => Promise<FeishuWorkspaceSettings>;
       feishuAddBot?: (settings: { name: string; webhookUrl: string }) => Promise<FeishuWorkspaceSettings>;
       feishuRemoveBot?: (botId: string) => Promise<FeishuWorkspaceSettings>;

@@ -82,7 +82,7 @@ export const AsyncApexJobBIDashboard: React.FC<AsyncApexJobBIDashboardProps> = (
 
     const selectClause = initialSql.match(/^SELECT[\s\S]*?\s+FROM\s+AsyncApexJob\b/i)?.[0]
       || 'SELECT ApexClass.Name, CompletedDate, CreatedBy.Name, CreatedDate, ExtendedStatus, Id, JobItemsProcessed, JobType, MethodName, NumberOfErrors, ParentJobId, Status, TotalJobItems FROM AsyncApexJob';
-    const currentSql = `${selectClause} ${whereClause} ORDER BY CreatedDate DESC LIMIT 500`;
+    const currentSql = `${selectClause} ${whereClause} ORDER BY CreatedDate DESC`;
 
     try {
       if (!accountId) {

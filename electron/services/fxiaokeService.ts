@@ -1,6 +1,125 @@
 import axios from 'axios';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { NeoEnvironment, TokenData, EntityMetadata, FieldMetadata, QueryResultData } from '../../shared/types';
+
+interface FxiaokeSqlQueryPlan {
+  objectApiName: string;
+  fieldProjection?: string[];
+  filters: Array<{ field_name: string; field_values: string[]; operator: string }>;
+  orders: Array<{ fieldName: string; isAsc: boolean }>;
+  offset: number;
+  limit?: number;
+}
+
+function splitSqlTopLevel(source: string, delimiter: ',' | 'AND' | 'OR'): string[] {
+  const parts: string[] = [];
+  let quote = '';
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (quote) {
+      if (char === quote && source[index + 1] === quote) index++;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; continue; }
+    if (char === '(') { depth++; continue; }
+    if (char === ')') { depth--; continue; }
+    if (depth !== 0) continue;
+    const matchesDelimiter = delimiter === ','
+      ? char === ','
+      : source.slice(index, index + delimiter.length).toUpperCase() === delimiter
+        && (index === 0 || /\s/.test(source[index - 1]))
+        && (index + delimiter.length === source.length || /\s/.test(source[index + delimiter.length]));
+    if (!matchesDelimiter) continue;
+    parts.push(source.slice(start, index).trim());
+    start = index + delimiter.length;
+    index += delimiter.length - 1;
+  }
+  if (quote || depth !== 0) throw new Error('纷享销客查询包含未闭合的引号或括号');
+  parts.push(source.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+function parseFxiaokeSqlLiteral(raw: string): string {
+  const value = raw.trim();
+  if (/^'(?:[^']|'')*'$/.test(value)) return value.slice(1, -1).replace(/''/g, "'");
+  if (/^"(?:[^"]|"")*"$/.test(value)) return value.slice(1, -1).replace(/""/g, '"');
+  if (/^-?\d+(?:\.\d+)?$/.test(value) || /^(?:true|false)$/i.test(value) || /^[A-Z_][A-Z0-9_]*$/i.test(value)) return value;
+  throw new Error(`纷享销客查询暂不支持此过滤值：${value}`);
+}
+
+function parseFxiaokeSql(rawSql: string): FxiaokeSqlQueryPlan {
+  const sql = String(rawSql || '').trim().replace(/;+$/, '');
+  if (/\b(?:GROUP\s+BY|HAVING|JOIN|UNION|DISTINCT)\b/i.test(sql)) throw new Error('纷享销客 OpenAPI 查询暂不支持 GROUP BY、JOIN、UNION 或 DISTINCT');
+  const selectMatch = sql.match(/^SELECT\s+([\s\S]+?)\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)((?:[\s\S])*)$/i);
+  if (!selectMatch) throw new Error('纷享销客查询必须使用 SELECT ... FROM <对象 API 名>');
+
+  const selectText = selectMatch[1].trim();
+  const objectApiName = selectMatch[2];
+  const tail = selectMatch[3] || '';
+  const whereMatch = tail.match(/\bWHERE\b[\s\S]*?(?=\bORDER\s+BY\b|\bLIMIT\b|\bOFFSET\b|$)/i);
+  const orderMatch = tail.match(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|\bOFFSET\b|$)/i);
+  const commaLimit = tail.match(/\bLIMIT\s+(\d+)\s*,\s*(\d+)/i);
+  const standardLimit = tail.match(/\bLIMIT\s+(\d+)/i);
+  const offsetMatch = tail.match(/\bOFFSET\s+(\d+)/i);
+  let remainder = tail;
+  for (const clause of [whereMatch?.[0], orderMatch?.[0], commaLimit?.[0], standardLimit?.[0], offsetMatch?.[0]]) {
+    if (clause) remainder = remainder.replace(clause, ' ');
+  }
+  if (remainder.trim()) throw new Error(`纷享销客查询暂不支持此 SQL 子句：${remainder.trim()}`);
+
+  const fieldProjection = selectText === '*'
+    ? undefined
+    : splitSqlTopLevel(selectText, ',').map((field) => {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) throw new Error(`纷享销客查询只支持直接选择字段，暂不支持：${field}`);
+        return field;
+      });
+
+  const filters: FxiaokeSqlQueryPlan['filters'] = [];
+  if (whereMatch) {
+    const where = whereMatch[0].replace(/^\s*WHERE\s+/i, '').trim();
+    if (splitSqlTopLevel(where, 'OR').length > 1) throw new Error('纷享销客 OpenAPI 查询不支持 SQL OR 条件，请改写为多个查询或平台筛选条件');
+    for (const clause of splitSqlTopLevel(where, 'AND')) {
+      const condition = clause.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(NOT\s+LIKE|LIKE|>=|<=|<>|!=|=|>|<|IN)\s*([\s\S]+)$/i);
+      if (!condition) throw new Error(`纷享销客查询无法安全转换此 WHERE 条件：${clause}`);
+      const [, field_name, rawOperator, rawValue] = condition;
+      const operator = rawOperator.toUpperCase().replace(/\s+/g, ' ');
+      let field_values: string[];
+      let apiOperator: string;
+      if (operator === 'IN') {
+        if (!/^\([\s\S]*\)$/.test(rawValue.trim())) throw new Error(`纷享销客 IN 条件格式无效：${clause}`);
+        field_values = splitSqlTopLevel(rawValue.trim().slice(1, -1), ',').map(parseFxiaokeSqlLiteral);
+        apiOperator = 'IN';
+      } else {
+        let value = parseFxiaokeSqlLiteral(rawValue);
+        if (value.toLowerCase() === 'null') throw new Error('纷享销客 NULL 条件需使用平台筛选操作符，不能按普通 SQL 值处理');
+        if (operator.endsWith('LIKE')) value = value.replace(/^%|%$/g, '');
+        field_values = [value];
+        apiOperator = ({ '=': 'EQ', '!=': 'N', '<>': 'N', '>': 'GT', '>=': 'GTE', '<': 'LT', '<=': 'LTE', 'LIKE': 'LIKE', 'NOT LIKE': 'NLIKE' } as Record<string, string>)[operator];
+      }
+      filters.push({ field_name, field_values, operator: apiOperator });
+    }
+  }
+
+  const orders = orderMatch
+    ? splitSqlTopLevel(orderMatch[0].replace(/^\s*ORDER\s+BY\s+/i, ''), ',').map((item) => {
+        const order = item.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s+(ASC|DESC))?$/i);
+        if (!order) throw new Error(`纷享销客查询暂不支持此排序表达式：${item}`);
+        return { fieldName: order[1], isAsc: String(order[2] || 'ASC').toUpperCase() !== 'DESC' };
+      })
+    : [];
+
+  return {
+    objectApiName,
+    fieldProjection,
+    filters,
+    orders,
+    offset: commaLimit ? Number(commaLimit[1]) : Number(offsetMatch?.[1] || 0),
+    limit: commaLimit ? Number(commaLimit[2]) : standardLimit ? Number(standardLimit[1]) : undefined,
+  };
+}
 
 export class FxiaokeService {
   private activeUserCache = new Map<string, string>();
@@ -191,10 +310,97 @@ export class FxiaokeService {
   /**
    * 3. 纷享销客数据查询 (POST /cgi/crm/v2/data/query)
    */
+  public async queryAllData(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    rawSql: string,
+    maxRecords = Number.MAX_SAFE_INTEGER
+  ): Promise<QueryResultData> {
+    const plan = parseFxiaokeSql(rawSql);
+    const effectiveLimit = Math.max(0, Math.floor(Math.min(plan.limit ?? maxRecords, maxRecords)));
+    const pageSize = 100;
+    const requestedFields = plan.fieldProjection;
+    const pageProjection = requestedFields
+      ? Array.from(new Set([...requestedFields, '_id', ...plan.orders.map((order) => order.fieldName)]))
+      : undefined;
+    const records: Record<string, any>[] = [];
+    const seenPages = new Set<string>();
+    let cursorId = '';
+    let remainingOffset = plan.offset;
+    let reportedTotal = 0;
+    let fields: string[] = ['_id', 'name'];
+    const sortAfterRead = plan.orders.length > 0;
+
+    while (true) {
+      const filters = cursorId
+        ? [...plan.filters, { field_name: '_id', field_values: [cursorId], operator: 'GT' }]
+        : plan.filters;
+      const page = await this.queryData(env, tokenData, {
+        objectApiName: plan.objectApiName,
+        limit: pageSize,
+        offset: 0,
+        searchFilter: filters,
+        fieldProjection: pageProjection,
+        orders: [{ fieldName: '_id', isAsc: true }],
+      });
+      const pageRecords = page.records || [];
+      if (reportedTotal === 0) reportedTotal = page.totalSize || 0;
+      if (pageRecords.length === 0) break;
+
+      const marker = createHash('sha1').update(JSON.stringify(pageRecords)).digest('hex');
+      if (seenPages.has(marker)) throw new Error('纷享销客分页结果重复，已停止以避免重复读取');
+      seenPages.add(marker);
+
+      if (records.length === 0 && page.fields?.length) fields = page.fields;
+      const lastId = String(pageRecords[pageRecords.length - 1]?._id || '');
+      if (!lastId || lastId === cursorId) throw new Error('纷享销客深分页缺少新的 _id 游标，无法安全继续读取');
+      cursorId = lastId;
+
+      if (sortAfterRead) {
+        records.push(...pageRecords);
+      } else {
+        const skipped = Math.min(remainingOffset, pageRecords.length);
+        remainingOffset -= skipped;
+        const eligible = pageRecords.slice(skipped);
+        const remainingLimit = effectiveLimit === Number.MAX_SAFE_INTEGER ? eligible.length : Math.max(0, effectiveLimit - records.length);
+        records.push(...eligible.slice(0, remainingLimit));
+      }
+
+      if (!sortAfterRead && records.length >= effectiveLimit) break;
+    }
+
+    if (sortAfterRead) {
+      records.sort((left, right) => {
+        for (const order of plan.orders) {
+          const a = left[order.fieldName];
+          const b = right[order.fieldName];
+          if (a === b) continue;
+          if (a === null || a === undefined) return order.isAsc ? 1 : -1;
+          if (b === null || b === undefined) return order.isAsc ? -1 : 1;
+          const numericA = Number(a);
+          const numericB = Number(b);
+          const comparison = Number.isFinite(numericA) && Number.isFinite(numericB)
+            ? numericA - numericB
+            : String(a).localeCompare(String(b), 'zh-CN', { numeric: true, sensitivity: 'base' });
+          if (comparison !== 0) return order.isAsc ? comparison : -comparison;
+        }
+        return String(left._id || '').localeCompare(String(right._id || ''), 'en');
+      });
+      records.splice(0, plan.offset);
+      if (effectiveLimit !== Number.MAX_SAFE_INTEGER) records.splice(effectiveLimit);
+    }
+
+    const outputRecords = requestedFields
+      ? records.map((record) => Object.fromEntries(requestedFields.filter((field) => field in record).map((field) => [field, record[field]])))
+      : records;
+    fields = requestedFields || (outputRecords.length > 0 ? Object.keys(outputRecords[0]) : fields.filter((field) => field !== '_id' || !requestedFields));
+    return { records: outputRecords, totalSize: reportedTotal || outputRecords.length + plan.offset, fields };
+  }
+
   public async queryData(
     env: NeoEnvironment,
     tokenData: TokenData,
-    params: { objectApiName?: string; limit?: number; offset?: number; searchFilter?: any; sql?: string }
+    params: { objectApiName?: string; limit?: number; offset?: number; searchFilter?: any; fieldProjection?: string[]; orders?: Array<{ fieldName: string; isAsc: boolean }>; sql?: string }
   ): Promise<QueryResultData> {
     const baseUrl = this.getBaseUrl(env, tokenData);
     const token = tokenData.access_token;
@@ -202,7 +408,7 @@ export class FxiaokeService {
     const currentOpenUserId = await this.getActiveOpenUserId(env, tokenData);
 
     let targetObjName = params.objectApiName || 'AccountObj';
-    let limit = Math.min(params.limit || 30, 50); // 纷享单页最大50
+    let limit = Math.min(params.limit || 30, 100); // 纷享单页最大100
     let offset = params.offset || 0;
 
     // 如果传入的是 SQL 语句，解析其中的表名和 limit
@@ -213,7 +419,7 @@ export class FxiaokeService {
       }
       const limitMatch = params.sql.match(/\bLIMIT\s+(\d+)\b/i);
       if (limitMatch) {
-        limit = Math.min(parseInt(limitMatch[1], 10), 50);
+        limit = Math.min(parseInt(limitMatch[1], 10), 100);
       }
       const offsetMatch = params.sql.match(/\bOFFSET\s+(\d+)\b/i);
       if (offsetMatch) {
@@ -231,6 +437,9 @@ export class FxiaokeService {
         search_query_info: {
           limit,
           offset,
+          filters: Array.isArray(params.searchFilter) ? params.searchFilter : [],
+          orders: params.orders || [],
+          fieldProjection: params.fieldProjection,
         },
       },
     };

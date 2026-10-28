@@ -1237,12 +1237,20 @@ declare const tools: {
   todo_write(args: { todos: Array<{ id: string; content: string; status: 'pending'|'in_progress'|'completed' }> }): Promise<any>;
   workspace_changes(): Promise<any>;
   load_workspace_dependencies(): Promise<any>;
+  workspace_list_pages(): Promise<{ pages: any[]; dataSources: { crmAccounts: any[]; mailAccounts: any[] } }>;
+  workspace_list_component_files(): Promise<{ files: Array<{ relativePath: string; [key: string]: any }> }>;
+  workspace_write_component_file(args: { packageId: string; relativePath: string; content: string }): Promise<{ relativePath: string; [key: string]: any }>;
+  workspace_save_page(args: { page: any }): Promise<{ page: any; pages: any[] }>;
+  workspace_list_entities(args: { accountId: string }): Promise<{ entities: Array<{ apiKey: string; label: string }> }>;
+  workspace_get_entity_fields(args: { accountId: string; entityApiKey: string }): Promise<{ fields: Array<{ apiKey: string; label: string; typeName?: string }> }>;
 };
 \`\`\`
 
 【PTC 编写铁律】：
 1. 遇到需要遍历文件、扫描匹配、批量生成、链式处理的任务，直接编写一段包含 \`await tools.<method>(...)\`、循环、条件分支的 JavaScript 代码，传给 \`run_code\` 一次性运行完成！
-2. 可以在代码中使用 \`console.log(...)\` 打印排查日志，并通过 \`return { ... }\` 返回最终处理结果数据。`);
+2. 创建或调整工作台组件时，必须在代码中调用 \`workspace_list_pages\` 和 \`workspace_list_component_files\`；涉及 CRM 对象时通过页面数据源中的 accountId 调用 \`workspace_list_entities\`、\`workspace_get_entity_fields\` 核实真实对象和字段。写组件后必须用 \`workspace_write_component_file\` 保存，再把其返回的 relativePath 传给 \`workspace_save_page\`。
+3. 只有 \`workspace_save_page\` 返回成功，才算组件已创建到工作台；仅 run_code 成功、查询成功或写入组件文件都不能报告为创建完成。统计结论必须基于真实查询返回值，不能根据日志行数或猜测字段编造。
+4. 可以在代码中使用 \`console.log(...)\` 打印排查日志，并通过 \`return { ... }\` 返回最终处理结果数据。`);
       } else if (isPlanMode) {
         systemParts.push(`【DeepSeek Harness 方案规划模式协议 (DSH Plan Mode Active)】
 当前会话处于「方案规划模式 (Plan Mode)」。
@@ -1412,11 +1420,11 @@ declare const tools: {
 systemParts.push(`【自定义工作台页面创建规则】
 当用户要求“创建工作台组件/看板/业务页面”时，目标是应用内的自定义工作台，不是仅生成项目源代码。
 1. 必须先调用 workspace_list_pages 获取当前页面及真实 CRM/邮箱账号；涉及 Salesforce 对象/字段时，先用对应账号调用 workspace_list_entities / workspace_get_entity_fields 核实，系统对象 AsyncApexJob 可直接按 Salesforce SOQL 查询。
-2. 组件 type 支持 text、crm-query、mail-list、async-apex-dashboard、custom-html、custom-tsx。custom-html/custom-tsx 必须使用当前项目内的相对路径 relativePath；HTML 可直接挂载，TSX 必须是提供 default React 组件的 .tsx 文件，保存后还要由工作台实际构建预览。
-3. 生成页面配置后必须调用 workspace_save_page 保存，组件 type 必须使用受支持值。针对 AsyncApexJob BI 请求，使用 async-apex-dashboard，并绑定 workspace_list_pages 返回的 Salesforce accountId。创建自定义 HTML/TSX 组件时，必须同时写入真实项目文件（如用户要求生成）并保存页面配置；写文件不等于挂载。
+2. 组件 type 支持 text、crm-query、mail-list、async-apex-dashboard、custom-html、custom-tsx。布局可设置 columnSpan=1/2/3/4、height=320/480/640/800；widgets 数组顺序决定组件位置。未指定时普通组件默认半宽 480px，Async Apex 看板默认整行 640px。自定义组件统一存放在 NeoCRM 应用托管组件库，不绑定当前项目目录。创建前调用 workspace_list_component_files 检索现有组件；新增或修改时通过 workspace_write_component_file 写入组件包中的入口和配套文件，再将返回的 relativePath 写入页面配置。HTML 可直接挂载；TSX/JSX 可默认导出 React 组件；TS/JS 可默认导出 React 组件，或导出 mount(root, context) 以渲染原生 DOM。relativePath 必须来自组件库工具结果，不能臆造。工作台可将页面和全部组件包导出为 ZIP 分享。
+3. 自定义组件需要 CRM 数据时，必须绑定 workspace_list_pages 返回的真实 accountId；初始查询与运行时 window.neoCRM.query(sql) 均只允许单条只读 SELECT。未显式写 LIMIT 时，销售易、Salesforce、纷享销客连接器会自动分页读取当前账号可访问的全部结果，不得擅自补 LIMIT 或在应用层截断；只有用户明确要求时才保留 SQL 中的 LIMIT。严禁把 Token 注入组件。生成页面配置后必须调用 workspace_save_page 保存，组件 type 必须使用受支持值；针对 AsyncApexJob BI 请求，使用 async-apex-dashboard，并绑定 workspace_list_pages 返回的 Salesforce accountId。
 4. 除非用户明确要求定时订阅或飞书推送，所有新组件的 subscription.enabled 和 subscription.feishuEnabled 必须默认 false；不得替用户开启自动任务或外部群消息。
 5. subscription.intervalMinutes 只接受 15、30、60、240、1440、10080 这些频率；文本组件不支持订阅。飞书推送需用户明确要求且飞书机器人已配置。
-6. 只有 workspace_save_page 工具成功返回后，才能告诉用户页面/组件已出现在工作台；写了 .tsx 文件、执行了 SQL、或在回复中描述方案，都不代表已创建到工作台。
+6. 只有 workspace_save_page 工具成功返回后，才能告诉用户页面/组件已出现在工作台；写了组件库文件、执行了 SQL、或在回复中描述方案，都不代表已创建到工作台。
 7. 若查询工具没有真实返回数据，不得声称已执行或编造行数、KPI、统计结论；应在页面保存后让组件通过绑定连接器真实加载数据，并明确报告加载状态。`);
 
       // 注入已挂载的 Skill 技能指令 (仅允许用户个人专属技能动态挂载；系统内置技能受内核安全保护，禁止在普通对话中随意挂载)
@@ -2279,7 +2287,7 @@ ${safeToolDataContext}
           const formattedReceipts = executedToolsLog
             .map((t, idx) => `**${idx + 1}. \`${t.name}\`**: ${t.summary || '已执行完成'}`)
             .join("\n");
-          const fallbackText = `已成功调取并执行以下 ${executedToolsLog.length} 项操作：\n\n${formattedReceipts}\n\n详细数据与元数据已就绪，请告知需要深入查看或执行哪一部分。`;
+          const fallbackText = `本轮工具调用收据（${executedToolsLog.length} 项）：\n\n${formattedReceipts}\n\n当前未能生成最终分析结论。工具调用成功只代表单次工具运行结束，不代表用户要求的业务目标或产物已经完成；例如工作台组件必须以 workspace_save_page 成功为准。`;
           sendEvent({
             requestId,
             sessionId,
@@ -2726,6 +2734,16 @@ ${safeToolDataContext}
       const dataSources = this.workspaceService.getDataSources();
       return { data: { pages, dataSources }, summary: `读取工作台配置成功：${pages.length} 个页面、${dataSources.crmAccounts.length} 个 CRM 账号、${dataSources.mailAccounts.length} 个邮箱账号` };
     }
+    if (name === 'workspace_list_component_files') {
+      if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
+      const result = this.workspaceService.listComponentFiles();
+      return { data: result, summary: `读取应用组件库成功：${result.files.length} 个入口文件` };
+    }
+    if (name === 'workspace_write_component_file') {
+      if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
+      const result = this.workspaceService.writeComponentFile(String(args.packageId || ''), String(args.relativePath || ''), String(args.content || ''));
+      return { data: result, summary: `组件文件已保存到应用组件库：${result.relativePath}` };
+    }
     if (name === 'workspace_save_page') {
       if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
       const page = args.page as WorkspacePage;
@@ -2750,7 +2768,7 @@ ${safeToolDataContext}
     // 1. 判断是否为销售易本地 Harness 工具
     const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
     if (isCrmTool) {
-      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles, signal);
+      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles, signal, projectId);
     }
 
     // 2. 匹配外部 MCP 服务
@@ -2910,6 +2928,45 @@ ${safeToolDataContext}
   /**
    * 上下文 Token 安全守护：防御性截断工具调用返回的大文本/日志，彻底避免 1M Token 上下文溢出报错
    */
+  private compactQueryRowsForContext(toolResult: any, maxChars: number): any {
+    if (!toolResult || typeof toolResult !== 'object') return toolResult;
+    const container = Array.isArray(toolResult.records)
+      ? toolResult
+      : Array.isArray(toolResult.data?.records)
+        ? toolResult.data
+        : undefined;
+    if (!container) return toolResult;
+
+    const records = container.records as any[];
+    if (JSON.stringify(toolResult).length <= maxChars) return toolResult;
+
+    const compacted = { ...toolResult };
+    const compactedContainer = Array.isArray(compacted.records) ? compacted : compacted.data;
+    compactedContainer.records = [];
+    compactedContainer._recordsOmitted = records.length;
+    compactedContainer._truncated = true;
+    let usedChars = JSON.stringify(compacted).length;
+    const included: any[] = [];
+    let omitted = records.length;
+
+    for (const record of records) {
+      const recordJson = JSON.stringify(record);
+      if (typeof recordJson !== 'string') continue;
+      const nextOmitted = records.length - included.length - 1;
+      const digitDelta = String(nextOmitted).length - String(omitted).length;
+      const addedChars = recordJson.length + (included.length > 0 ? 1 : 0) + digitDelta;
+      if (usedChars + addedChars > maxChars) break;
+      included.push(record);
+      usedChars += addedChars;
+      omitted = nextOmitted;
+    }
+
+    compactedContainer.records = included;
+    compactedContainer._recordsOmitted = omitted;
+    compactedContainer._truncated = omitted > 0;
+    return compacted;
+  }
+
   private formatSafeToolResultString(toolResult: any, maxChars = 12000): string {
     if (!toolResult) return "{}";
     try {
@@ -2930,18 +2987,12 @@ ${safeToolDataContext}
         if (typeof copy.stderr === "string" && copy.stderr.length > 2500) {
           copy.stderr = copy.stderr.slice(-2500);
         }
-        for (const k of Object.keys(copy)) {
-          if (Array.isArray(copy[k]) && copy[k].length > 20) {
-            const origLen = copy[k].length;
-            copy[k] = copy[k].slice(0, 20);
-            copy[`_${k}_truncated`] = `共 ${origLen} 项，已安全精简展示前 20 项`;
-          }
-        }
-        const reStr = JSON.stringify(copy);
+        const compacted = this.compactQueryRowsForContext(copy, maxChars);
+        const reStr = JSON.stringify(compacted);
         if (reStr.length <= maxChars) return reStr;
         return JSON.stringify({
           _truncated: true,
-          summary: copy.summary || "数据量过大已自动精简",
+          summary: compacted.summary || "数据量过大已自动精简",
           totalLength: reStr.length,
           preview: reStr.slice(0, maxChars - 200),
         });
@@ -2963,7 +3014,7 @@ ${safeToolDataContext}
       if (typeof copy.stderr === 'string' && copy.stderr.length > 5000) {
         copy.stderr = copy.stderr.slice(-5000);
       }
-      return copy;
+      return this.compactQueryRowsForContext(copy, maxChars);
     } catch {
       return toolResult;
     }
@@ -2976,7 +3027,8 @@ ${safeToolDataContext}
     tokenData?: TokenData,
     projectPath?: string,
     sessionAllowedFiles?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    projectId?: string
   ): Promise<{ data: any; summary: string }> {
     // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
     if (name === "run_code") {
@@ -3002,11 +3054,35 @@ ${safeToolDataContext}
         job_kill: async (params: any) => this.dshToolService.killJob(params),
         workspace_changes: async (params?: any) => this.dshToolService.getWorkspaceChanges(params?.path, projectPath),
         load_workspace_dependencies: async () => this.dshToolService.loadWorkspaceDependencies(),
+        workspace_list_pages: async () => {
+          const result = await this.executeUnifiedTool('workspace_list_pages', {}, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
+        workspace_list_component_files: async () => {
+          const result = await this.executeUnifiedTool('workspace_list_component_files', {}, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
+        workspace_write_component_file: async (params: any) => {
+          const result = await this.executeUnifiedTool('workspace_write_component_file', params, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
+        workspace_save_page: async (params: any) => {
+          const result = await this.executeUnifiedTool('workspace_save_page', params, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
+        workspace_list_entities: async (params: any) => {
+          const result = await this.executeUnifiedTool('workspace_list_entities', params, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
+        workspace_get_entity_fields: async (params: any) => {
+          const result = await this.executeUnifiedTool('workspace_get_entity_fields', params, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
         get_tenant_info: async () => ({
-          isLoggedIn: currentSession.isLoggedIn,
-          tenantName: currentSession.tokenData?.userInfo?.tenantName || currentSession.environment?.name,
-          productType: currentSession.environment?.productType,
-          instanceUri: currentSession.tokenData?.instance_uri || currentSession.environment?.neoBaseURL,
+          isLoggedIn: Boolean(tokenData),
+          tenantName: tokenData?.userInfo?.tenantName || env?.name,
+          productType: env?.productType,
+          instanceUri: tokenData?.instance_uri || env?.neoBaseURL,
         }),
       };
 
@@ -3020,8 +3096,9 @@ ${safeToolDataContext}
           return { entityApiKey: params?.entityApiKey, totalFields: res.length, fields: res };
         };
         toolsContext.execute_sql_query = async (params: any) => {
-          const res = await this.dataService.executeQuery(env, tokenData, params?.sql || params?.query || '');
-          return res.data || res;
+          const res = await this.dataService.executeQueryAll(env, tokenData, params?.sql || params?.query || '');
+          if (!res.success || !res.data) throw new Error(res.error || 'CRM 全量查询失败');
+          return res.data;
         };
         toolsContext.create_record = async (params: any) => {
           const res = await this.dataService.createRecord(env, tokenData, params?.entityApiKey || '', params?.data || {});
@@ -3353,16 +3430,16 @@ ${safeToolDataContext}
 
       if (env.productType === 'fxiaoke') {
         const sql = rawInput.replace(/^```(?:sql)?\s*/i, '').replace(/\s*```$/i, '').trim();
-        const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
+        const queryRes = await this.dataService.executeQueryAll(env, tokenData, sql);
         if (!queryRes.success || !queryRes.data) {
           const rawErr = queryRes.error || "SQL 执行返回失败";
-          throw new Error(`纷享销客数据查询失败: ${rawErr} (提示: 纷享销客对象以 Obj 结尾，如 AccountObj、ContactObj、ContractObj，单页上限 50 条，LIMIT 50 OFFSET n；若不确定字段请先调用 get_entity_fields 确认真实字段)`);
+          throw new Error(`纷享销客数据查询失败: ${rawErr} (提示: 对象通常以 Obj 结尾，如 AccountObj、ContactObj、ContractObj；未指定 LIMIT 时会自动分页读取全部匹配记录。若不确定字段请先调用 get_entity_fields 确认真实字段)`);
         }
         const records = queryRes.data.records || [];
         const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);
         return {
           data: {
-            records: records.slice(0, 50),
+            records,
             totalSize: queryRes.data.totalSize ?? records.length,
             fields,
           },
@@ -3372,7 +3449,7 @@ ${safeToolDataContext}
 
       if (env.productType === 'salesforce') {
         const sql = rawInput.replace(/^```(?:sql|soql)?\s*/i, '').replace(/\s*```$/i, '').trim();
-        const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
+        const queryRes = await this.dataService.executeQueryAll(env, tokenData, sql);
         if (!queryRes.success || !queryRes.data) {
           const rawErr = queryRes.error || "SOQL 执行返回失败";
           throw new Error(`Salesforce SOQL 执行失败: ${rawErr} (提示: 标准对象如 Account, Contact, Opportunity，自定义对象以 __c 结尾；若不确定字段请先调用 get_entity_fields 确认真实字段)`);
@@ -3381,7 +3458,7 @@ ${safeToolDataContext}
         const fields = queryRes.data.fields || (records.length > 0 ? Object.keys(records[0]) : []);
         return {
           data: {
-            records: records.slice(0, 50),
+            records,
             totalSize: queryRes.data.totalSize ?? records.length,
             fields,
           },
@@ -3394,11 +3471,7 @@ ${safeToolDataContext}
         throw new Error(rejectReason);
       }
       let sql = sanitized;
-      const isPureCount = /^SELECT\s+(?:COUNT|SUM|AVG|MAX|MIN)\s*\([^)]+\)\s*(?:AS\s+\w+\s*)?FROM\b/i.test(sql) && !/\bGROUP\s+BY\b/i.test(sql);
-      if (!/\bLIMIT\s+\d+/i.test(sql) && !isPureCount) {
-        sql = `${sql.replace(/;+$/, "").trim()} LIMIT 30`;
-      }
-      const queryRes = await this.dataService.executeQuery(env, tokenData, sql);
+      const queryRes = await this.dataService.executeQueryAll(env, tokenData, sql);
       if (!queryRes.success || !queryRes.data) {
         const rawErr = queryRes.error || "SQL 执行返回失败";
         throw new Error(`${rawErr} (提示: 销售易标准对象主名称字段分别为 account->accountName、contact->contactName、opportunity->opportunityName、order->po、contract->title、product->productName、department->departName、自定义对象(*__c)->name；若不确定字段请先调用 get_entity_fields 确认真实字段 API Key)`);
@@ -3408,7 +3481,7 @@ ${safeToolDataContext}
       const totalSize = queryRes.data.totalSize ?? records.length;
       return {
         data: {
-          records: records.slice(0, 30),
+          records,
           totalSize,
           fields,
         },

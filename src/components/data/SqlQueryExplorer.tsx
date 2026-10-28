@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Terminal, 
-  Play, 
   RefreshCw, 
   Copy, 
   Check, 
@@ -10,7 +9,6 @@ import {
   Eye, 
   Edit3, 
   Sparkles,
-  Zap,
   RotateCw,
   Info
 } from 'lucide-react';
@@ -59,11 +57,8 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
 
   const [selectedEntityApiKey, setSelectedEntityApiKey] = useState(defaultEntityApiKey || "account");
   const [sqlQuery, setSqlQuery] = useState(
-    `SELECT id, ${getEntityPrimaryNameCol(defaultEntityApiKey || "account")}, createdAt FROM ${defaultEntityApiKey || "account"} WHERE id > 0 LIMIT 20`
+    `SELECT id, ${getEntityPrimaryNameCol(defaultEntityApiKey || "account")}, createdAt FROM ${defaultEntityApiKey || "account"}`
   );
-  
-  // 查询模式: 'normal' (普通模式) | 'scroll' (滚动全量模式)
-  const [queryMode, setQueryMode] = useState<'normal' | 'scroll'>('normal');
   const [scrollBatchCount, setScrollBatchCount] = useState<number>(1000);
 
   const [isQuerying, setIsQuerying] = useState(false);
@@ -83,37 +78,24 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
     };
   }, []);
 
-  const getRecommendedSql = (apiKey: string, type: "default" | "latest" | "all" = "default") => {
+  const getRecommendedSql = (apiKey: string) => {
     const nameCol = getEntityPrimaryNameCol(apiKey);
-    // 1. 纷享销客 SQL 推荐范式
-    if (apiKey.endsWith('Obj')) {
-      if (type === "all") return `SELECT _id, ${nameCol} FROM ${apiKey}`;
-      return `SELECT _id, ${nameCol} FROM ${apiKey} LIMIT 50 OFFSET 0`;
-    }
-    // 2. Salesforce SOQL 推荐范式
+    if (apiKey.endsWith('Obj')) return `SELECT _id, ${nameCol} FROM ${apiKey}`;
     if (/^[A-Z]/.test(apiKey) || apiKey.includes('__c')) {
-      if (type === "all") return `SELECT Id, ${nameCol} FROM ${apiKey}`;
-      return `SELECT Id, ${nameCol}, CreatedDate FROM ${apiKey} ORDER BY CreatedDate DESC LIMIT 50`;
+      return `SELECT Id, ${nameCol}, CreatedDate FROM ${apiKey} ORDER BY CreatedDate DESC`;
     }
-    // 3. 销售易 XOQL 推荐范式
-    if (type === "latest") {
-      return `SELECT id, ${nameCol}, createdAt FROM ${apiKey} ORDER BY createdAt DESC LIMIT 50`;
-    }
-    if (type === "all") {
-      return `SELECT id, ${nameCol}, createdAt FROM ${apiKey}`;
-    }
-    return `SELECT id, ${nameCol}, createdAt FROM ${apiKey} WHERE id > 0 LIMIT 20`;
+    return `SELECT id, ${nameCol}, createdAt FROM ${apiKey}`;
   };
 
   useEffect(() => {
     if (defaultEntityApiKey && defaultEntityApiKey !== selectedEntityApiKey) {
       setSelectedEntityApiKey(defaultEntityApiKey);
-      const newSql = getRecommendedSql(defaultEntityApiKey, queryMode === 'scroll' ? 'all' : 'default');
+      const newSql = getRecommendedSql(defaultEntityApiKey);
       setSqlQuery(newSql);
     }
   }, [defaultEntityApiKey]);
 
-  // 执行查询 (根据模式自动路由)
+  // Queries use automatic connector pagination; an explicit SQL LIMIT is still honored.
   const handleExecuteQuery = async (customSql?: string) => {
     const targetSql = (customSql || sqlQuery).trim();
     if (!targetSql) {
@@ -127,27 +109,14 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
     const startTime = Date.now();
 
     try {
-      if (queryMode === 'scroll') {
-        // 滚动查询模式 (突破100条限制，拉取全部)
-        const res = await window.neoApi.executeScrollQuery(targetSql, scrollBatchCount, 50000);
-        setQueryDuration(Date.now() - startTime);
-        if (res.success && res.data) {
-          setQueryResult(res.data);
-          showToast('success', `滚动查询完成！已成功获取全部 ${res.data.records.length} 条数据`);
-        } else {
-          setErrorMsg(res.error || '滚动查询执行失败');
-          setQueryResult(null);
-        }
+      const res = await window.neoApi.executeScrollQuery(targetSql, scrollBatchCount);
+      setQueryDuration(Date.now() - startTime);
+      if (res.success && res.data) {
+        setQueryResult(res.data);
+        showToast('success', `查询完成，已获取 ${res.data.records.length} 条记录`);
       } else {
-        // 普通单次查询模式
-        const res = await window.neoApi.executeQuery(targetSql);
-        setQueryDuration(Date.now() - startTime);
-        if (res.success && res.data) {
-          setQueryResult(res.data);
-        } else {
-          setErrorMsg(res.error || 'SQL 执行失败');
-          setQueryResult(null);
-        }
+        setErrorMsg(res.error || '查询执行失败');
+        setQueryResult(null);
       }
     } catch (e: any) {
       setErrorMsg(`执行异常: ${e.message}`);
@@ -161,7 +130,7 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
   // 切换实体
   const handleEntityChange = (apiKey: string) => {
     setSelectedEntityApiKey(apiKey);
-    const newSql = getRecommendedSql(apiKey, queryMode === 'scroll' ? 'all' : 'default');
+    const newSql = getRecommendedSql(apiKey);
     setSqlQuery(newSql);
     handleExecuteQuery(newSql);
   };
@@ -217,58 +186,20 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
             />
           </div>
 
-          {/* 模式选择与功能按键 */}
+          {/* 查询批次与结果导出 */}
           <div className="flex items-center space-x-2.5 text-xs">
-            {/* 模式切换胶囊 */}
-            <div className="flex p-0.5 bg-slate-100 rounded-xl border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setQueryMode('normal')}
-                className={`flex items-center space-x-1 px-3 py-1 rounded-lg transition-all ${
-                  queryMode === 'normal'
-                    ? 'bg-white text-slate-900 font-semibold shadow-xs border border-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title="普通单次查询，通常返回前 20~100 条"
+            <label className="flex items-center gap-2 text-slate-600">
+              <span>每批</span>
+              <select
+                value={scrollBatchCount}
+                onChange={(e) => setScrollBatchCount(Number(e.target.value))}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-sky-700 font-mono font-medium focus:outline-none"
               >
-                <Zap className="w-3.5 h-3.5 text-amber-500" />
-                <span>普通单次查询</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setQueryMode('scroll');
-                  // 自动清洗移除 LIMIT 20，让用户直接查全量
-                  setSqlQuery((prev) => prev.replace(/\s+LIMIT\s+\d+/i, '').replace(/\s+WHERE\s+id\s*>\s*0\s*$/i, ''));
-                }}
-                className={`flex items-center space-x-1 px-3 py-1 rounded-lg transition-all ${
-                  queryMode === 'scroll'
-                    ? 'bg-sky-600 text-white font-semibold shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-                title="滚动查询模式：突破 100 条限制，自动向后翻页拉取所有数据"
-              >
-                <RotateCw className="w-3.5 h-3.5" />
-                <span>滚动全量模式 (突破100条限制)</span>
-              </button>
-            </div>
-
-            {/* 滚动模式下的批次设置 */}
-            {queryMode === 'scroll' && (
-              <div className="flex items-center space-x-1 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
-                <span className="text-slate-500">每批:</span>
-                <select
-                  value={scrollBatchCount}
-                  onChange={(e) => setScrollBatchCount(Number(e.target.value))}
-                  className="bg-transparent text-sky-700 font-mono font-medium focus:outline-none"
-                >
-                  <option value={200}>200 条/批</option>
-                  <option value={500}>500 条/批</option>
-                  <option value={1000}>1000 条/批 (最快)</option>
-                </select>
-              </div>
-            )}
+                <option value={200}>200</option>
+                <option value={500}>500</option>
+                <option value={1000}>1000</option>
+              </select>
+            </label>
 
             <button
               onClick={handleExportResult}
@@ -294,11 +225,7 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
                   handleExecuteQuery();
                 }
               }}
-              placeholder={
-                queryMode === 'scroll'
-                  ? '滚动全量模式：输入查询语句，如 SELECT id, accountName, createdAt FROM account (将自动翻页拉取全部数据)'
-                  : '普通模式：输入 SQL 语句，例如 SELECT id, createdAt FROM account WHERE id > 0 LIMIT 20'
-              }
+              placeholder="输入查询语句，如 SELECT id, accountName, createdAt FROM account；未写 LIMIT 时自动分页获取全部匹配数据"
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-sky-500 resize-none leading-relaxed shadow-inner"
             />
           </div>
@@ -306,33 +233,19 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
           <button
             onClick={() => handleExecuteQuery()}
             disabled={isQuerying}
-            className={`px-6 text-white text-xs font-medium rounded-xl shadow-md flex flex-col items-center justify-center space-y-1 transition-all disabled:opacity-50 ${
-              queryMode === 'scroll'
-                ? 'bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 shadow-sky-600/20'
-                : 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 shadow-sky-600/20'
-            }`}
+            className="flex flex-col items-center justify-center space-y-1 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 px-6 text-xs font-medium text-white shadow-md shadow-sky-600/20 transition-all hover:from-sky-500 hover:to-indigo-500 disabled:opacity-50"
           >
             {isQuerying ? (
               <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : queryMode === 'scroll' ? (
-              <RotateCw className="w-4 h-4" />
             ) : (
-              <Play className="w-4 h-4" />
+              <RotateCw className="w-4 h-4" />
             )}
-            <span>
-              {isQuerying
-                ? queryMode === 'scroll'
-                  ? '滚动拉取中...'
-                  : '执行中...'
-                : queryMode === 'scroll'
-                ? '滚动获取全部'
-                : '运行 SQL'}
-            </span>
+            <span>{isQuerying ? '分页拉取中...' : '执行查询'}</span>
           </button>
         </div>
 
         {/* 动态滚动进度指示条 (当处于滚动执行中时展现) */}
-        {isQuerying && queryMode === 'scroll' && scrollProgress && (
+        {isQuerying && scrollProgress && (
           <div className="p-3 bg-sky-50/80 rounded-xl border border-sky-200 space-y-1.5 animate-in fade-in duration-200">
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-sky-900 flex items-center space-x-1.5">
@@ -357,9 +270,7 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
           <div className="flex items-center space-x-2">
             <Info className="w-3.5 h-3.5 text-sky-600" />
             <span>
-              {queryMode === 'scroll'
-                ? '当前处于【滚动全量模式】：已解除 100 条限制，底层调用 /rest/data/v2/query/scroll 自动循环拉取直至获取所有数据'
-                : '当前处于【普通单次模式】：受销售易网关单次返回限制 (通常 100 条)；如需获取全部数据请切换为上方【滚动全量模式】'}
+              '未指定 LIMIT 时按连接器分页读取全部匹配数据；显式 LIMIT/OFFSET 仍然生效'
             </span>
           </div>
 
@@ -390,7 +301,7 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
           </div>
         ) : !queryResult || queryResult.records.length === 0 ? (
           <div className="p-20 text-center text-xs text-slate-400">
-            暂无查询结果。请在上方输入 SQL 并点击“{queryMode === 'scroll' ? '滚动获取全部' : '运行 SQL'}”。
+            暂无查询结果。输入 SQL 后点击“执行查询”。
           </div>
         ) : (
           <div>
@@ -404,7 +315,7 @@ export const SqlQueryExplorer: React.FC<SqlQueryExplorerProps> = ({
                   </span>
                 ) : (
                   <span className="ml-2 text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                    仅部分数据 (建议切换滚动全量模式)
+                    {/\bLIMIT\s+\d+/i.test(sqlQuery) ? '已按 SQL 范围返回' : '返回数与平台总数不一致'}
                   </span>
                 )}
               </span>

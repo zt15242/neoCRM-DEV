@@ -6,6 +6,9 @@ directories:
 files:
   - dist
   - dist-electron
+asarUnpack:
+  - node_modules/esbuild/**
+  - node_modules/@esbuild/**
 publish:
   provider: github
   owner: zt15242

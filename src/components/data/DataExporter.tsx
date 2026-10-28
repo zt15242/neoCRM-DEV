@@ -161,8 +161,7 @@ export const DataExporter: React.FC<DataExporterProps> = ({
       let res: any;
       if (limit > 100 || limit === 0) {
         const sql = `SELECT ${fieldsStr} FROM ${selectedEntityApiKey} ${whereClause}`;
-        const maxRecords = limit === 0 ? 50000 : limit;
-        res = await window.neoApi.executeScrollQuery(sql, 1000, maxRecords);
+        res = await window.neoApi.executeScrollQuery(sql, 1000, limit === 0 ? undefined : limit);
       } else {
         const isSfOrFx = /^[A-Z]/.test(selectedEntityApiKey) || selectedEntityApiKey.endsWith('Obj');
         const fallbackWhere = isSfOrFx ? '' : 'WHERE id > 0';

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import { NeoEnvironment, TokenData, QueryResultData } from '../../shared/types';
 import { FxiaokeService } from './fxiaokeService';
 import { SalesforceService } from './salesforceService';
@@ -459,6 +460,31 @@ export class DataService {
     });
   }
 
+  public async executeQueryAll(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    rawSql: string,
+    maxRecords = Number.MAX_SAFE_INTEGER
+  ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
+    try {
+      if (env.productType === 'salesforce') {
+        const data = await this.salesforceService.executeQueryAll(env, tokenData, rawSql, maxRecords);
+        return { success: true, data };
+      }
+      if (env.productType === 'fxiaoke') {
+        const data = await this.withAutoRetry(env, tokenData, (currentToken) => this.fxiaokeService.queryAllData(env, currentToken, rawSql, maxRecords));
+        return { success: true, data };
+      }
+      return await this.withAutoRetry(env, tokenData, async (currentToken) => {
+        const result = await this.executeScrollQuery(env, currentToken, rawSql, 1000, maxRecords);
+        if (!result.success || !result.data) throw new Error(result.error || '销售易分页查询失败');
+        return result;
+      });
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'CRM 分页查询失败' };
+    }
+  }
+
   private async doExecuteQuery(
     env: NeoEnvironment,
     tokenData: TokenData,
@@ -574,12 +600,12 @@ export class DataService {
     tokenData: TokenData,
     rawSql: string,
     batchCount = 1000,
-    maxLimit = 50000,
+    maxLimit = Number.MAX_SAFE_INTEGER,
     onProgress?: (progress: { current: number; total: number; percent: number; page: number }) => void
   ): Promise<{ success: boolean; data?: QueryResultData; error?: string }> {
     // Salesforce 和 纷享销客直接走原生单次/分页执行即可（绝不经过销售易 XOQL 语法重写）
     if (env.productType === 'salesforce' || env.productType === 'fxiaoke') {
-      return this.executeQuery(env, tokenData, rawSql);
+      return this.executeQueryAll(env, tokenData, rawSql, maxLimit);
     }
 
     const { sql: checkedSql, rejectReason } = this.sanitizeAndRewriteXoql(rawSql);
@@ -603,16 +629,22 @@ export class DataService {
       'xsy-inner-source': 'bff',
     };
 
+    const commaLimit = checkedSql.match(/\bLIMIT\s+(\d+)\s*,\s*(\d+)\s*$/i);
+    const standardLimit = checkedSql.match(/\bLIMIT\s+(\d+)(?:\s+OFFSET\s+(\d+))?\s*$/i);
+    const requestedLimit = commaLimit ? Number(commaLimit[2]) : standardLimit ? Number(standardLimit[1]) : undefined;
+    const initialOffset = commaLimit ? Number(commaLimit[1]) : Number(standardLimit?.[2] || 0);
+    const effectiveLimit = Math.min(maxLimit, requestedLimit ?? maxLimit);
     const baseSql = this.normalizeSqlForScroll(checkedSql);
     const pageSize = Math.min(2000, Math.max(50, batchCount || 1000));
     const allRecords: Record<string, any>[] = [];
-    let offset = 0;
+    const seenPages = new Set<string>();
+    let offset = initialOffset;
     let page = 1;
     let hasMore = true;
 
     try {
-      while (hasMore && allRecords.length < maxLimit) {
-        const remaining = maxLimit - allRecords.length;
+      while (hasMore && allRecords.length < effectiveLimit) {
+        const remaining = effectiveLimit - allRecords.length;
         const currentLimit = Math.min(pageSize, remaining);
         const pagedSql = `${baseSql} LIMIT ${offset}, ${currentLimit}`;
 
@@ -636,6 +668,12 @@ export class DataService {
         const result = res.data?.data || res.data?.result || {};
         const rawBatch: Record<string, any>[] = Array.isArray(result.records) ? result.records : [];
         const batch = this.normalizeRecords(rawBatch);
+
+        const pageMarker = batch.length ? createHash('sha1').update(JSON.stringify(batch)).digest('hex') : '';
+        if (batch.length && seenPages.has(pageMarker)) {
+          return { success: false, error: '销售易分页结果重复，已停止以避免重复读取' };
+        }
+        if (batch.length) seenPages.add(pageMarker);
 
         allRecords.push(...batch);
 
@@ -661,8 +699,6 @@ export class DataService {
           offset += batch.length;
           page++;
         }
-
-        if (page > 100) break;
       }
 
       let fields: string[] = [];

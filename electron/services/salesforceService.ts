@@ -77,9 +77,31 @@ import { NeoEnvironment, TokenData, EntityMetadata, FieldMetadata, QueryResultDa
 
 export class SalesforceService {
   private tokenRefreshCallback?: (env: NeoEnvironment, newToken: TokenData) => void;
+  private authRecoveryPromises = new Map<string, Promise<string | null>>();
 
   public setTokenRefreshCallback(cb: (env: NeoEnvironment, newToken: TokenData) => void) {
     this.tokenRefreshCallback = cb;
+  }
+
+  private normalizeAccessToken(accessToken: string): string {
+    return String(accessToken || '').trim().replace(/^(?:Bearer\s+)+/i, '').trim();
+  }
+
+  private getBearerAuthorization(accessToken: string): string {
+    const normalizedToken = this.normalizeAccessToken(accessToken);
+    if (!normalizedToken) throw new Error('Salesforce Access Token 为空');
+    return `Bearer ${normalizedToken}`;
+  }
+
+  private getRequestErrorMessage(error: any): string {
+    const data = error?.response?.data;
+    if (Array.isArray(data)) {
+      return data.map((item) => item?.message || item?.errorCode).filter(Boolean).join(' · ') || error?.message || 'Salesforce 请求失败';
+    }
+    if (data && typeof data === 'object') {
+      return [data.message, data.errorCode].filter(Boolean).join(' · ') || error?.message || 'Salesforce 请求失败';
+    }
+    return error?.message || 'Salesforce 请求失败';
   }
 
   /**
@@ -169,8 +191,8 @@ export class SalesforceService {
       // 1. 尝试直接从本地磁盘 ~/.sfdx/*.json 读取（0ms 极速无开销）
       const username = tokenData?.userInfo?.name;
       const diskAuth = this.getAuthFileFromDisk(username, tokenData?.instance_uri || env?.neoBaseURL);
-      if (diskAuth?.accessToken && diskAuth.accessToken !== tokenData?.access_token) {
-        if (diskAuth.refreshToken && tokenData) tokenData.refresh_token = diskAuth.refreshToken;
+      if (diskAuth?.refreshToken && tokenData) tokenData.refresh_token = diskAuth.refreshToken;
+      if (diskAuth?.accessToken && this.normalizeAccessToken(diskAuth.accessToken) !== this.normalizeAccessToken(tokenData?.access_token || '')) {
         return diskAuth.accessToken;
       }
 
@@ -216,6 +238,83 @@ export class SalesforceService {
     }
   }
 
+  private recoverAccessTokenAfterAuthFailure(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    baseUrl: string,
+  ): Promise<string | null> {
+    const userKey = tokenData.userInfo?.userId || tokenData.userInfo?.name || tokenData.tenant_id || 'unknown-user';
+    const recoveryKey = `${env.id || 'salesforce'}|${baseUrl.toLowerCase()}|${userKey}`;
+    const inFlight = this.authRecoveryPromises.get(recoveryKey);
+    if (inFlight) return inFlight;
+
+    let recovery: Promise<string | null>;
+    recovery = Promise.resolve().then(async () => {
+      try {
+        const rejectedToken = this.normalizeAccessToken(tokenData.access_token);
+        const cliToken = this.getLatestTokenFromCli(env, tokenData);
+        const normalizedCliToken = this.normalizeAccessToken(cliToken || '');
+        if (normalizedCliToken && normalizedCliToken !== rejectedToken) return normalizedCliToken;
+        if (normalizedCliToken) {
+          console.warn('[Salesforce] CLI 返回的 Access Token 与刚被拒绝的 token 相同，继续尝试 OAuth refresh_token。');
+        }
+
+        const diskAuth = this.getAuthFileFromDisk(tokenData.userInfo?.name, baseUrl);
+        if (diskAuth?.refreshToken) tokenData.refresh_token = diskAuth.refreshToken;
+        const refreshToken = diskAuth?.refreshToken || tokenData.refresh_token;
+        const clientId = env.clientId || diskAuth?.clientId || '3MVG9xXFQGV9F.Wr9Z_1xbGt7Vq63R.tqieb_acTQQGYdprE5n0ogE.JkOqT5E4SoIs1YuRhbZjaXPEYTE3ap';
+        const clientSecret = env.clientSecret || diskAuth?.clientSecret;
+
+        if (!refreshToken) {
+          console.warn('[Salesforce] 当前连接器没有可用的 refresh_token，无法静默续期。');
+          return null;
+        }
+
+        const tokenEndpoints = Array.from(new Set([
+          `${baseUrl}/services/oauth2/token`,
+          env.tokenURL || '',
+          'https://login.salesforce.com/services/oauth2/token',
+          'https://test.sfcrmproducts.cn/services/oauth2/token',
+          'https://login.sfcrmproducts.cn/services/oauth2/token',
+        ].filter(Boolean)));
+
+        for (let index = 0; index < tokenEndpoints.length; index += 1) {
+          const tokenUrl = tokenEndpoints[index];
+          try {
+            const params = new URLSearchParams();
+            params.append('grant_type', 'refresh_token');
+            params.append('client_id', clientId);
+            if (clientSecret) params.append('client_secret', clientSecret);
+            params.append('refresh_token', refreshToken);
+
+            const refreshRes = await axios.post(tokenUrl, params.toString(), {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 10000,
+            });
+            const refreshedToken = this.normalizeAccessToken(refreshRes.data?.access_token || '');
+            if (refreshedToken && refreshedToken !== rejectedToken) {
+              if (refreshRes.data?.refresh_token) tokenData.refresh_token = refreshRes.data.refresh_token;
+              console.log(`[Salesforce] OAuth refresh_token 续期成功（端点尝试 ${index + 1}）。`);
+              return refreshedToken;
+            }
+            console.warn(`[Salesforce] OAuth refresh 端点尝试 ${index + 1} 未返回新的 Access Token。`);
+          } catch (refreshError: any) {
+            const status = refreshError.response?.status;
+            const oauthError = refreshError.response?.data?.error;
+            console.warn(`[Salesforce] OAuth refresh 端点尝试 ${index + 1} 失败${status ? ` (HTTP ${status})` : ''}${oauthError ? ` · ${String(oauthError).slice(0, 100)}` : ''}。`);
+          }
+        }
+        return null;
+      } finally {
+        if (this.authRecoveryPromises.get(recoveryKey) === recovery) {
+          this.authRecoveryPromises.delete(recoveryKey);
+        }
+      }
+    });
+    this.authRecoveryPromises.set(recoveryKey, recovery);
+    return recovery;
+  }
+
   /**
    * 核心请求包装器：具备 401 自动无感重试与 Token 静默换新机制
    * 彻底避免因会话过期将 401 错误直接抛出给大模型或前端页面
@@ -229,9 +328,9 @@ export class SalesforceService {
     const fullUrl = config.url?.startsWith('http') ? config.url : `${baseUrl}${config.url}`;
 
     const headers = {
-      Authorization: `Bearer ${tokenData.access_token}`,
       'Content-Type': 'application/json',
       ...(config.headers || {}),
+      Authorization: this.getBearerAuthorization(tokenData.access_token),
     };
 
     try {
@@ -243,80 +342,46 @@ export class SalesforceService {
       });
       return res.data;
     } catch (err: any) {
-      const is401 = err.response?.status === 401 || err.response?.data?.[0]?.errorCode === 'INVALID_SESSION_ID';
+      const responseErrors = Array.isArray(err.response?.data) ? err.response.data : [err.response?.data];
+      const errorCodes = responseErrors.map((item: any) => String(item?.errorCode || '').toUpperCase()).filter(Boolean);
+      const isAuthFailure = err.response?.status === 401 || errorCodes.some((code: string) => ['INVALID_SESSION_ID', 'INVALID_AUTH_HEADER'].includes(code));
 
-      if (is401) {
-        console.warn('[Salesforce] 检测到 Access Token 失效 (401)，正在启动自动无感静默续期与重试...');
+      if (isAuthFailure) {
+        console.warn(`[Salesforce] 检测到认证错误 (${errorCodes.join(', ') || `HTTP ${err.response?.status || 'unknown'}`})，正在启动自动无感续期与重试...`);
 
-        // 1. 优先尝试从本地 sf CLI 或磁盘提取最新已被 CLI 自动刷新的 token
-        let newAccessToken = this.getLatestTokenFromCli(env, tokenData);
+        const newAccessToken = await this.recoverAccessTokenAfterAuthFailure(env, tokenData, baseUrl);
 
-        // 2. 若 CLI 提取不到，自动使用 refresh_token 多端点尝试 OAuth 续期
-        if (!newAccessToken) {
-          const diskAuth = this.getAuthFileFromDisk(tokenData.userInfo?.name, baseUrl);
-          const refreshToken = tokenData.refresh_token || diskAuth?.refreshToken;
-          const clientId = env.clientId || diskAuth?.clientId || '3MVG9xXFQGV9F.Wr9Z_1xbGt7Vq63R.tqieb_acTQQGYdprE5n0ogE.JkOqT5E4SoIs1YuRhbZjaXPEYTE3ap';
-          const clientSecret = env.clientSecret || diskAuth?.clientSecret;
+        // 3. 拿到有效新 Token 后，立即更新内存与本地持久化，并执行自动无感重试
+        if (newAccessToken) {
+          if (this.normalizeAccessToken(newAccessToken) !== this.normalizeAccessToken(tokenData.access_token)) {
+            tokenData.access_token = newAccessToken;
+            tokenData.savedAt = Date.now();
+            tokenData.expiresAt = Date.now() + (tokenData.expires_in || 7200) * 1000;
+            this.tokenRefreshCallback?.(env, tokenData);
+          }
 
-          if (refreshToken) {
-            const tokenEndpoints = [
-              `${baseUrl}/services/oauth2/token`,
-              env.tokenURL || '',
-              'https://login.salesforce.com/services/oauth2/token',
-              'https://test.sfcrmproducts.cn/services/oauth2/token',
-              'https://login.sfcrmproducts.cn/services/oauth2/token',
-            ].filter(Boolean);
-
-            for (const tUrl of tokenEndpoints) {
-              try {
-                const params = new URLSearchParams();
-                params.append('grant_type', 'refresh_token');
-                params.append('client_id', clientId);
-                if (clientSecret) params.append('client_secret', clientSecret);
-                params.append('refresh_token', refreshToken);
-
-                const refreshRes = await axios.post(tUrl, params.toString(), {
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  timeout: 10000,
-                });
-                if (refreshRes.data?.access_token) {
-                  newAccessToken = refreshRes.data.access_token;
-                  if (refreshRes.data.refresh_token) {
-                    tokenData.refresh_token = refreshRes.data.refresh_token;
-                  }
-                  console.log(`[Salesforce] 通过端点 [${tUrl}] 成功完成 OAuth 刷新！`);
-                  break;
-                }
-              } catch (rErr: any) {
-                console.warn(`[Salesforce] API 刷新失败 (${tUrl}):`, rErr.response?.data || rErr.message);
-              }
-            }
+          console.log('[Salesforce] Access Token 续期成功，正在自动重发刚刚失败的 API 请求...');
+          try {
+            const retryRes = await axios({
+              ...config,
+              url: fullUrl,
+              headers: {
+                ...headers,
+                Authorization: this.getBearerAuthorization(newAccessToken),
+              },
+              timeout: config.timeout || 20000,
+            });
+            return retryRes.data;
+          } catch (retryError: any) {
+            throw new Error(`Salesforce 续期后重试失败 · ${this.getRequestErrorMessage(retryError)}`);
           }
         }
 
-        // 3. 拿到有效新 Token 后，立即更新内存与本地持久化，并执行自动无感重试
-        if (newAccessToken && newAccessToken !== tokenData.access_token) {
-          tokenData.access_token = newAccessToken;
-          tokenData.savedAt = Date.now();
-          tokenData.expiresAt = Date.now() + (tokenData.expires_in || 7200) * 1000;
-          this.tokenRefreshCallback?.(env, tokenData);
-
-          console.log('[Salesforce] Access Token 续期成功，正在自动重发刚刚失败的 API 请求...');
-          const retryRes = await axios({
-            ...config,
-            url: fullUrl,
-            headers: {
-              ...headers,
-              Authorization: `Bearer ${newAccessToken}`,
-            },
-            timeout: config.timeout || 20000,
-          });
-          return retryRes.data;
-        }
+        throw new Error(`Salesforce 认证失败（${errorCodes.join(', ') || `HTTP ${err.response?.status || 'unknown'}`}），本地 CLI 与 OAuth 静默续期均未取得新 token。请在连接器详情页重新登录该 Salesforce 环境后重试。`);
       }
 
       // 非 401 或重试后依然失败时抛出友好错误
-      const apiMsg = err.response?.data?.[0]?.message || err.response?.data?.message || err.message;
+      const apiMsg = this.getRequestErrorMessage(err);
       throw new Error(apiMsg || `Salesforce 请求失败 (HTTP ${err.response?.status || '网络异常'})`);
     }
   }
@@ -419,6 +484,45 @@ export class SalesforceService {
       totalSize,
       fields,
     };
+  }
+
+  public async executeQueryAll(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    rawSoql: string,
+    maxRecords = Number.MAX_SAFE_INTEGER
+  ): Promise<QueryResultData> {
+    const cleanSoql = rawSoql.replace(/^```(?:soql|sql)?\s*/i, '').replace(/\s*```$/i, '').trim().replace(/;+$/, '');
+    const recordLimit = Math.max(0, Math.floor(maxRecords));
+    const firstPage = await this.requestWithAuth(env, tokenData, {
+      method: 'GET',
+      url: `/services/data/v59.0/query/?q=${encodeURIComponent(cleanSoql)}`,
+      timeout: 25000,
+    });
+    const records: Record<string, any>[] = [...(firstPage?.records || [])].slice(0, recordLimit);
+    const totalSize = Number(firstPage?.totalSize ?? records.length);
+    let fields = records.length > 0 ? Object.keys(records[0]).filter((key) => key !== 'attributes') : ['Id', 'Name'];
+    let page = firstPage;
+    const visitedUrls = new Set<string>();
+    const baseOrigin = new URL(this.getBaseUrl(env, tokenData)).origin;
+
+    while (page?.done === false && records.length < recordLimit) {
+      if (!page.nextRecordsUrl) throw new Error('Salesforce 查询尚未完成，但分页响应未提供 nextRecordsUrl');
+      const nextUrl = new URL(String(page.nextRecordsUrl), this.getBaseUrl(env, tokenData));
+      if (nextUrl.origin !== baseOrigin || !nextUrl.pathname.startsWith('/services/data/')) {
+        throw new Error('Salesforce 返回了无效的查询分页地址');
+      }
+      if (visitedUrls.has(nextUrl.href)) throw new Error('Salesforce 查询分页游标重复，已停止以避免重复读取');
+      visitedUrls.add(nextUrl.href);
+
+      const nextPage = await this.requestWithAuth(env, tokenData, { method: 'GET', url: nextUrl.href, timeout: 25000 });
+      const pageRecords = Array.isArray(nextPage?.records) ? nextPage.records : [];
+      if (records.length === 0 && pageRecords.length > 0) fields = Object.keys(pageRecords[0]).filter((key) => key !== 'attributes');
+      records.push(...pageRecords.slice(0, recordLimit - records.length));
+      page = nextPage;
+    }
+
+    return { records, totalSize, fields };
   }
 
   /**

@@ -496,7 +496,7 @@ ipcMain.handle('data:scrollQuery', async (_, sql: string, batchCount?: number, m
     current.tokenData,
     sql,
     batchCount || 1000,
-    maxLimit || 50000,
+    maxLimit || Number.MAX_SAFE_INTEGER,
     (progress) => {
       if (win && !win.isDestroyed()) {
         win.webContents.send('data:scrollProgress', progress);
@@ -873,6 +873,14 @@ ipcMain.handle('workspace:getDataSources', async () => workspaceService.getDataS
 ipcMain.handle('workspace:runPage', async (_, pageId: string, projectPath?: string) => workspaceService.runPage(pageId, projectPath));
 ipcMain.handle('workspace:previewWidget', async (_, pageId: string, widgetId: string, projectPath?: string) => workspaceService.previewWidget(pageId, widgetId, projectPath));
 ipcMain.handle('workspace:queryConnector', async (_, accountId: string, query: string) => workspaceService.queryConnector(accountId, query));
+ipcMain.handle('workspace:queryComponentConnector', async (_, pageId: string, widgetId: string, executionId: string, accountId: string, query: string) => workspaceService.queryComponentConnector(pageId, widgetId, executionId, accountId, query));
+ipcMain.handle('workspace:listComponentExecutionLogs', async (_, pageId: string, widgetId: string, limit?: number) => workspaceService.listComponentExecutionLogs(pageId, widgetId, limit));
+ipcMain.handle('workspace:appendComponentExecutionLog', async (_, pageId: string, widgetId: string, executionId: string, stage: string, status: string, message: string, durationMs?: number) => workspaceService.appendComponentExecutionLog(pageId, widgetId, stage as any, status as any, message, durationMs, executionId));
+ipcMain.handle('workspace:clearComponentExecutionLogs', async (_, pageId: string, widgetId: string) => workspaceService.clearComponentExecutionLogs(pageId, widgetId));
+ipcMain.handle('workspace:listComponentFiles', async () => workspaceService.listComponentFiles());
+ipcMain.handle('workspace:importComponentFile', async () => workspaceService.importComponentFile());
+ipcMain.handle('workspace:exportPagePackage', async (_, pageId: string) => workspaceService.exportPagePackage(pageId));
+ipcMain.handle('workspace:importPagePackage', async (_, projectId?: string) => workspaceService.importPagePackage(projectId));
 ipcMain.handle('feishu:getSettings', async () => feishuService.getSettings());
 ipcMain.handle('feishu:addBot', async (_, settings) => feishuService.addBot(settings));
 ipcMain.handle('feishu:removeBot', async (_, botId: string) => feishuService.removeBot(botId));

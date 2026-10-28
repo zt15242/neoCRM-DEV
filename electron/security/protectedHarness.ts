@@ -99,9 +99,8 @@ export const FXIAOKE_SKILL_INSTRUCTION = `【系统全局首要植入规范：�
      - 代码更新与保存：\`POST /FHH/EMDHFUNC/biz/updateBody\`（提交 commit_log）
      - 在线调试运行：\`POST /FHH/EMDHFUNC/runtime/debug\`（传入 data_source 业务记录 ID 注入 context.data，传入 input_data 入参键值对）
 5. 【数据查询与分页标准范式 (Query with Pagination)】：
-   - 纷享销客单页数据最大上限为 50 条，调用 execute_sql_query 工具进行数据查询；
-   - 查询语句遵循 SELECT _id, name FROM AccountObj LIMIT 50 OFFSET n 规范；
-   - 结果集直接存放在 .recordResult 数组中，总数在 .queryMeta.totalNumber。
+   - 纷享销客查询由连接器自动分页，未显式指定 LIMIT 时应读取全部符合条件的记录，不得擅自添加 LIMIT 或截断结果；
+   - 用户显式指定 LIMIT/OFFSET 时严格遵循其范围，字段不确定时先调用 get_entity_fields 核实。
 6. 【授权凭证与安全规范】：
    - OpenAPI v2 采用客户端凭证模式 (appId + appSecret + permanentCode)，通过 /oauth2.0/token 换取 7200s 的 accessToken；
    - PaaS 开发者接口采用开发者证书 (Authorization: devCertificate)，Header 中附加 Accept-Language: zh-cn；
@@ -161,7 +160,7 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
    - 严禁凭空臆造字段 API Name。
 3. 【SOQL 查询规范】：
    - 跨对象关联遵循关系命名规则（标准关系如 Contact.Account.Name，自定义关系如 Order__r.Name）；
-   - 严禁未带 LIMIT 的全表盲查，必须显式指定目标字段并指定 LIMIT，调用 execute_sql_query 工具执行查询。
+   - 必须显式指定目标字段，避免无业务目的的盲目全表扫描；查询工具会自动跟随 Salesforce 查询游标读取全部匹配记录。除非用户要求限定范围，不得擅自添加 LIMIT。
 4. 【生产环境只读铁律与沙盒环境自由写操作】：
    - 【生产环境绝对只读】：当连接到 Salesforce 生产正式环境（Production）时，系统已在内核开启强安全保护，严禁执行任何数据新建（create_record）、修改（update_record）、删除（delete_record），以及自定义对象/字段元数据创建部署操作，只允许进行只读查询（SOQL/Describe）与流程扫描；
    - 【沙盒/测试环境自由操作】：处于沙盒或测试环境（Sandbox / Test）时完全开放写操作权限，在用户确认方案后可自由新建、更新、删除记录或创建字段；
@@ -393,6 +392,30 @@ export const CRM_HARNESS_TOOLS_SPEC = [
   {
     type: 'function',
     function: {
+      name: 'workspace_list_component_files',
+      description: '列出 NeoCRM 应用托管组件库中的 HTML、TSX、TS、JSX、JS 入口文件。此组件库位于应用可写数据目录，不属于任何项目工作区；挂载自定义组件时先调用本工具获取真实 relativePath。',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workspace_write_component_file',
+      description: '在 NeoCRM 应用托管组件库中新建或更新组件包文件，不写入当前项目。packageId 使用英文字母、数字、连字符或下划线；relativePath 是包内相对路径。支持 TSX/TS/JSX/JS/HTML 入口以及 TS/JS/CSS/JSON/SVG 等配套文本文件，组件源码单文件最多 2 MB。完整包可在工作台导出为 ZIP 分享。',
+      parameters: {
+        type: 'object',
+        properties: {
+          packageId: { type: 'string', description: '组件包 ID，例如 chip-tracking-dashboard。' },
+          relativePath: { type: 'string', description: '包内相对路径，例如 src/ChipTrackingDashboard.tsx 或 styles/dashboard.css。' },
+          content: { type: 'string', description: '文件完整文本内容。' },
+        },
+        required: ['packageId', 'relativePath', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'workspace_list_pages',
       description: '读取当前本地自定义工作台页面及可用 CRM 连接器账号、邮箱账号。用户提出创建或调整业务页面前先调用，使用返回的真实账号 ID 绑定数据源，不要臆造连接器、邮箱或字段。',
       parameters: { type: 'object', properties: {} },
@@ -402,7 +425,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'workspace_save_page',
-      description: '保存自定义工作台页面配置。仅在用户明确要求创建/修改并确认展示的页面方案后调用。支持内置数据组件以及当前项目内的 custom-html/custom-tsx 文件挂载；CRM 查询必须绑定 workspace_list_pages 返回的 accountId，并使用只读 SELECT 和 LIMIT 不超过 500；邮件组件绑定真实邮件账号 ID。subscription.enabled 与 subscription.feishuEnabled 默认必须为 false，除非用户明确要求订阅或飞书推送。',
+      description: '保存自定义工作台页面配置。仅在用户明确要求创建/修改并确认展示的页面方案后调用。支持内置数据组件以及应用托管组件库中的 custom-html/custom-tsx 文件挂载；自定义组件 relativePath 必须是 workspace_list_component_files 返回的路径或 workspace_write_component_file 返回的路径，不依赖项目工作区。自定义 HTML/代码组件可绑定 workspace_list_pages 返回的 CRM accountId 并可选配置初始只读 query；运行时通过 window.neoCRMData 读取初始结果、window.neoCRM.query(sql) 再查当前绑定账号，不得尝试传递或暴露 Token。CRM 查询只允许单条只读 SELECT；未显式指定 LIMIT 时按平台分页能力取完当前账号可访问的全部结果，不得追加或暗中截断条数。邮件组件绑定真实邮件账号 ID。subscription.enabled 与 subscription.feishuEnabled 默认必须为 false，除非用户明确要求订阅或飞书推送。',
       parameters: {
         type: 'object',
         properties: {
@@ -424,11 +447,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
                     id: { type: 'string' },
                     type: { type: 'string', enum: ['text', 'crm-query', 'mail-list', 'async-apex-dashboard', 'custom-html', 'custom-tsx'] },
                     title: { type: 'string' },
+                    columnSpan: { type: 'number', enum: [1, 2, 3, 4], description: '桌面网格宽度：1/4、2/4、3/4 或整行。' },
+                    height: { type: 'number', enum: [320, 480, 640, 800], description: '组件内容高度（像素）。' },
                     text: { type: 'string' },
                     accountId: { type: 'string' },
                     connectorId: { type: 'string' },
                     projectId: { type: 'string', description: '当前项目 ID；自定义组件用于记录组件属于哪个项目。' },
-                    relativePath: { type: 'string', description: '当前项目内的相对文件路径。custom-html 必须是 .html/.htm，custom-tsx 必须是 .tsx，禁止绝对路径和项目外路径。' },
+                    relativePath: { type: 'string', description: '应用托管组件库内的相对文件路径。custom-html 必须是 .html/.htm；custom-tsx 可使用 .tsx/.ts/.jsx/.js，必须符合对应入口约定。' },
                     buildStatus: { type: 'string', enum: ['pending', 'ready', 'error'] },
                     query: { type: 'string' },
                     limit: { type: 'number' },
@@ -554,13 +579,13 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'execute_sql_query',
-      description: '【核心 CRM 实时数据查询工具】在当前已连接的 CRM 租户数据库执行只读数据查询，检索真实业务数据样本。全面适配：1) 纷享销客 (支持 SELECT _id, name FROM AccountObj LIMIT 50 OFFSET 0，单页上限 50 条)；2) 销售易 XOQL (SELECT ... FROM account LIMIT 10，严禁 SELECT * 和 JOIN，支持点号穿透)；3) Salesforce SOQL (SELECT Id, Name FROM Account LIMIT 10)。用于检索当前环境中的真实数据记录。',
+      description: '【核心 CRM 实时数据查询工具】在当前已连接的 CRM 租户中执行只读查询，连接器会自动跟随平台分页/游标读取全部匹配记录。适配纷享销客、销售易 XOQL 与 Salesforce SOQL；未显式指定 LIMIT 时不得擅自添加或在应用层截断，SQL 中用户明确写出的 LIMIT/OFFSET 必须遵循。字段不确定时先调用 get_entity_fields。',
       parameters: {
         type: 'object',
         properties: {
           sql: {
             type: 'string',
-            description: '数据查询语句。支持销售易 XOQL、纷享销客 SQL 查询或 Salesforce SOQL。单次返回上限 50 条。',
+            description: '数据查询语句。支持销售易 XOQL、纷享销客 SQL 查询或 Salesforce SOQL。连接器自动分页读取完整结果；只在用户明确要求时添加 LIMIT。',
           },
         },
         required: ['sql'],
