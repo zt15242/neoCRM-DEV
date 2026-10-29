@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import JSZip from 'jszip';
 import tailwindcss from '@tailwindcss/postcss';
 import { app, BrowserWindow, dialog } from 'electron';
-import { build } from 'esbuild';
+import { build, stop, type BuildOptions, type BuildResult } from 'esbuild';
 import postcss from 'postcss';
 import type { AccountRecord, CrmProductType } from '../types';
 import type { EmailAccount } from '../../shared/mailTypes';
@@ -37,6 +37,7 @@ export class WorkspaceService {
   private readonly tailwindCssCache = new Map<string, { signature: string; css: string }>();
   private readonly queryCountsByExecution = new Map<string, number>();
   private readonly executionContexts = new Map<string, WorkspaceExecutionContext>();
+  private componentBuildQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private sessionStore: SessionStore,
@@ -930,24 +931,25 @@ else throw new Error('TS/JS 入口必须导出 default React 组件，或导出 
       const styleStartedAt = Date.now();
       this.recordComponentLog(page.id, widget.id, 'dependency', 'info', '解析并打包组件 imports 与本地依赖', undefined, context);
       this.recordComponentLog(page.id, widget.id, 'style', 'info', '扫描组件目录 class 并生成隔离样式', undefined, context);
+      const buildOptions: BuildOptions = {
+        stdin: { contents: entry, resolveDir: path.resolve(sourceRoot), sourcefile: '__neo_workspace_entry.tsx', loader: 'tsx' },
+        bundle: true,
+        write: false,
+        outfile: path.join(os.tmpdir(), `neo-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`),
+        nodePaths: this.getRuntimeNodePaths(),
+        format: 'iife',
+        platform: 'browser',
+        target: 'es2020',
+        jsx: 'automatic',
+        metafile: true,
+        define: {
+          __filename: JSON.stringify(`/${widget.relativePath || 'component.js'}`),
+          __dirname: JSON.stringify(`/${path.posix.dirname((widget.relativePath || 'component.js').replaceAll('\\', '/'))}`),
+        },
+        logLevel: 'silent',
+      };
       const [buildOutcome, styleOutcome] = await Promise.allSettled([
-        build({
-          stdin: { contents: entry, resolveDir: path.resolve(sourceRoot), sourcefile: '__neo_workspace_entry.tsx', loader: 'tsx' },
-          bundle: true,
-          write: false,
-          outfile: path.join(os.tmpdir(), `neo-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`),
-          nodePaths: this.getRuntimeNodePaths(),
-          format: 'iife',
-          platform: 'browser',
-          target: 'es2020',
-          jsx: 'automatic',
-          metafile: true,
-          define: {
-            __filename: JSON.stringify(`/${widget.relativePath || 'component.js'}`),
-            __dirname: JSON.stringify(`/${path.posix.dirname((widget.relativePath || 'component.js').replaceAll('\\', '/'))}`),
-          },
-          logLevel: 'silent',
-        }),
+        this.buildCustomWidgetBundle(buildOptions, () => this.recordComponentLog(page.id, widget.id, 'dependency', 'info', 'esbuild 构建服务管道已断开，正在自动重启并重试一次', undefined, context)),
         this.buildCustomWidgetTailwindCss(sourcePath),
       ]);
       if (buildOutcome.status === 'rejected') {
@@ -983,6 +985,28 @@ else throw new Error('TS/JS 入口必须导出 default React 组件，或导出 
       this.recordComponentLog(page.id, widget.id, stage, 'error', message, Date.now() - stageStartedAt, context);
       return { widgetId: widget.id, success: false, sourcePath: widget.relativePath, buildStatus: 'error', error: message, updatedAt };
     }
+  }
+
+  private buildCustomWidgetBundle(options: BuildOptions, onRestart?: () => void): Promise<BuildResult> {
+    const task = this.componentBuildQueue.then(async () => {
+      try {
+        return await build(options);
+      } catch (error: any) {
+        const message = String(error?.message || error || '');
+        if (!/The service (?:is no longer running|was stopped)|write EPIPE|\bEPIPE\b/i.test(message)) throw error;
+
+        onRestart?.();
+        try {
+          await stop();
+          return await build(options);
+        } catch (retryError: any) {
+          const retryMessage = String(retryError?.message || retryError || '未知错误');
+          throw new Error(`组件构建服务异常退出，已自动重启并重试但仍失败。请重启 NeoCRM 后重试；若问题持续，请导出软件日志。原始错误：${retryMessage}`);
+        }
+      }
+    });
+    this.componentBuildQueue = task.then(() => undefined, () => undefined);
+    return task;
   }
 
   private async buildCustomWidgetTailwindCss(sourcePath: string): Promise<{ css: string; cached: boolean }> {
