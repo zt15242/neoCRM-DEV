@@ -10,6 +10,7 @@ import axios from 'axios';
 import { BrowserWindow, shell, session } from 'electron';
 import { NeoEnvironment, TokenData, UserInfo } from '../types';
 import { resolveSalesforceAlias } from './salesforceService';
+import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
 
 export class AuthService {
   private activeServer: http.Server | null = null;
@@ -337,8 +338,7 @@ export class AuthService {
    */
   public async loginWithSalesforceCli(env: NeoEnvironment): Promise<TokenData> {
     this.cancelActiveAuth();
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'sf.cmd' : 'sf';
+    const cmd = getSalesforceCliCommand();
 
     let instanceUrl = env.neoBaseURL?.trim() || (env.envType === 'sandbox' ? 'https://test.sfcrmproducts.cn' : 'https://login.sfcrmproducts.cn');
     if (instanceUrl.endsWith('/')) {
@@ -356,7 +356,7 @@ export class AuthService {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(cmd, args, {
         shell: true,
-        env: { ...process.env, CI: 'false', SF_USE_PROGRESS_BAR: 'false' },
+        env: { ...getSalesforceCliEnvironment(), CI: 'false', SF_USE_PROGRESS_BAR: 'false' },
       });
       this.activeCliProcess = child;
 
@@ -446,6 +446,23 @@ export class AuthService {
     return null;
   }
 
+  private getSalesforceRefreshTokenFromCli(alias: string): string | null {
+    const cmd = getSalesforceCliCommand();
+    const output = execSync(`"${cmd}" org auth show-sfdx-auth-url --target-org "${alias}" --json`, {
+      encoding: 'utf-8',
+      timeout: 12000,
+      shell: true,
+      env: getSalesforceCliEnvironment(),
+      windowsHide: true,
+    });
+    const start = output.indexOf('{');
+    const end = output.lastIndexOf('}');
+    if (start < 0 || end < start) return null;
+    const authUrl = JSON.parse(output.slice(start, end + 1)).result?.sfdxAuthUrl;
+    const match = typeof authUrl === 'string' ? authUrl.match(/^force:\/\/[^:]*:[^:]*:([^@]+)@/i) : null;
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+  }
+
   /**
    * 从 Salesforce CLI (sf) 中提取当前 Org 的最新有效 Access Token 与实例元数据
    */
@@ -479,45 +496,27 @@ export class AuthService {
       };
     }
 
-    // 2. 磁盘未找到时，安全回退至 CLI 命令读取
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'sf.cmd' : 'sf';
+    // 2. 磁盘未找到时，通过 CLI 的专用凭据命令读取当前账号。
+    const cmd = getSalesforceCliCommand();
 
     try {
-      let stdout = '';
-      try {
-        stdout = execSync(
-          `"${cmd}" org display --target-org "${alias}" --json`,
-          {
-            encoding: 'utf-8',
-            timeout: 12000,
-            shell: true,
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-            windowsHide: true,
-          }
-        );
-      } catch {
-        stdout = execSync(
-          `"${cmd}" org display --json`,
-          {
-            encoding: 'utf-8',
-            timeout: 12000,
-            shell: true,
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-            windowsHide: true,
-          }
-        );
-      }
-
-      const jsonStart = stdout.indexOf('{');
-      const jsonEnd = stdout.lastIndexOf('}');
-      if (jsonStart === -1 || jsonEnd === -1) {
-        throw new Error('未能从 Salesforce CLI 解析返回的 JSON 数据');
-      }
-
-      const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
+      const cliOptions = {
+        encoding: 'utf-8' as const,
+        timeout: 12000,
+        shell: true,
+        env: getSalesforceCliEnvironment(),
+        windowsHide: true,
+      };
+      const stdout = execSync(`"${cmd}" org display --target-org "${alias}" --json`, cliOptions);
+      const accessTokenOutput = execSync(
+        `"${cmd}" org auth show-access-token --target-org "${alias}" --json`,
+        cliOptions
+      );
+      const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'), stdout.lastIndexOf('}') + 1));
+      const tokenParsed = JSON.parse(accessTokenOutput.slice(accessTokenOutput.indexOf('{'), accessTokenOutput.lastIndexOf('}') + 1));
       const res = parsed.result;
-      if (!res || !res.accessToken) {
+      const accessToken = tokenParsed.result?.accessToken;
+      if (!res || !accessToken) {
         throw new Error(parsed.message || res?.connectedStatus || 'Salesforce CLI 未返回有效 accessToken');
       }
 
@@ -535,9 +534,14 @@ export class AuthService {
           if (!env.clientSecret && authFile.clientSecret) env.clientSecret = authFile.clientSecret;
         }
       } catch {}
+      if (!refreshToken) {
+        try {
+          refreshToken = this.getSalesforceRefreshTokenFromCli(alias) || '';
+        } catch {}
+      }
 
       const tokenData: TokenData = {
-        access_token: res.accessToken,
+        access_token: accessToken,
         refresh_token: refreshToken || undefined,
         expires_in: 7200,
         instance_uri: instanceUri,
@@ -566,43 +570,28 @@ export class AuthService {
     currentTokenData?: TokenData,
     isInteractive = false
   ): Promise<TokenData> {
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'sf.cmd' : 'sf';
+    const cmd = getSalesforceCliCommand();
     const alias = this.getSalesforceAlias(env);
 
-    // 1. 优先尝试从 sf CLI 执行 org display（触发 CLI 自带的云端 token 刷新）
+    // 1. 通过 CLI 专用命令触发/读取当前连接器的 Access Token。
     try {
-      let stdout = '';
-      try {
-        stdout = execSync(
-          `"${cmd}" org display --target-org "${alias}" --json`,
-          {
-            encoding: 'utf-8',
-            timeout: 15000,
-            shell: true,
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-            windowsHide: true,
-          }
-        );
-      } catch {
-        stdout = execSync(
-          `"${cmd}" org display --json`,
-          {
-            encoding: 'utf-8',
-            timeout: 15000,
-            shell: true,
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
-            windowsHide: true,
-          }
-        );
-      }
-
-      const jsonStart = stdout.indexOf('{');
-      const jsonEnd = stdout.lastIndexOf('}');
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        const parsed = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
-        const res = parsed.result;
-        if (res && res.accessToken && (!res.connectedStatus || res.connectedStatus === 'Connected')) {
+      const cliOptions = {
+        encoding: 'utf-8' as const,
+        timeout: 15000,
+        shell: true,
+        env: getSalesforceCliEnvironment(),
+        windowsHide: true,
+      };
+      const stdout = execSync(`"${cmd}" org display --target-org "${alias}" --json`, cliOptions);
+      const tokenOutput = execSync(
+        `"${cmd}" org auth show-access-token --target-org "${alias}" --json`,
+        cliOptions
+      );
+      const parsed = JSON.parse(stdout.slice(stdout.indexOf('{'), stdout.lastIndexOf('}') + 1));
+      const tokenParsed = JSON.parse(tokenOutput.slice(tokenOutput.indexOf('{'), tokenOutput.lastIndexOf('}') + 1));
+      const res = parsed.result;
+      const accessToken = tokenParsed.result?.accessToken;
+      if (res && accessToken && (!res.connectedStatus || res.connectedStatus === 'Connected')) {
           console.log(`[Salesforce] 从本地 CLI (${alias}) 成功获取有效凭据`);
 
           let refreshToken = currentTokenData?.refresh_token || '';
@@ -617,9 +606,12 @@ export class AuthService {
               }
             } catch {}
           }
+          try {
+            refreshToken = this.getSalesforceRefreshTokenFromCli(alias) || refreshToken;
+          } catch {}
 
           return {
-            access_token: res.accessToken,
+            access_token: accessToken,
             refresh_token: refreshToken || undefined,
             expires_in: 7200,
             instance_uri: res.instanceUrl || env.neoBaseURL,
@@ -634,9 +626,8 @@ export class AuthService {
             expiresAt: Date.now() + 7200 * 1000,
           };
         }
-      }
     } catch (e: any) {
-      console.warn(`[Salesforce] sf org display 刷新提示:`, e.message);
+      console.warn(`[Salesforce] Salesforce CLI token 刷新提示:`, e.message);
     }
 
     // 2. 若 CLI display 未能刷新，尝试直接从本地磁盘 ~/.sfdx/*.json 中提取是否有刚刷新的 token

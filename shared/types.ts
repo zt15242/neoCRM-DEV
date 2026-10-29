@@ -62,6 +62,7 @@ export interface SessionState {
   environment?: NeoEnvironment;
   tokenData?: TokenData;
   activeAccountId?: string;
+  salesforceCliSync?: SalesforceCliSyncResult;
 }
 
 export interface AccountRecord {
@@ -80,6 +81,12 @@ export interface AccountRecord {
 export interface CliSyncResult {
   success: boolean;
   targetPath: string;
+  message: string;
+}
+
+export interface SalesforceCliSyncResult {
+  success: boolean;
+  alias?: string;
   message: string;
 }
 

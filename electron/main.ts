@@ -200,21 +200,21 @@ ipcMain.handle('auth:loginWithBrowser', async (_, envId: string) => {
   const env = envService.getEnvironmentById(envId);
   if (!env) throw new Error(`未找到环境: ${envId}`);
   const tokenData = await authService.loginWithBrowser(env);
-  return sessionStore.saveSession(env, tokenData);
+  return sessionStore.saveSessionAndSyncSalesforceCli(env, tokenData);
 });
 
 ipcMain.handle('auth:loginWithEmbedded', async (_, envId: string) => {
   const env = envService.getEnvironmentById(envId);
   if (!env) throw new Error(`未找到环境: ${envId}`);
   const tokenData = await authService.loginWithEmbeddedWindow(env, win || undefined);
-  return sessionStore.saveSession(env, tokenData);
+  return sessionStore.saveSessionAndSyncSalesforceCli(env, tokenData);
 });
 
 ipcMain.handle('auth:loginWithPassword', async (_, envId: string, username: string, pass: string) => {
   const env = envService.getEnvironmentById(envId);
   if (!env) throw new Error(`未找到环境: ${envId}`);
   const tokenData = await authService.loginWithPassword(env, username, pass);
-  return sessionStore.saveSession(env, tokenData);
+  return sessionStore.saveSessionAndSyncSalesforceCli(env, tokenData);
 });
 
 ipcMain.handle('auth:cancelLogin', async () => {
@@ -244,7 +244,7 @@ ipcMain.handle('auth:refreshToken', async () => {
     tokenData.cookies = current.tokenData.cookies;
     tokenData.cookieSavedAt = current.tokenData.cookieSavedAt;
   }
-  const saved = sessionStore.saveSession(fullEnv, tokenData);
+  const saved = await sessionStore.saveSessionAndSyncSalesforceCli(fullEnv, tokenData);
   win?.webContents.send('session:updated', saved);
   return saved;
 });

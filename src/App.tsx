@@ -132,6 +132,17 @@ export const App: React.FC = () => {
     });
   };
 
+  const showSessionLoginResult = (newSession: SessionState, successMessage: string) => {
+    const cliSync = newSession.salesforceCliSync;
+    if (!cliSync) {
+      showToast('success', successMessage);
+    } else if (cliSync.success) {
+      showToast('success', `${successMessage} ${cliSync.message}`);
+    } else {
+      showToast('info', `${successMessage} ${cliSync.message}`);
+    }
+  };
+
   const dismissToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
@@ -270,7 +281,7 @@ export const App: React.FC = () => {
     try {
       const newSession = await window.neoApi.loginWithBrowser(selectedEnvId);
       setSession(newSession);
-      showToast('success', '浏览器授权登录成功！');
+      showSessionLoginResult(newSession, '浏览器授权登录成功！');
       const history = await window.neoApi.getAccountHistory();
       setAccountHistory(history);
     } catch (e: any) {
@@ -287,7 +298,7 @@ export const App: React.FC = () => {
     try {
       const newSession = await window.neoApi.loginWithEmbeddedWindow(selectedEnvId);
       setSession(newSession);
-      showToast('success', '登录授权成功！');
+      showSessionLoginResult(newSession, '登录授权成功！');
       const history = await window.neoApi.getAccountHistory();
       setAccountHistory(history);
     } catch (e: any) {
@@ -306,7 +317,7 @@ export const App: React.FC = () => {
     try {
       const newSession = await window.neoApi.loginWithPassword(selectedEnvId, username, pass);
       setSession(newSession);
-      showToast('success', '账号密码直登成功！');
+      showSessionLoginResult(newSession, '账号密码直登成功！');
       const history = await window.neoApi.getAccountHistory();
       setAccountHistory(history);
     } catch (e: any) {
@@ -356,7 +367,7 @@ export const App: React.FC = () => {
         if (newSession.environment?.id) {
           setSelectedEnvId(newSession.environment.id);
         }
-        showToast('success', '已成功切换账号');
+        showSessionLoginResult(newSession, '已成功切换账号。');
       }
     } catch (e: any) {
       showToast('error', `切换失败: ${e.message}`);

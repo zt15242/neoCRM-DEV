@@ -5,38 +5,16 @@
 export function resolveSalesforceAlias(env?: NeoEnvironment, tokenData?: TokenData): string {
   // 1. 若连接器显式配置了自定义 CLI 别名，严格优先遵循
   if (env?.cliAlias && env.cliAlias.trim()) {
-    return env.cliAlias.trim().replace(/\s+/g, '_');
+    return env.cliAlias.trim().replace(/[^a-zA-Z0-9_.-]/g, '_');
   }
 
-  // 2. 检查本地 ~/.sfdx/alias.json 中是否已有针对该具体用户名或 Org ID 的既有别名
-  const username = tokenData?.userInfo?.name || tokenData?.userInfo?.preferred_username;
-  const orgId = tokenData?.tenant_id ? String(tokenData.tenant_id) : undefined;
-  try {
-    const aliasJsonPath = path.join(os.homedir(), '.sfdx', 'alias.json');
-    if (fs.existsSync(aliasJsonPath)) {
-      const aliasData = JSON.parse(fs.readFileSync(aliasJsonPath, 'utf-8'));
-      const orgs = aliasData.orgs || {};
-
-      // 若指定了具体 username，优先匹配该 username 的已有别名
-      if (username) {
-        const found = Object.entries(orgs).find(([_, u]) => String(u).toLowerCase() === username.toLowerCase());
-        if (found) return found[0];
-      }
-      // 其次匹配 Org ID
-      if (orgId) {
-        const foundOrg = Object.entries(orgs).find(([_, u]) => String(u) === orgId);
-        if (foundOrg) return foundOrg[0];
-      }
-    }
-  } catch {}
-
-  // 3. 预置 Salesforce 连接器专属固定别名 (四套预置环境互不干扰)
+  // 2. 预置 Salesforce 连接器专属固定别名 (四套预置环境互不干扰)
   if (env?.id === 'sf-alicloud-production') return 'SF_Ali_Prod';
   if (env?.id === 'sf-sandbox' || env?.id === 'sf-alicloud-sandbox') return 'SF_Ali_Sandbox';
   if (env?.id === 'sf-global-production') return 'SF_Global_Prod';
   if (env?.id === 'sf-global-sandbox') return 'SF_Global_Sandbox';
 
-  // 4. 从环境实例 URL / 我的域 (MyDomain) 提取专属组织代号
+  // 3. 从环境实例 URL / 我的域 (MyDomain) 提取组织代号，并附加连接器 ID 避免同域账号互相覆盖
   const instanceUrl = (tokenData?.instance_uri || env?.neoBaseURL || '').trim();
   if (instanceUrl) {
     try {
@@ -46,23 +24,27 @@ export function resolveSalesforceAlias(env?: NeoEnvironment, tokenData?: TokenDa
       const firstPart = host.split('.')[0];
       if (firstPart && !['login', 'test', 'www', 'api'].includes(firstPart)) {
         const sanitized = firstPart.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-        if (sanitized && sanitized.length >= 2) return sanitized;
+        if (sanitized && sanitized.length >= 2) {
+          const connectorSuffix = env?.id?.replace(/[^a-zA-Z0-9_]/g, '_').slice(-8);
+          return connectorSuffix ? `${sanitized.slice(0, 31)}_${connectorSuffix}` : sanitized.slice(0, 40);
+        }
       }
     } catch {}
   }
 
-  // 5. 根据环境名称拼装英文字符别名 (若包含中文字符，自动剥离或拼合拼音/ID)
+  // 4. 根据环境名称拼装英文字符别名 (若包含中文字符，自动剥离或拼合拼音/ID)
   if (env?.name) {
     const engPart = env.name.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
     if (engPart && engPart.length >= 2) {
-      return `SF_${engPart}`;
+      const connectorSuffix = env.id?.replace(/[^a-zA-Z0-9_]/g, '_').slice(-8);
+      return connectorSuffix ? `SF_${engPart.slice(0, 31)}_${connectorSuffix}` : `SF_${engPart.slice(0, 37)}`;
     }
   }
 
-  // 6. 基于环境 ID 保证全局唯一且不冲突
+  // 5. 基于环境 ID 保证全局唯一且不冲突
   if (env?.id) {
     const cleanId = env.id.replace(/[^a-zA-Z0-9_]/g, '_');
-    return `SF_${cleanId}`;
+    return `SF_${cleanId.slice(0, 37)}`;
   }
 
   return 'SalesforceOrg';
@@ -74,6 +56,7 @@ import fs from 'node:fs';
 import axios, { AxiosRequestConfig } from 'axios';
 import { execSync } from 'node:child_process';
 import { NeoEnvironment, TokenData, EntityMetadata, FieldMetadata, QueryResultData } from '../../shared/types';
+import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
 
 export class SalesforceService {
   private tokenRefreshCallback?: (env: NeoEnvironment, newToken: TokenData) => void;
@@ -185,8 +168,7 @@ export class SalesforceService {
    */
   private getLatestTokenFromCli(env?: NeoEnvironment, tokenData?: TokenData): string | null {
     try {
-      const isWin = process.platform === 'win32';
-      const cmd = isWin ? 'sf.cmd' : 'sf';
+      const cmd = getSalesforceCliCommand();
 
       // 1. 尝试直接从本地磁盘 ~/.sfdx/*.json 读取（0ms 极速无开销）
       const username = tokenData?.userInfo?.name;
@@ -199,17 +181,17 @@ export class SalesforceService {
       // 2. 依据当前环境动态推导专属别名，杜绝全局单一别名冲突
       const alias = resolveSalesforceAlias(env, tokenData);
 
-      // 3. 执行 sf org display 探测当前环境专属组织凭据
+      // 3. 使用 CLI 专用命令读取当前环境的 Access Token，避免依赖 org display 的敏感字段。
       let stdout = '';
       try {
         stdout = execSync(
-          `"${cmd}" org display --target-org "${alias}" --json`.trim(),
+          `"${cmd}" org auth show-access-token --target-org "${alias}" --json`.trim(),
           {
             encoding: 'utf-8',
             timeout: 15000,
             windowsHide: true,
             shell: true,
-            env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
+            env: getSalesforceCliEnvironment(),
           }
         );
       } catch {
@@ -220,16 +202,15 @@ export class SalesforceService {
       const jsonEnd = stdout.lastIndexOf('}');
       if (jsonStart !== -1 && jsonEnd !== -1) {
         const data = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
-        const res = data.result;
-        if (res?.accessToken && (!res.connectedStatus || res.connectedStatus === 'Connected')) {
-          const uname = res.username || username;
-          if (uname) {
-            const authAfter = this.getAuthFileFromDisk(uname);
+        const accessToken = data.result?.accessToken;
+        if (accessToken) {
+          if (username) {
+            const authAfter = this.getAuthFileFromDisk(username, tokenData?.instance_uri || env?.neoBaseURL);
             if (authAfter?.refreshToken && tokenData) {
               tokenData.refresh_token = authAfter.refreshToken;
             }
           }
-          return res.accessToken;
+          return accessToken;
         }
       }
       return null;
