@@ -22,6 +22,7 @@ import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { EmailService } from './services/emailService';
 import { WorkspaceService } from './services/workspaceService';
+import { configurePackagedEsbuildBinary } from './services/esbuildRuntime';
 import { FeishuService } from './services/feishuService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
@@ -32,6 +33,7 @@ const currentDir = typeof __dirname !== 'undefined'
 
 process.env.DIST = path.join(currentDir, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public');
+configurePackagedEsbuildBinary();
 
 let win: BrowserWindow | null = null;
 const envService = new EnvService();

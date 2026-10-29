@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import JSZip from 'jszip';
 import tailwindcss from '@tailwindcss/postcss';
 import { app, BrowserWindow, dialog } from 'electron';
-import { build, stop, type BuildOptions, type BuildResult } from 'esbuild';
+import type { BuildOptions, BuildResult } from 'esbuild';
 import postcss from 'postcss';
 import type { AccountRecord, CrmProductType } from '../types';
 import type { EmailAccount } from '../../shared/mailTypes';
@@ -16,6 +16,7 @@ import { SessionStore } from './sessionStore';
 import { MetadataService } from './metadataService';
 import { ProjectService } from './projectService';
 import type { NeoEnvironment, TokenData } from '../types';
+import { configurePackagedEsbuildBinary } from './esbuildRuntime';
 
 const MAX_COMPONENT_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_COMPONENT_PACKAGE_BYTES = 20 * 1024 * 1024;
@@ -989,16 +990,20 @@ else throw new Error('TS/JS 入口必须导出 default React 组件，或导出 
 
   private buildCustomWidgetBundle(options: BuildOptions, onRestart?: () => void): Promise<BuildResult> {
     const task = this.componentBuildQueue.then(async () => {
+      if (app.isPackaged && !configurePackagedEsbuildBinary()) {
+        throw new Error('安装包缺少 esbuild 平台二进制文件。请重新安装当前版本；若问题仍存在，请导出软件日志。');
+      }
+      const esbuild = await import('esbuild');
       try {
-        return await build(options);
+        return await esbuild.build(options);
       } catch (error: any) {
         const message = String(error?.message || error || '');
         if (!/The service (?:is no longer running|was stopped)|write EPIPE|\bEPIPE\b/i.test(message)) throw error;
 
         onRestart?.();
         try {
-          await stop();
-          return await build(options);
+          await esbuild.stop();
+          return await esbuild.build(options);
         } catch (retryError: any) {
           const retryMessage = String(retryError?.message || retryError || '未知错误');
           throw new Error(`组件构建服务异常退出，已自动重启并重试但仍失败。请重启 NeoCRM 后重试；若问题持续，请导出软件日志。原始错误：${retryMessage}`);
