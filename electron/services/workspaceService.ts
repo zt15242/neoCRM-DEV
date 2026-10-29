@@ -1155,13 +1155,28 @@ else throw new Error('TS/JS 入口必须导出 default React 组件，或导出 
 
   private getRuntimeNodePaths(): string[] {
     const paths = [path.resolve(process.cwd(), 'node_modules')];
-    try {
-      const reactEntry = runtimeRequire.resolve('react');
-      paths.push(path.dirname(path.dirname(reactEntry)));
-    } catch {
-      // 运行时依赖缺失时交给 esbuild 返回明确的构建错误。
+    if (app.isPackaged) {
+      const packagedNodeModules = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
+      const requiredFiles = [
+        'react/package.json',
+        'react/jsx-runtime.js',
+        'react-dom/client.js',
+        'lucide-react/package.json',
+      ];
+      const missing = requiredFiles.filter((file) => !fs.existsSync(path.join(packagedNodeModules, file)));
+      if (missing.length) {
+        throw new Error(`安装包缺少自定义组件运行依赖：${missing.join(', ')}。请更新或重新安装 NeoCRM。`);
+      }
+      paths.unshift(packagedNodeModules);
+    } else {
+      try {
+        const reactEntry = runtimeRequire.resolve('react');
+        paths.push(path.dirname(path.dirname(reactEntry)));
+      } catch {
+        // 运行时依赖缺失时交给 esbuild 返回明确的构建错误。
+      }
     }
-    return Array.from(new Set(paths));
+    return Array.from(new Set(paths.filter((nodeModulesPath) => fs.existsSync(nodeModulesPath))));
   }
 
   private validateCrmQuery(widget: WorkspaceWidget): { query: string; accountId: string } {

@@ -56,17 +56,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify packaged Windows esbuild runtime
+      - name: Verify packaged Windows widget build runtime
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           $esbuildBinary = "release/win-unpacked/resources/app.asar.unpacked/node_modules/@esbuild/win32-x64/esbuild.exe"
+          $nodeModules = "release/win-unpacked/resources/app.asar.unpacked/node_modules"
           if (!(Test-Path -LiteralPath $esbuildBinary -PathType Leaf)) {
             throw "Packaged esbuild binary is missing: $esbuildBinary"
           }
           & $esbuildBinary --version
           if ($LASTEXITCODE -ne 0) {
             throw "Packaged esbuild binary failed to start: $esbuildBinary"
+          }
+          node scripts/verify-packaged-widget-runtime.mjs $nodeModules
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged React widget dependency smoke test failed"
           }
 
       # 上传构建产物至 GitHub Artifacts
