@@ -64,6 +64,7 @@ import { DataService } from './dataService';
 import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
+import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -1287,6 +1288,8 @@ declare const tools: {
 你不仅是一个语言模型，你是一个运行在桌面工作台内、拥有完整物理文件读写与终端命令执行权限的「自主行动型工程智能体 (Autonomous Coding Agent)」。
 你拥有完整的 DeepSeek Harness 223 个内置插件工具链驱动支持（包含文件原子读写 read/write/edit、行级高精替换 str_replace_editor、Glob 路径检索、Grep 正则搜索、工作区命令执行 bash、任务待办清单状态机 todo_write、目标规划 goal、多 CRM 在线接口探测与元数据同步等）。当前本地项目物理工作区路径: ${projectPath || '未绑定工作区'}。
 
+【工具协议边界】：工具调用必须使用当前接口提供的结构化工具调用能力。不要在普通回答正文中输出 DSML / invoke / parameter 协议文本；正文里的协议文本不会被执行。
+
 【智能体高智商行动准则 (必须严格遵守，彻底杜绝呆板被动)】：
 0. 【任务清单闭环推进铁律 (Todo Completion Invariant - 极其重要！)】：
    - 当你在处理复杂任务时调用 todo_write 建立了任务清单，你必须负责到底，绝对严禁丢下未完成的任务直接输出最终汇报！
@@ -1702,6 +1705,8 @@ ${mcpInfoText}
       // 4. 判断是否开启工具调用
       const modelObj = provider.models?.find((m) => m.id === modelId);
       const lowerModelId = modelId.toLowerCase();
+      const isDeepSeekModel = lowerModelId.includes('deepseek') ||
+        `${provider.id || ''} ${provider.name || ''}`.toLowerCase().includes('deepseek');
       const isPureReasoner =
         lowerModelId.includes('reasoner') ||
         lowerModelId.includes('deepseek-r1') ||
@@ -1840,6 +1845,7 @@ ${mcpInfoText}
         let assistantReasoning = '';
         let isInThinkTag = false;
         let toolCallsMap: Record<number, { id: string; name: string; arguments: string }> = {};
+        const contentMarkupFilter = new DeepSeekToolMarkupFilter();
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1910,14 +1916,11 @@ ${mcpInfoText}
                       });
                     }
                     if (parts[1]) {
-                      assistantContent += parts[1];
-                      sendEvent({
-                        requestId,
-                        sessionId,
-                        messageId,
-                        type: 'content_delta',
-                        delta: parts[1],
-                      });
+                      const visible = isDeepSeekModel ? contentMarkupFilter.push(parts[1]) : parts[1];
+                      if (visible) {
+                        assistantContent += visible;
+                        sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
+                      }
                     }
                   } else {
                     assistantReasoning += piece;
@@ -1932,14 +1935,11 @@ ${mcpInfoText}
                   continue;
                 }
 
-                assistantContent += piece;
-                sendEvent({
-                  requestId,
-                  sessionId,
-                  messageId,
-                  type: 'content_delta',
-                  delta: piece,
-                });
+                const visible = isDeepSeekModel ? contentMarkupFilter.push(piece) : piece;
+                if (visible) {
+                  assistantContent += visible;
+                  sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
+                }
               }
 
               // 3. 处理 tool_calls 增量
@@ -1967,7 +1967,18 @@ ${mcpInfoText}
           }
         }
 
+        const filteredTail = isDeepSeekModel ? contentMarkupFilter.finish() : '';
+        if (filteredTail) {
+          assistantContent += filteredTail;
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: filteredTail });
+        }
+
         const toolCallsList = Object.values(toolCallsMap);
+        if (isDeepSeekModel && contentMarkupFilter.hadMarkup) {
+          const warning = '\n\n[已隐藏正文中的工具协议文本；该内容未作为工具执行。]';
+          assistantContent += warning;
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
+        }
 
         // 如果本步没有发起任何工具调用，说明大模型已经执行完所有前置动作，本步输出的是最终答复！
         if (toolCallsList.length === 0) {
@@ -2207,6 +2218,7 @@ ${safeToolDataContext}
         }
 
         let synthesisStreamed = '';
+        const synthesisMarkupFilter = new DeepSeekToolMarkupFilter();
         if (synthesisResponse && synthesisResponse.ok && synthesisResponse.body) {
           const reader = synthesisResponse.body.getReader();
           const decoder = new TextDecoder('utf-8');
@@ -2260,26 +2272,37 @@ ${safeToolDataContext}
                         sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: parts[0] });
                       }
                       if (parts[1]) {
-                        synthesisStreamed += parts[1];
-                        sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: parts[1] });
+                        const visible = isDeepSeekModel ? synthesisMarkupFilter.push(parts[1]) : parts[1];
+                        if (visible) {
+                          synthesisStreamed += visible;
+                          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
+                        }
                       }
                     } else {
                       sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: piece });
                     }
                     continue;
                   }
-                  synthesisStreamed += piece;
-                  sendEvent({
-                    requestId,
-                    sessionId,
-                    messageId,
-                    type: 'content_delta',
-                    delta: piece,
-                  });
+                  const visible = isDeepSeekModel ? synthesisMarkupFilter.push(piece) : piece;
+                  if (visible) {
+                    synthesisStreamed += visible;
+                    sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
+                  }
                 }
               } catch {}
             }
           }
+        }
+
+        const synthesisTail = isDeepSeekModel ? synthesisMarkupFilter.finish() : '';
+        if (synthesisTail) {
+          synthesisStreamed += synthesisTail;
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: synthesisTail });
+        }
+        if (isDeepSeekModel && synthesisMarkupFilter.hadMarkup) {
+          const warning = '\n\n[已隐藏正文中的工具协议文本；该内容未作为工具执行。]';
+          synthesisStreamed += warning;
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
         }
 
         // 若大模型接口在收敛轮因网络未能生成文本，直接以已成功执行的真实数据生成保底结构化 Markdown 报告
