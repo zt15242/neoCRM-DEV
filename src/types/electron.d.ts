@@ -8,6 +8,7 @@ import {
 } from '../../shared/mailTypes';
 import type { WorkspaceDataSources, WorkspaceExecutionLog, WorkspacePage, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
 import type { FeishuWorkspaceSettings } from '../../shared/feishuTypes';
+import type { MeetingRecord, GlossaryTerm, OpenAiAudioSettings } from '../../shared/meetingTypes';
 import { 
   NeoEnvironment, 
   SessionState, 
@@ -349,6 +350,24 @@ declare global {
       feishuAddBot?: (settings: { name: string; webhookUrl: string }) => Promise<FeishuWorkspaceSettings>;
       feishuRemoveBot?: (botId: string) => Promise<FeishuWorkspaceSettings>;
       feishuTestMessage?: (botId: string) => Promise<{ success: boolean; message: string }>;
+      // 飞书妙计风格会议助手 (Meeting Copilot & Whisper Transcription)
+      meetingGetMeetings?: () => Promise<MeetingRecord[]>;
+      meetingGetMeeting?: (id: string) => Promise<MeetingRecord | null>;
+      meetingSaveMeeting?: (meeting: MeetingRecord) => Promise<MeetingRecord>;
+      meetingDeleteMeeting?: (id: string) => Promise<boolean>;
+      meetingSelectAudioFile?: () => Promise<{ filePath: string; fileName: string; fileSize: number; dataUrl?: string } | null>;
+      meetingSaveRecordedAudio?: (fileName: string, buffer: ArrayBuffer) => Promise<{ filePath: string; fileName: string; fileSize: number; dataUrl: string }>;
+      meetingGetAudioDataUrl?: (filePath: string) => Promise<string>;
+      meetingTranscribeAudio?: (meetingId: string, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingRecord>;
+      meetingSummarizeMeeting?: (meetingId: string, options?: { providerId?: string; modelId?: string }) => Promise<MeetingRecord>;
+      meetingGetGlossary?: () => Promise<GlossaryTerm[]>;
+      meetingSaveGlossaryTerm?: (term: Partial<GlossaryTerm>) => Promise<GlossaryTerm[]>;
+      meetingDeleteGlossaryTerm?: (termId: string) => Promise<GlossaryTerm[]>;
+      meetingResetGlossary?: () => Promise<GlossaryTerm[]>;
+      meetingGetSettings?: () => Promise<OpenAiAudioSettings>;
+      meetingSaveSettings?: (settings: Partial<OpenAiAudioSettings>) => Promise<OpenAiAudioSettings>;
+      meetingExportMarkdown?: (meetingId: string) => Promise<string>;
+
 
     };
   }

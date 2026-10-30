@@ -24,7 +24,7 @@ export class McpClientService {
   /**
    * 连接 MCP 服务并探测/同步其可用工具列表 (tools/list)
    */
-  public async discoverTools(srv: McpServerConfig): Promise<{
+  public async discoverTools(srv: McpServerConfig, signal?: AbortSignal): Promise<{
     success: boolean;
     tools: McpToolItem[];
     serverInfo?: any;
@@ -36,12 +36,13 @@ export class McpClientService {
 
     try {
       if (srv.type === 'sse') {
-        return await this.discoverSseTools(srv);
+        return await this.discoverSseTools(srv, signal);
       } else if (srv.type === 'stdio') {
-        return await this.discoverStdioTools(srv);
+        return await this.discoverStdioTools(srv, signal);
       }
       return { success: false, tools: [], error: `不支持的传输类型: ${srv.type}` };
     } catch (e: any) {
+      if (signal?.aborted || e?.name === 'AbortError') throw e;
       console.error(`[MCP] 探测服务 ${srv.name} 工具失败:`, e);
       return {
         success: false,
@@ -97,10 +98,6 @@ export class McpClientService {
 
     const baseHeaders = this.buildHeaders(srv);
     const controller = new AbortController();
-    const abortHandler = () => controller.abort();
-    externalSignal?.addEventListener('abort', abortHandler, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
     const pendingRequests = new Map<
       number | string,
       { resolve: (val: any) => void; reject: (err: any) => void }
@@ -116,6 +113,18 @@ export class McpClientService {
       endpointReadyResolve = resolve;
       endpointReadyReject = reject;
     });
+    void endpointReadyPromise.catch(() => {});
+
+    const rejectPending = (error: Error) => {
+      controller.abort();
+      endpointReadyReject?.(error);
+      for (const request of pendingRequests.values()) request.reject(error);
+      pendingRequests.clear();
+    };
+    const abortHandler = () => rejectPending(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
+    const timer = setTimeout(() => rejectPending(new Error(`MCP 请求超时 (${timeoutMs}ms)`)), timeoutMs);
+    externalSignal?.addEventListener('abort', abortHandler, { once: true });
+    if (externalSignal?.aborted) abortHandler();
 
     const handleIncomingJsonRpc = (text: string) => {
       try {
@@ -317,7 +326,7 @@ export class McpClientService {
     }
   }
 
-  private async discoverSseTools(srv: McpServerConfig): Promise<{
+  private async discoverSseTools(srv: McpServerConfig, signal?: AbortSignal): Promise<{
     success: boolean;
     tools: McpToolItem[];
     serverInfo?: any;
@@ -336,7 +345,7 @@ export class McpClientService {
         success: true,
         tools,
       };
-    });
+    }, 25000, signal);
   }
 
   private async callSseTool(
@@ -392,6 +401,9 @@ export class McpClientService {
   ): Promise<T> {
     const cmd = srv.command?.trim();
     if (!cmd) throw new Error('Stdio 启动命令不能为空');
+    if (externalSignal?.aborted) {
+      throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
+    }
 
     return new Promise<T>((resolve, reject) => {
       const child = spawn(cmd, srv.args || [], {
@@ -406,16 +418,23 @@ export class McpClientService {
       let rpcId = 1;
       let stdoutBuf = '';
 
-      const timer = setTimeout(() => {
+      let timer: ReturnType<typeof setTimeout>;
+      const abortHandler = () => {
+        cleanup();
+        child.kill();
+        reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        externalSignal?.removeEventListener('abort', abortHandler);
+      };
+      timer = setTimeout(() => {
+        cleanup();
         child.kill();
         reject(new Error(`Stdio MCP 进程响应超时 (${timeoutMs}ms)`));
       }, timeoutMs);
-      const abortHandler = () => {
-        child.kill();
-        clearTimeout(timer);
-        reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
-      };
       externalSignal?.addEventListener('abort', abortHandler, { once: true });
+      if (externalSignal?.aborted) abortHandler();
 
       child.stdout.on('data', (chunk) => {
         stdoutBuf += chunk.toString('utf-8');
@@ -441,8 +460,7 @@ export class McpClientService {
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
-        externalSignal?.removeEventListener('abort', abortHandler);
+        cleanup();
         reject(new Error(`启动 Stdio 进程失败: ${err.message}`));
       });
 
@@ -479,13 +497,11 @@ export class McpClientService {
           });
           await sendRpc('notifications/initialized', undefined, true).catch(() => {});
           const out = await action(sendRpc);
-          clearTimeout(timer);
-          externalSignal?.removeEventListener('abort', abortHandler);
+          cleanup();
           child.kill();
           resolve(out);
         } catch (e) {
-          clearTimeout(timer);
-          externalSignal?.removeEventListener('abort', abortHandler);
+          cleanup();
           child.kill();
           reject(e);
         }
@@ -493,7 +509,7 @@ export class McpClientService {
     });
   }
 
-  private async discoverStdioTools(srv: McpServerConfig): Promise<{
+  private async discoverStdioTools(srv: McpServerConfig, signal?: AbortSignal): Promise<{
     success: boolean;
     tools: McpToolItem[];
     error?: string;
@@ -508,7 +524,7 @@ export class McpClientService {
       })).filter((t: McpToolItem) => Boolean(t.name));
 
       return { success: true, tools };
-    });
+    }, 20000, signal);
   }
 
   private async callStdioTool(

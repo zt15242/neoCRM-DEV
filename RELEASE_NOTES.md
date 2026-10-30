@@ -1,5 +1,13 @@
-### 版本更新说明 (v1.8.24)
+### 版本更新说明 (v1.8.25)
 
-1. 修复 Salesforce 连接器登录后未注册到 Salesforce CLI 的问题，并校验 CLI 别名注册结果。
-2. 支持将带 refresh token 的 OAuth 会话及 client-credentials access token 注册到 CLI。
-3. 补充 Windows/macOS 常见 Salesforce CLI 安装路径探测，并修复 token 读取异常。
+#### 新功能
+
+1. 新增会议助手，支持录音或导入音频、OpenAI 语音转写、AI 会议总结、专业术语库、议题树、图表分析及 Markdown 导出。
+
+#### 修复与改进
+
+1. 修复 Salesforce OAuth 登录、切换账号及续期后同步 CLI 时 `resolveSalesforceAlias is not defined` 导致的会话保存失败。
+2. 增强对话停止行为：停止信号可中断自动上下文压缩、MCP 工具发现和 PTC 执行，并清理对应的运行状态。
+3. 修复多会话同时启动生成任务的问题，改为全局单任务状态并显示停止中的反馈。
+4. 改进会议音频转写兼容性、请求超时和错误提示。
+5. 注册应用版本 IPC，修复启动时 `app:getVersion` 未注册的日志错误。

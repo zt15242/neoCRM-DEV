@@ -1059,15 +1059,38 @@ export class DshToolService {
       const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
       const fn = new AsyncFunction("tools", "console", executableCode);
 
-      const execPromise = fn(toolsContext, customConsole);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`PTC 程序执行超时 (${timeoutMs}ms)`)), timeoutMs)
-      );
-      const abortPromise = new Promise((_, reject) => {
-        signal?.addEventListener('abort', () => reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' })), { once: true });
+      const guardedTools = new Proxy(toolsContext, {
+        get(target, property, receiver) {
+          const tool = Reflect.get(target, property, receiver);
+          if (typeof tool !== 'function') return tool;
+          return async (...args: any[]) => {
+            if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
+            const result = await tool(...args);
+            if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
+            return result;
+          };
+        },
       });
 
-      const result = await Promise.race([execPromise, timeoutPromise, abortPromise]);
+      let timeoutTimer: ReturnType<typeof setTimeout>;
+      let abortHandler: (() => void) | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutTimer = setTimeout(() => reject(new Error(`PTC 程序执行超时 (${timeoutMs}ms)`)), timeoutMs);
+      });
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (!signal) return;
+        abortHandler = () => reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
+        signal.addEventListener('abort', abortHandler, { once: true });
+        if (signal.aborted) abortHandler();
+      });
+
+      let result: any;
+      try {
+        result = await Promise.race([fn(guardedTools, customConsole), timeoutPromise, abortPromise]);
+      } finally {
+        clearTimeout(timeoutTimer!);
+        if (abortHandler) signal?.removeEventListener('abort', abortHandler);
+      }
       const duration = Date.now() - startTime;
       ptcJob.status = 'completed';
       ptcJob.exitCode = 0;
@@ -1080,16 +1103,17 @@ export class DshToolService {
         executionTimeMs: duration,
       };
     } catch (err: any) {
-      ptcJob.status = 'error';
-      ptcJob.exitCode = 1;
+      const wasAborted = signal?.aborted || err?.name === 'AbortError';
+      ptcJob.status = wasAborted ? 'killed' : 'error';
+      ptcJob.exitCode = wasAborted ? 130 : 1;
       ptcJob.endTime = Date.now();
-      ptcJob.outputBuffer = logs.join('\n') + `\n[Error]: ${err.message}`;
+      ptcJob.outputBuffer = logs.join('\n') + `\n[${wasAborted ? 'Stopped' : 'Error'}]: ${err.message}`;
 
       return {
         value: null,
         logs: logs.slice(-200),
         executionTimeMs: Date.now() - startTime,
-        error: `PTC 程序运行异常: ${err.message}`,
+        error: wasAborted ? 'PTC 程序已停止' : `PTC 程序运行异常: ${err.message}`,
       };
     }
   }

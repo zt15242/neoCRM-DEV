@@ -221,12 +221,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [quickApiKey, setQuickApiKey] = useState<string>('');
   const [savingQuickKey, setSavingQuickKey] = useState<boolean>(false);
 
-  // 多会话并发安全与流式状态字典：按 sessionId 独立记录正在生成的 { requestId, messageId }
-  const [activeStreams, setActiveStreams] = useState<Record<string, { requestId: string; messageId: string }>>({});
-  const activeStreamsRef = useRef<Record<string, { requestId: string; messageId: string }>>({});
+  // 全局单任务流式状态：按 sessionId 记录当前运行任务及停止状态
+  const [activeStreams, setActiveStreams] = useState<Record<string, { requestId: string; messageId: string; stopping?: boolean }>>({});
+  const activeStreamsRef = useRef<Record<string, { requestId: string; messageId: string; stopping?: boolean }>>({});
+  const startingStreamRef = useRef(false);
   activeStreamsRef.current = activeStreams;
   const currentSessionStream = activeSessionId ? activeStreams[activeSessionId] : null;
   const isCurrentSessionStreaming = Boolean(currentSessionStream);
+  const anyActiveStream = Object.values(activeStreams)[0] || null;
   const streamingMessageId = currentSessionStream?.messageId || null;
   const reasoningStartTimesRef = useRef<Record<string, number>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -354,6 +356,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
     const unsubscribe = window.neoApi.onAiStreamEvent((event) => {
       const { sessionId, messageId, type, delta, toolCall, error, compactionSummary } = event;
+      const streamState = activeStreamsRef.current[sessionId];
+      if (
+        streamState?.requestId === event.requestId &&
+        streamState.stopping &&
+        type !== 'done' &&
+        type !== 'error'
+      ) {
+        return;
+      }
 
       // 捕获后台自动压缩完成事件，实时更新会话中的 compactionSummary 并提醒用户
       if (type === 'compaction_done' && compactionSummary) {
@@ -548,11 +559,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     skillIds?: string[],
     mcpIds?: string[]
   ) => {
-    const currentStream = activeSessionId ? activeStreamsRef.current[activeSessionId] : null;
-    if (currentStream) {
-      showToast('info', '当前对话仍在运行，请先停止当前回复，或切换到其他对话继续。');
+    if (startingStreamRef.current || Object.keys(activeStreamsRef.current).length > 0) {
+      showToast('info', '已有对话正在运行，请等待完成或先停止当前回复。');
       return;
     }
+    startingStreamRef.current = true;
 
     let targetSession = activeSessionId ? sessionsRef.current.find((s) => s.id === activeSessionId) || null : null;
     const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
@@ -560,11 +571,19 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
     const effectiveSkills = (skillIds || activeSkillIds).filter((sid) => personalSkillIds.has(sid));
     if (isFlowEnginePreset(preset.id)) {
-      const latestLic = window.neoApi?.workflowGetLicenseStatus
-        ? await window.neoApi.workflowGetLicenseStatus()
-        : workflowLicenseStatus;
+      let latestLic: WorkflowLicenseStatus | null | undefined;
+      try {
+        latestLic = window.neoApi?.workflowGetLicenseStatus
+          ? await window.neoApi.workflowGetLicenseStatus()
+          : workflowLicenseStatus;
+      } catch (e: any) {
+        startingStreamRef.current = false;
+        showToast('error', `读取功能授权状态失败: ${e?.message || '未知错误'}`);
+        return;
+      }
       if (latestLic) setWorkflowLicenseStatus(latestLic);
       if (!latestLic?.isAuthorized) {
+        startingStreamRef.current = false;
         setIsLicenseModalOpen(true);
         const pId = preset.id as string;
         const featureName = pId === "neobi-architect" ? "BI分析部署大师" : pId === "nex-architect" ? "Nex页面扩展大师" : "流程引擎";
@@ -634,7 +653,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       updatedAt: Date.now(),
     };
 
-    const savedList = await window.neoApi.aiSaveSession(updatedSession);
+    let savedList: AiChatSession[];
+    try {
+      savedList = await window.neoApi.aiSaveSession(updatedSession);
+    } catch (e: any) {
+      startingStreamRef.current = false;
+      showToast('error', `保存对话失败: ${e?.message || '未知错误'}`);
+      return;
+    }
     setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
     setActiveSessionId(updatedSession.id);
 
@@ -647,43 +673,83 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       ...activeStreamsRef.current,
       [updatedSession.id]: { requestId, messageId: assistantMsgId },
     };
+    startingStreamRef.current = false;
     delete reasoningStartTimesRef.current[updatedSession.id];
 
     const effectiveMcpIds = mcpIds !== undefined ? mcpIds : activeMcpServerIds;
-    await window.neoApi.aiStartChatStream({
-      requestId,
-      sessionId: updatedSession.id,
-      messageId: assistantMsgId,
-      providerId: currentProvider?.id || currentProviderId,
-      modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
-      presetPrompt: preset.systemPrompt,
-      messages: [...cleanHistory, userMsg],
-      enableTools,
-      activeSkillIds: skillIds || activeSkillIds,
-      activeMcpServerIds: effectiveMcpIds,
-      compactionSummary: targetSession.compactionSummary,
-      projectPath: activeProject?.localPath,
-      mode: updatedSession.mode || currentSessionMode || 'standard',
-    });
+    try {
+      await window.neoApi.aiStartChatStream({
+        requestId,
+        sessionId: updatedSession.id,
+        messageId: assistantMsgId,
+        providerId: currentProvider?.id || currentProviderId,
+        modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
+        presetPrompt: preset.systemPrompt,
+        messages: [...cleanHistory, userMsg],
+        enableTools,
+        activeSkillIds: skillIds || activeSkillIds,
+        activeMcpServerIds: effectiveMcpIds,
+        compactionSummary: targetSession.compactionSummary,
+        projectPath: activeProject?.localPath,
+        mode: updatedSession.mode || currentSessionMode || 'standard',
+      });
+    } catch (e: any) {
+      const errorMessage = e?.message || '无法启动后台生成任务';
+      const failedSession: AiChatSession = {
+        ...updatedSession,
+        messages: updatedSession.messages.map((message) =>
+          message.id === assistantMsgId ? { ...message, error: errorMessage } : message
+        ),
+        updatedAt: Date.now(),
+      };
+      setSessions((prev) => prev.map((session) => session.id === failedSession.id ? failedSession : session));
+      window.neoApi.aiSaveSession(failedSession).catch(() => {});
+      setActiveStreams((prev) => {
+        if (prev[failedSession.id]?.requestId !== requestId) return prev;
+        const next = { ...prev };
+        delete next[failedSession.id];
+        activeStreamsRef.current = next;
+        return next;
+      });
+      delete reasoningStartTimesRef.current[failedSession.id];
+      showToast('error', `启动生成失败: ${errorMessage}`);
+    }
   };
 
   // 停止生成
   const handleStopStream = async (targetSessionId?: string) => {
-    const sId = targetSessionId || activeSessionId;
+    const currentStream = activeSessionId ? activeStreamsRef.current[activeSessionId] : null;
+    const sId = targetSessionId || (currentStream ? activeSessionId : Object.keys(activeStreamsRef.current)[0]);
     const stream = sId ? activeStreamsRef.current[sId] : null;
-    if (stream) {
-      try {
-        await window.neoApi.aiAbortChatStream(stream.requestId);
-      } finally {
+    if (!sId || !stream || stream.stopping) return;
+
+    const stoppingStreams = {
+      ...activeStreamsRef.current,
+      [sId]: { ...stream, stopping: true },
+    };
+    activeStreamsRef.current = stoppingStreams;
+    setActiveStreams(stoppingStreams);
+
+    try {
+      const accepted = await window.neoApi.aiAbortChatStream(stream.requestId);
+      if (!accepted) {
         setActiveStreams((prev) => {
-          if (!sId || prev[sId]?.requestId !== stream.requestId) return prev;
+          if (prev[sId]?.requestId !== stream.requestId) return prev;
           const next = { ...prev };
           delete next[sId];
           activeStreamsRef.current = next;
           return next;
         });
-        if (sId) delete reasoningStartTimesRef.current[sId];
+        delete reasoningStartTimesRef.current[sId];
       }
+    } catch (e: any) {
+      setActiveStreams((prev) => {
+        if (prev[sId]?.requestId !== stream.requestId) return prev;
+        const next = { ...prev, [sId]: { ...stream, stopping: false } };
+        activeStreamsRef.current = next;
+        return next;
+      });
+      showToast('error', `停止生成失败: ${e?.message || '无法联系后台任务'}`);
     }
   };
 
@@ -1039,7 +1105,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         <div className="p-3.5 bg-transparent shrink-0">
           <div className="max-w-3xl mx-auto">
             <AiInputComposer
-              isStreaming={isCurrentSessionStreaming}
+              isStreaming={Boolean(anyActiveStream)}
+              isStopping={Boolean(anyActiveStream?.stopping)}
               onSend={handleSendMessage}
               onStop={handleStopStream}
               entityRefs={entityRefs}

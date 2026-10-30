@@ -21,6 +21,7 @@ import { WorkBuddyService } from './services/workbuddyService';
 import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { EmailService } from './services/emailService';
+import { MeetingService } from './services/meetingService';
 import { WorkspaceService } from './services/workspaceService';
 import { configurePackagedEsbuildBinary } from './services/esbuildRuntime';
 import { FeishuService } from './services/feishuService';
@@ -69,6 +70,7 @@ const nexService = new NexService(metadataService);
 const workbuddyService = new WorkBuddyService();
 aiService.setWorkBuddyService(workbuddyService);
 const emailService = new EmailService(aiService);
+const meetingService = new MeetingService(aiService);
 const projectService = new ProjectService();
 const workspaceService = new WorkspaceService(sessionStore, dataService, emailService, metadataService, projectService);
 aiService.setWorkspaceService(workspaceService);
@@ -351,6 +353,7 @@ ipcMain.handle('app:openDesigner', async (_, type: 'web' | 'h5') => {
 
 ipcMain.handle('shell:openExternal', async (_, url: string) => shell.openExternal(url));
 ipcMain.handle('app:getPlatform', async () => process.platform);
+ipcMain.handle('app:getVersion', async () => app.getVersion());
 
 
 // ================= 软件运行日志管理 =================
@@ -546,9 +549,19 @@ ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => aiService.del
 ipcMain.handle('ai:clearSessions', async () => aiService.clearSessions());
 
 ipcMain.handle('ai:startChatStream', async (_, params) => {
-  aiService.startChatStream(params, (event) => {
+  void aiService.startChatStream(params, (event) => {
     if (win && !win.isDestroyed()) {
       win.webContents.send('ai:streamEvent', event);
+    }
+  }).catch((err: any) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('ai:streamEvent', {
+        requestId: params.requestId,
+        sessionId: params.sessionId,
+        messageId: params.messageId,
+        type: err?.name === 'AbortError' ? 'done' : 'error',
+        error: err?.name === 'AbortError' ? undefined : err?.message || '对话生成异常中断',
+      });
     }
   });
   return true;
@@ -887,4 +900,29 @@ ipcMain.handle('feishu:getSettings', async () => feishuService.getSettings());
 ipcMain.handle('feishu:addBot', async (_, settings) => feishuService.addBot(settings));
 ipcMain.handle('feishu:removeBot', async (_, botId: string) => feishuService.removeBot(botId));
 ipcMain.handle('feishu:testMessage', async (_, botId: string) => feishuService.testMessage(botId));
+
+// ================= 飞书妙计风格会议助手 (Meeting Copilot & Whisper Transcription) =================
+ipcMain.handle('meeting:getMeetings', async () => meetingService.getMeetings());
+ipcMain.handle('meeting:getMeeting', async (_, id: string) => meetingService.getMeetingById(id));
+ipcMain.handle('meeting:saveMeeting', async (_, meeting) => meetingService.saveMeeting(meeting));
+ipcMain.handle('meeting:deleteMeeting', async (_, id: string) => meetingService.deleteMeeting(id));
+ipcMain.handle('meeting:selectAudioFile', async () => meetingService.selectAudioFile(win));
+ipcMain.handle('meeting:saveRecordedAudio', async (_, fileName: string, buffer: ArrayBuffer) =>
+  meetingService.saveRecordedAudio(fileName, Buffer.from(buffer))
+);
+ipcMain.handle('meeting:getAudioDataUrl', async (_, filePath: string) => meetingService.getAudioDataUrl(filePath));
+ipcMain.handle('meeting:transcribeAudio', async (_, meetingId: string, options?: any) =>
+  meetingService.transcribeAudio(meetingId, options)
+);
+ipcMain.handle('meeting:summarizeMeeting', async (_, meetingId: string, options?: any) =>
+  meetingService.summarizeMeeting(meetingId, options)
+);
+ipcMain.handle('meeting:getGlossary', async () => meetingService.getGlossary());
+ipcMain.handle('meeting:saveGlossaryTerm', async (_, term) => meetingService.saveGlossaryTerm(term));
+ipcMain.handle('meeting:deleteGlossaryTerm', async (_, termId: string) => meetingService.deleteGlossaryTerm(termId));
+ipcMain.handle('meeting:resetGlossary', async () => meetingService.resetGlossary());
+ipcMain.handle('meeting:getSettings', async () => meetingService.getSettings());
+ipcMain.handle('meeting:saveSettings', async (_, settings) => meetingService.saveSettings(settings));
+ipcMain.handle('meeting:exportMarkdown', async (_, meetingId: string) => meetingService.exportMeetingMarkdown(meetingId));
+
 setInterval(() => { void feishuService.runScheduler(); }, 60_000);

@@ -37,7 +37,8 @@ import {
   Unlock,
   Activity,
   GitCommit,
-  Zap
+  Zap,
+  LoaderCircle
 } from 'lucide-react';
 import { AiSessionMode } from '../../../shared/types';
 import { 
@@ -82,6 +83,7 @@ interface ComposerContext {
 
 interface AiInputComposerProps {
   isStreaming: boolean;
+  isStopping?: boolean;
   onSend: (
     text: string, 
     entityRefs?: AiContextEntityRef[], 
@@ -129,6 +131,7 @@ interface AiInputComposerProps {
 
 export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   isStreaming,
+  isStopping = false,
   onSend,
   onStop,
   entityRefs,
@@ -1300,11 +1303,18 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           {/* Codex 风格纯黑圆形发送按钮 (带向上箭头) */}
           {isStreaming ? (
             <button
+              type="button"
               onClick={onStop}
-              className="w-8 h-8 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-all shadow-xs cursor-pointer"
-              title="停止生成"
+              disabled={isStopping}
+              className="w-8 h-8 rounded-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-400 text-white flex items-center justify-center transition-all shadow-xs cursor-pointer disabled:cursor-wait"
+              title={isStopping ? '正在停止生成' : '停止生成'}
+              aria-label={isStopping ? '正在停止生成' : '停止生成'}
             >
-              <Square className="w-3.5 h-3.5 fill-current" />
+              {isStopping ? (
+                <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Square className="w-3.5 h-3.5 fill-current" />
+              )}
             </button>
           ) : (
             <button

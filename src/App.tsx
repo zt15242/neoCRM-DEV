@@ -8,6 +8,7 @@ import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
 import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
 import { MailClientView } from './components/mail/MailClientView';
+import { MeetingAssistantView } from './components/meeting/MeetingAssistantView';
 import { WorkspacePageView } from './components/workspace/WorkspacePageView';
 import { SettingsManager, SettingsSubTab } from './components/settings/SettingsManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
@@ -604,6 +605,8 @@ export const App: React.FC = () => {
                   ? '智能邮件中心 (Foxmail)'
                   : activeTab === 'workspace'
                   ? '自定义工作台'
+                  : activeTab === 'meeting'
+                  ? '会议助手 (飞书妙计级)'
                   : '数据中心 (DML/SQL)'}
               </span>
             </div>
@@ -752,6 +755,14 @@ export const App: React.FC = () => {
         {activeTab === 'mail' && (
           <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
             <MailClientView showToast={showToast} />
+          </div>
+        )}
+
+
+        {/* Tab 6: 飞书妙计风格会议助手与 AI 转写/语艺/图表 */}
+        {activeTab === 'meeting' && (
+          <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
+            <MeetingAssistantView showToast={showToast} />
           </div>
         )}
 

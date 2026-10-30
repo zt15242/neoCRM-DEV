@@ -5,6 +5,7 @@ import os from 'node:os';
 import { app } from 'electron';
 import { AccountRecord, CliSyncResult, NeoEnvironment, SalesforceCliSyncResult, SessionState, TokenData } from '../types';
 import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
+import { resolveSalesforceAlias } from './salesforceService';
 
 export class SessionStore {
   private getStoragePath(): string {

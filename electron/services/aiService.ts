@@ -486,7 +486,14 @@ export class AiService {
 
   // ================= 上下文长对话压缩 (Context Compaction) =================
 
-  public async compactSession(sessionId: string): Promise<AiChatSession | null> {
+  public async compactSession(sessionId: string, signal?: AbortSignal): Promise<AiChatSession | null> {
+    const throwIfAborted = () => {
+      if (signal?.aborted) {
+        throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
+      }
+    };
+    throwIfAborted();
+
     const sessions = this.getSessions();
     const session = sessions.find((s) => s.id === sessionId);
     if (!session || session.messages.length <= 4) {
@@ -603,6 +610,7 @@ ${dialogHistoryText}`;
 
     if (provider.apiKey?.trim()) {
       try {
+        throwIfAborted();
         const res = await axios.post(
           apiEndpoint,
           {
@@ -617,10 +625,13 @@ ${dialogHistoryText}`;
               Authorization: `Bearer ${provider.apiKey.trim()}`,
             },
             timeout: 35000,
+            signal,
           }
         );
+        throwIfAborted();
         summaryText = res.data?.choices?.[0]?.message?.content || "";
       } catch (err: any) {
+        if (signal?.aborted || err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') throw err;
         console.warn("[DSH Compaction] 主模型总结接口超时或异常:", err.message);
       }
     }
@@ -628,6 +639,7 @@ ${dialogHistoryText}`;
     // 硅基流动 DeepSeek-V3 快速灾备
     if (!summaryText.trim() && BUILTIN_SILICONFLOW_KEY && provider.apiKey !== BUILTIN_SILICONFLOW_KEY) {
       try {
+        throwIfAborted();
         console.log("[DSH Compaction] 启动硅基流动 DeepSeek-V3 兜底生成结构化 Checkpoint...");
         const sfRes = await axios.post(
           "https://api.siliconflow.cn/v1/chat/completions",
@@ -643,10 +655,13 @@ ${dialogHistoryText}`;
               Authorization: `Bearer ${BUILTIN_SILICONFLOW_KEY}`,
             },
             timeout: 30000,
+            signal,
           }
         );
+        throwIfAborted();
         summaryText = sfRes.data?.choices?.[0]?.message?.content || "";
       } catch (sfErr: any) {
+        if (signal?.aborted || sfErr?.name === 'AbortError' || sfErr?.code === 'ERR_CANCELED') throw sfErr;
         console.warn("[DSH Compaction] 硅基流动备用总结异常:", sfErr.message);
       }
     }
@@ -691,6 +706,7 @@ ${dialogHistoryText}`;
 - 遵循 DeepSeek Harness 自主工程落地与沙箱安全规范，严格核对真实字段`;
     }
 
+    throwIfAborted();
     session.compactionSummary = {
       originalMessageCount: messagesToCompact.length,
       summary: summaryText.trim(),
@@ -988,8 +1004,7 @@ ${dialogHistoryText}`;
   public abortChatStream(requestId: string): boolean {
     const controller = this.activeControllers.get(requestId);
     if (controller) {
-      controller.abort();
-      this.activeControllers.delete(requestId);
+      if (!controller.signal.aborted) controller.abort();
       return true;
     }
     return false;
@@ -1020,6 +1035,11 @@ ${dialogHistoryText}`;
     const previousController = this.activeControllers.get(requestId);
     previousController?.abort();
     this.activeControllers.set(requestId, controller);
+    const cleanupController = () => {
+      if (this.activeControllers.get(requestId) === controller) {
+        this.activeControllers.delete(requestId);
+      }
+    };
     const throwIfAborted = () => {
       if (controller.signal.aborted) {
         const error = new Error('对话已停止');
@@ -1071,7 +1091,7 @@ ${dialogHistoryText}`;
         console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${messages.length} 条 (真实有效字符: ${totalEffectiveChars})，正在执行结构化记忆自动压缩...`);
         // 后台静默提炼 DSH 8 节工程 Checkpoint，通过 compaction_done 事件安全通知前端卡片，绝不污染正文
 
-        const compacted = await this.compactSession(sessionId);
+        const compacted = await this.compactSession(sessionId, controller.signal);
         if (compacted?.compactionSummary) {
           currentCompactionSummary = compacted.compactionSummary;
           sendEvent({
@@ -1085,6 +1105,11 @@ ${dialogHistoryText}`;
         }
       }
     } catch (compactErr: any) {
+      if (controller.signal.aborted || compactErr?.name === 'AbortError' || compactErr?.code === 'ERR_CANCELED') {
+        sendEvent({ requestId, sessionId, messageId, type: 'done' });
+        cleanupController();
+        return;
+      }
       console.warn("[DSH Auto-Compaction] 自动压缩过程提示:", compactErr.message);
     }
 
@@ -1097,6 +1122,7 @@ ${dialogHistoryText}`;
         type: 'error',
         error: '未找到选定的模型供应商，请前往设置配置',
       });
+      cleanupController();
       return;
     }
 
@@ -1108,6 +1134,7 @@ ${dialogHistoryText}`;
         type: 'error',
         error: `供应商 [${provider.name}] 尚未配置 API Key，请在顶部【系统设置】中完成配置。`,
       });
+      cleanupController();
       return;
     }
 
@@ -1137,12 +1164,15 @@ ${dialogHistoryText}`;
           (srv.tools.length === 1 && srv.tools[0].name.endsWith("_invoke") && !srv.tools[0].inputSchema);
         if (hasOnlyDefault) {
           try {
-            const discoverRes = await this.mcpClientService.discoverTools(srv);
+            const discoverRes = await this.mcpClientService.discoverTools(srv, controller.signal);
+            throwIfAborted();
             if (discoverRes.success && discoverRes.tools.length > 0) {
               srv.tools = discoverRes.tools;
               this.saveMcpServer(srv);
             }
-          } catch {}
+          } catch (discoverErr) {
+            if (controller.signal.aborted) throw discoverErr;
+          }
         }
       }
 
@@ -1186,6 +1216,7 @@ ${dialogHistoryText}`;
             type: "error",
             error: `🔒 ${featureName}已上锁：${lockStatus.message || "请先输入本机专属加密密码完成设备激活"}`,
           });
+          cleanupController();
           return;
         }
       }
@@ -2349,9 +2380,7 @@ ${safeToolDataContext}
         error: err.message || '对话生成异常中断',
       });
     } finally {
-      if (this.activeControllers.get(requestId) === controller) {
-        this.activeControllers.delete(requestId);
-      }
+      cleanupController();
     }
   }
 

@@ -210,6 +210,24 @@ export const neoApi = {
   feishuAddBot: (settings: { name: string; webhookUrl: string }) => ipcRenderer.invoke('feishu:addBot', settings),
   feishuRemoveBot: (botId: string) => ipcRenderer.invoke('feishu:removeBot', botId),
   feishuTestMessage: (botId: string) => ipcRenderer.invoke('feishu:testMessage', botId),
+  // 飞书妙计风格会议助手
+  meetingGetMeetings: () => ipcRenderer.invoke('meeting:getMeetings'),
+  meetingGetMeeting: (id: string) => ipcRenderer.invoke('meeting:getMeeting', id),
+  meetingSaveMeeting: (meeting: any) => ipcRenderer.invoke('meeting:saveMeeting', meeting),
+  meetingDeleteMeeting: (id: string) => ipcRenderer.invoke('meeting:deleteMeeting', id),
+  meetingSelectAudioFile: () => ipcRenderer.invoke('meeting:selectAudioFile'),
+  meetingSaveRecordedAudio: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke('meeting:saveRecordedAudio', fileName, buffer),
+  meetingGetAudioDataUrl: (filePath: string) => ipcRenderer.invoke('meeting:getAudioDataUrl', filePath),
+  meetingTranscribeAudio: (meetingId: string, options?: any) => ipcRenderer.invoke('meeting:transcribeAudio', meetingId, options),
+  meetingSummarizeMeeting: (meetingId: string, options?: any) => ipcRenderer.invoke('meeting:summarizeMeeting', meetingId, options),
+  meetingGetGlossary: () => ipcRenderer.invoke('meeting:getGlossary'),
+  meetingSaveGlossaryTerm: (term: any) => ipcRenderer.invoke('meeting:saveGlossaryTerm', term),
+  meetingDeleteGlossaryTerm: (termId: string) => ipcRenderer.invoke('meeting:deleteGlossaryTerm', termId),
+  meetingResetGlossary: () => ipcRenderer.invoke('meeting:resetGlossary'),
+  meetingGetSettings: () => ipcRenderer.invoke('meeting:getSettings'),
+  meetingSaveSettings: (settings: any) => ipcRenderer.invoke('meeting:saveSettings', settings),
+  meetingExportMarkdown: (meetingId: string) => ipcRenderer.invoke('meeting:exportMarkdown', meetingId),
+
 
   onAiStreamEvent: (callback: (event: any) => void) => {
     const handler = (_: any, data: any) => callback(data);
