@@ -273,7 +273,7 @@ export class SessionStore {
         const instanceHost = new URL(instanceUrl).host;
         const sfdxAuthUrl = `force://${env.clientId}:${env.clientSecret || ''}:${tokenData.refresh_token}@${instanceHost}`;
         await this.runSalesforceCli([
-          'org', 'login', 'sfdx-url', '--sfdx-url-stdin', '--alias', alias, '--set-default', '--json',
+          'org', 'login', 'sfdx-url', '--alias', alias, '--set-default', '--json', '--sfdx-url-stdin',
         ], `${sfdxAuthUrl}\n`);
       } else if (tokenData.access_token) {
         // Client Credentials grants have no refresh token; register the current token without writing it to disk.
