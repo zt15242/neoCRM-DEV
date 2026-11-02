@@ -298,6 +298,7 @@ export const App: React.FC = () => {
     setLoginStatusText('正在呼起应用内嵌安全登录窗口...');
     try {
       const newSession = await window.neoApi.loginWithEmbeddedWindow(selectedEnvId);
+      if (!newSession) return;
       setSession(newSession);
       showSessionLoginResult(newSession, '登录授权成功！');
       const history = await window.neoApi.getAccountHistory();

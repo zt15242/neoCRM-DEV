@@ -85,6 +85,19 @@ export function shouldRetryWithoutVerboseJson(error: any): boolean {
   return /verbose_json|response[_ ]format/i.test(detail);
 }
 
+const TRANSIENT_TRANSCRIPTION_STATUSES = new Set([502, 503, 504, 524]);
+
+/** 网关抖动或连接中断可以重试，鉴权、参数和格式错误不能重试。 */
+export function isRetryableTranscriptionError(error: any): boolean {
+  const status = Number(error?.response?.status);
+  if (TRANSIENT_TRANSCRIPTION_STATUSES.has(status)) return true;
+  return ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'ENETRESET', 'EAI_AGAIN'].includes(error?.code);
+}
+
+export function getTranscriptionRetryDelayMs(retryIndex: number): number {
+  return Math.min(8000, 1500 * Math.pow(2, Math.max(0, retryIndex)));
+}
+
 export function getTranscriptionErrorMessage(error: any, timeoutMs: number): string {
   if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT') {
     return `转写接口请求超时（${Math.round(timeoutMs / 1000)} 秒）。请检查文件时长、网络和转写服务状态后重试。`;
@@ -96,6 +109,9 @@ export function getTranscriptionErrorMessage(error: any, timeoutMs: number): str
     ? body
     : body?.error?.message || body?.message || body?.msg || error?.message;
   const safeDetail = String(detail || '未知接口错误').replace(/\s+/g, ' ').slice(0, 500);
+  if (TRANSIENT_TRANSCRIPTION_STATUSES.has(Number(response?.status))) {
+    return `转写服务网关暂时超时（HTTP ${response.status}）。音频可能较长或上游服务繁忙，请稍后重试；系统已自动完成有限次数重试。`;
+  }
   return response?.status
     ? `转写接口返回 HTTP ${response.status}：${safeDetail}`
     : `转写接口请求失败：${safeDetail}`;

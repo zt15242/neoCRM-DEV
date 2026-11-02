@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Mic,
   Upload,
@@ -38,6 +38,7 @@ import { MeetingTopicTreePane } from './MeetingTopicTreePane';
 import { MeetingGlossaryModal } from './MeetingGlossaryModal';
 import { MeetingRecordModal } from './MeetingRecordModal';
 import { MeetingSettingsModal } from './MeetingSettingsModal';
+import { MeetingAudioProgress, type AudioProcessingState } from './MeetingAudioProgress';
 
 interface MeetingAssistantViewProps {
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
@@ -56,6 +57,11 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [audioProcessingByMeeting, setAudioProcessingByMeeting] = useState<Record<string, AudioProcessingState>>({});
+  const liveSummaryTimerRef = useRef<any>(null);
+  const liveSummaryBusyRef = useRef(false);
+  const liveSummaryPendingRef = useRef<string | null>(null);
+  const liveSummaryTaskRef = useRef<Promise<void> | null>(null);
 
   // 弹窗状态
   const [showRecordModal, setShowRecordModal] = useState(false);
@@ -104,17 +110,51 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
     loadGlossary();
   }, [loadMeetings, loadGlossary]);
 
+  useEffect(() => {
+    return () => {
+      if (liveSummaryTimerRef.current) clearTimeout(liveSummaryTimerRef.current);
+      liveSummaryPendingRef.current = null;
+    };
+  }, []);
+
   const activeMeeting = meetings.find((m) => m.id === activeMeetingId);
+  const audioProcessing = audioProcessingByMeeting[activeMeetingId]
+    || Object.values(audioProcessingByMeeting).at(-1);
+
+  const updateAudioProcessing = (meetingId: string, update: Partial<AudioProcessingState>) => {
+    setAudioProcessingByMeeting((current) => ({
+      ...current,
+      [meetingId]: {
+        ...(current[meetingId] || {
+          meetingId,
+          stage: 0,
+          startedAt: Date.now(),
+          label: '',
+          tone: 'info',
+        }),
+        ...update,
+        ...(update.tone ? { finishedAt: update.tone === 'info' ? undefined : Date.now() } : {}),
+      },
+    }));
+  };
 
   // 2. 选择本地音频文件并创建会议
   const handleImportAudioFile = async () => {
     if (!window.neoApi?.meetingSelectAudioFile) return;
+    let meetingId: string | undefined;
     try {
       const fileInfo = await window.neoApi.meetingSelectAudioFile();
       if (!fileInfo) return;
 
+      meetingId = `meeting_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      updateAudioProcessing(meetingId, {
+        fileName: fileInfo.fileName,
+        stage: 0,
+        label: '正在准备提交音频...',
+        tone: 'info',
+      });
       const newMeeting: MeetingRecord = {
-        id: `meeting_${Date.now()}`,
+        id: meetingId,
         title: fileInfo.fileName.replace(/\.[^/.]+$/, '') || '新建导入会议',
         date: Date.now(),
         duration: 0,
@@ -131,24 +171,107 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       };
 
       if (window.neoApi?.meetingSaveMeeting) {
+        updateAudioProcessing(meetingId, { label: '正在建立转写任务...' });
         const saved = await window.neoApi.meetingSaveMeeting(newMeeting);
         setMeetings((prev) => [saved, ...prev]);
         setActiveMeetingId(saved.id);
         showToast?.('success', `已成功导入会议音频: ${fileInfo.fileName}`);
 
         // 自动触发转写
-        triggerTranscription(saved.id);
+        void triggerTranscription(saved.id);
+      } else {
+        throw new Error('未检测到会议存储接口');
       }
     } catch (err: any) {
+      if (meetingId) updateAudioProcessing(meetingId, {
+        label: `音频处理失败：${err?.message || '无法提交音频'}`, tone: 'error',
+      });
       showToast?.('error', `导入音频失败: ${err.message}`);
     }
   };
 
-  // 3. 完成麦克风录音并保存
+  // 3. 开始麦克风录音：先创建空会议，实时片段直接追加到这条记录
+  const handleRecordingStarted = async (title: string): Promise<string> => {
+    if (!window.neoApi?.meetingSaveMeeting) throw new Error('未检测到会议存储接口');
+    const id = `meeting_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const now = Date.now();
+    const meeting: MeetingRecord = {
+      id,
+      title: title || '现场麦克风录音会议',
+      date: now,
+      duration: 0,
+      status: 'transcribing',
+      statusMessage: '实时录音中，等待首段转写...',
+      speakers: [],
+      segments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const saved = await window.neoApi.meetingSaveMeeting(meeting);
+    setMeetings((prev) => [saved, ...prev.filter((item) => item.id !== saved.id)]);
+    setActiveMeetingId(saved.id);
+    return saved.id;
+  };
+
+  const flushLiveSummary = async () => {
+    if (liveSummaryBusyRef.current) return;
+    const meetingId = liveSummaryPendingRef.current;
+    if (!meetingId) return;
+    liveSummaryPendingRef.current = null;
+    liveSummaryBusyRef.current = true;
+    const task = (async () => {
+      await triggerSummarize(meetingId, { live: true, silent: true });
+    })();
+    liveSummaryTaskRef.current = task;
+    try {
+      await task;
+    } finally {
+      if (liveSummaryTaskRef.current === task) liveSummaryTaskRef.current = null;
+      liveSummaryBusyRef.current = false;
+      if (liveSummaryPendingRef.current) {
+        if (liveSummaryTimerRef.current) clearTimeout(liveSummaryTimerRef.current);
+        liveSummaryTimerRef.current = setTimeout(() => void flushLiveSummary(), 5000);
+      }
+    }
+  };
+
+  const scheduleLiveSummary = (meetingId: string) => {
+    liveSummaryPendingRef.current = meetingId;
+    if (liveSummaryTimerRef.current) clearTimeout(liveSummaryTimerRef.current);
+    liveSummaryTimerRef.current = setTimeout(() => void flushLiveSummary(), 7000);
+  };
+
+  // 4. 接收录音过程中的独立音频片段，转写完成后立即追加到逐字稿
+  const handleLiveChunk = async (
+    meetingId: string,
+    audioBuffer: ArrayBuffer,
+    fileName: string,
+    startTimeSec: number,
+  ) => {
+    if (!window.neoApi?.meetingSaveRecordedAudio || !window.neoApi?.meetingTranscribeAudioChunk) {
+      throw new Error('未检测到实时录音转写接口');
+    }
+    let savedAudio: { filePath: string } | undefined;
+    try {
+      savedAudio = await window.neoApi.meetingSaveRecordedAudio(fileName, audioBuffer);
+      const updated = await window.neoApi.meetingTranscribeAudioChunk(meetingId, savedAudio.filePath, startTimeSec);
+      setMeetings((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      scheduleLiveSummary(meetingId);
+    } catch (err: any) {
+      console.warn('[MeetingAssistantView] 实时片段转写失败:', err);
+      showToast?.('error', `实时转写失败: ${err?.message || '转写服务异常'}`);
+    } finally {
+      if (savedAudio?.filePath) await window.neoApi.meetingDeleteAudioFile?.(savedAudio.filePath);
+    }
+  };
+
+  // 5. 完成麦克风录音并保存完整音频
   const handleFinishRecording = async (
     title: string,
     audioBuffer: ArrayBuffer,
-    fileName: string
+    fileName: string,
+    meetingId?: string,
+    durationSec?: number,
   ) => {
     try {
       if (!window.neoApi?.meetingSaveRecordedAudio || !window.neoApi?.meetingSaveMeeting) {
@@ -156,40 +279,68 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       }
 
       const savedAudio = await window.neoApi.meetingSaveRecordedAudio(fileName, audioBuffer);
-
-      const newMeeting: MeetingRecord = {
-        id: `meeting_${Date.now()}`,
+      const existing = meetingId
+        ? await window.neoApi.meetingGetMeeting?.(meetingId) || meetings.find((item) => item.id === meetingId)
+        : null;
+      const now = Date.now();
+      const baseMeeting: MeetingRecord = existing || {
+        id: meetingId || `meeting_${now}`,
         title: title || '现场麦克风录音会议',
-        date: Date.now(),
+        date: now,
         duration: 0,
+        status: 'transcribing',
+        speakers: [],
+        segments: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      const saved = await window.neoApi.meetingSaveMeeting({
+        ...baseMeeting,
+        title: title || baseMeeting.title,
+        duration: Math.max(baseMeeting.duration || 0, durationSec || 0),
         audioPath: savedAudio.filePath,
         audioFileName: savedAudio.fileName,
         audioFileSize: savedAudio.fileSize,
         audioDataUrl: savedAudio.dataUrl,
-        status: 'idle',
-        speakers: [],
-        segments: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
-      const saved = await window.neoApi.meetingSaveMeeting(newMeeting);
-      setMeetings((prev) => [saved, ...prev]);
+        status: baseMeeting.segments.length > 0 ? 'transcribing' : 'idle',
+        statusMessage: baseMeeting.segments.length > 0 ? '录音结束，正在生成最终会议总结...' : '录音已保存，准备进行完整转写',
+      });
+      setMeetings((prev) => [saved, ...prev.filter((item) => item.id !== saved.id)]);
       setActiveMeetingId(saved.id);
       setShowRecordModal(false);
-      showToast?.('success', '现场录音已存储，正在开启 OpenAI 转写...');
+      showToast?.('success', saved.segments.length > 0 ? '现场录音已保存，正在更新最终会议总结...' : '现场录音已存储，正在开启完整转写...');
 
-      triggerTranscription(saved.id);
+      if (saved.segments.length > 0) {
+        if (liveSummaryTimerRef.current) clearTimeout(liveSummaryTimerRef.current);
+        liveSummaryPendingRef.current = null;
+        // 最终摘要必须排在正在执行的实时摘要之后，避免旧摘要覆盖最终结果。
+        if (liveSummaryTaskRef.current) await liveSummaryTaskRef.current;
+        await triggerSummarize(saved.id);
+      } else {
+        await triggerTranscription(saved.id);
+      }
     } catch (err: any) {
       showToast?.('error', `保存录音失败: ${err.message}`);
     }
   };
 
-  // 4. 触发已配置的语音转写服务
-  const triggerTranscription = async (meetingId?: string) => {
+  // 6. 触发已配置的语音转写服务
+  const triggerTranscription = async (meetingId?: string, options?: { summarize?: boolean }) => {
     const targetId = meetingId || activeMeetingId;
-    if (!targetId || !window.neoApi?.meetingTranscribeAudio) return;
+    if (!targetId) return;
+    if (!window.neoApi?.meetingTranscribeAudio) {
+      updateAudioProcessing(targetId, { label: '未检测到音频转写接口', tone: 'error' });
+      return;
+    }
 
+    const fileName = meetings.find((meeting) => meeting.id === targetId)?.audioFileName;
+    updateAudioProcessing(targetId, {
+      ...(fileName ? { fileName } : {}),
+      stage: 1,
+      startedAt: Date.now(),
+      label: '正在上传音频并转写...',
+      tone: 'info',
+    });
     setIsTranscribing(true);
     showToast?.('info', '正在通过已配置的转写服务识别音频...');
 
@@ -197,30 +348,61 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       const updated = await window.neoApi.meetingTranscribeAudio(targetId);
       setMeetings((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast?.('success', '音频转写完成，正在自动开启深度总结与语艺分析...');
-
-      // 转写完成后自动触发大模型总结与语艺分析
-      triggerSummarize(targetId);
+      updateAudioProcessing(targetId, { stage: 2, label: '转写完成，正在准备 AI 总结...', tone: 'info' });
+      if (options?.summarize !== false) {
+        await triggerSummarize(targetId);
+      } else {
+        updateAudioProcessing(targetId, { stage: 2, label: '音频转写已完成', tone: 'success' });
+      }
     } catch (err: any) {
+      updateAudioProcessing(targetId, { label: `转写失败：${err?.message || '转写服务异常'}`, tone: 'error' });
       showToast?.('error', `语音转写失败: ${err.message}`);
     } finally {
       setIsTranscribing(false);
     }
   };
 
-  // 5. 触发大模型会议总结与语艺分析
-  const triggerSummarize = async (meetingId?: string) => {
+  // 7. 触发大模型会议总结与语艺分析；实时更新使用防抖且保证串行
+  const triggerSummarize = async (meetingId?: string, options?: { live?: boolean; silent?: boolean }) => {
     const targetId = meetingId || activeMeetingId;
-    if (!targetId || !window.neoApi?.meetingSummarizeMeeting) return;
+    if (!targetId) return;
+    if (!window.neoApi?.meetingSummarizeMeeting) {
+      if (!options?.live) updateAudioProcessing(targetId, { stage: 2, label: '未检测到会议总结接口', tone: 'error' });
+      return;
+    }
 
+    if (!options?.live) {
+      setAudioProcessingByMeeting((current) => {
+        const previous = current[targetId];
+        return {
+          ...current,
+          [targetId]: {
+            meetingId: targetId,
+            fileName: previous?.fileName || meetings.find((meeting) => meeting.id === targetId)?.audioFileName,
+            stage: 2,
+            startedAt: previous?.tone === 'info' ? previous.startedAt : Date.now(),
+            label: '正在生成会议总结、待办与图表...',
+            tone: 'info',
+          },
+        };
+      });
+    }
     setIsSummarizing(true);
-    showToast?.('info', '大模型正在提炼会议决策、待办、语艺画像与图表...');
+    if (!options?.silent) showToast?.('info', options?.live ? '正在根据最新转写片段更新会议摘要...' : '大模型正在提炼会议决策、待办、语艺画像与图表...');
 
     try {
-      const updated = await window.neoApi.meetingSummarizeMeeting(targetId);
+      const updated = await window.neoApi.meetingSummarizeMeeting(targetId, { live: options?.live });
       setMeetings((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-      showToast?.('success', '智能纪要、语艺画像与飞书妙计图表全部生成完成！');
+      if (!options?.live) {
+        updateAudioProcessing(targetId, { stage: 3, label: '音频转写与会议分析已完成', tone: 'success' });
+      }
+      if (!options?.silent) showToast?.('success', '智能纪要、语艺画像与飞书妙计图表全部生成完成！');
     } catch (err: any) {
-      showToast?.('error', `大模型总结失败: ${err.message}`);
+      if (!options?.live) {
+        updateAudioProcessing(targetId, { label: `总结失败：${err?.message || 'AI 分析服务异常'}`, tone: 'error' });
+      }
+      if (!options?.silent) showToast?.('error', `大模型总结失败: ${err.message}`);
+      else console.warn('[MeetingAssistantView] 实时总结失败:', err);
     } finally {
       setIsSummarizing(false);
     }
@@ -416,6 +598,18 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
         </div>
       </div>
 
+      {audioProcessing && (
+        <MeetingAudioProgress
+          key={audioProcessing.meetingId}
+          processing={audioProcessing}
+          onDismiss={() => setAudioProcessingByMeeting((current) => {
+            const next = { ...current };
+            delete next[audioProcessing.meetingId];
+            return next;
+          })}
+        />
+      )}
+
       {/* 主体三栏布局 */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* 左侧：会议列表栏 */}
@@ -558,6 +752,11 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
                     </>
                   )}
                 </div>
+                {activeMeeting.statusMessage && (
+                  <div className="max-w-[min(70vw,720px)] truncate text-[11px] text-blue-600" title={activeMeeting.statusMessage}>
+                    {activeMeeting.statusMessage}
+                  </div>
+                )}
               </div>
 
               {/* 操作按钮 */}
@@ -780,6 +979,8 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       {showRecordModal && (
         <MeetingRecordModal
           onClose={() => setShowRecordModal(false)}
+          onRecordingStarted={handleRecordingStarted}
+          onLiveChunk={handleLiveChunk}
           onFinishRecording={handleFinishRecording}
           showToast={showToast}
         />

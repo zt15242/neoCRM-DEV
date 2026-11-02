@@ -66,7 +66,7 @@ declare global {
       testConnectivity: (url: string) => Promise<TestConnectionResult>;
 
       loginWithBrowser: (envId: string) => Promise<SessionState>;
-      loginWithEmbeddedWindow: (envId: string) => Promise<SessionState>;
+      loginWithEmbeddedWindow: (envId: string) => Promise<SessionState | null>;
       loginWithPassword: (envId: string, username: string, pass: string) => Promise<SessionState>;
       cancelLogin: () => Promise<boolean>;
       refreshToken: () => Promise<SessionState>;
@@ -358,8 +358,10 @@ declare global {
       meetingSelectAudioFile?: () => Promise<{ filePath: string; fileName: string; fileSize: number; dataUrl?: string } | null>;
       meetingSaveRecordedAudio?: (fileName: string, buffer: ArrayBuffer) => Promise<{ filePath: string; fileName: string; fileSize: number; dataUrl: string }>;
       meetingGetAudioDataUrl?: (filePath: string) => Promise<string>;
+      meetingDeleteAudioFile?: (filePath: string) => Promise<boolean>;
       meetingTranscribeAudio?: (meetingId: string, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingRecord>;
-      meetingSummarizeMeeting?: (meetingId: string, options?: { providerId?: string; modelId?: string }) => Promise<MeetingRecord>;
+      meetingTranscribeAudioChunk?: (meetingId: string, chunkPath: string, startTimeSec: number, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingRecord>;
+      meetingSummarizeMeeting?: (meetingId: string, options?: { providerId?: string; modelId?: string; live?: boolean }) => Promise<MeetingRecord>;
       meetingGetGlossary?: () => Promise<GlossaryTerm[]>;
       meetingSaveGlossaryTerm?: (term: Partial<GlossaryTerm>) => Promise<GlossaryTerm[]>;
       meetingDeleteGlossaryTerm?: (termId: string) => Promise<GlossaryTerm[]>;

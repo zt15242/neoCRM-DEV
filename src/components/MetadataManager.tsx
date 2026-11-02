@@ -52,7 +52,8 @@ export const MetadataManager: React.FC<MetadataManagerProps> = ({
     setIsReLoggingIn(true);
     try {
       if (session.environment.productType === 'salesforce') {
-        await window.neoApi.loginWithEmbeddedWindow(session.environment.id);
+        const newSession = await window.neoApi.loginWithEmbeddedWindow(session.environment.id);
+        if (!newSession) return;
       } else {
         await window.neoApi.loginWithBrowser(session.environment.id);
       }

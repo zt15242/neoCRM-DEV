@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { app, dialog, BrowserWindow } from 'electron';
 import axios from 'axios';
 import FormData from 'form-data';
@@ -29,11 +31,17 @@ import {
   getAudioMimeType,
   getTranscriptionEndpoint,
   getTranscriptionErrorMessage,
+  getTranscriptionRetryDelayMs,
   getTranscriptionTimeoutMs,
+  isRetryableTranscriptionError,
   isOfficialOpenAiEndpoint,
   shouldRetryWithoutVerboseJson,
   validateOpenAiAudioFile,
 } from './meetingTranscription';
+
+const execFileAsync = promisify(execFile);
+const TRANSCRIPTION_CHUNK_SECONDS = 60;
+const MAX_TRANSCRIPTION_ATTEMPTS = 3;
 
 /**
  * 飞书妙计风格会议助手服务
@@ -112,6 +120,57 @@ export class MeetingService {
     };
     fs.writeFileSync(this.getSettingsFilePath(), JSON.stringify(updated, null, 2), 'utf-8');
     return updated;
+  }
+
+  private async splitAudioForTranscription(audioPath: string, meetingId: string): Promise<string[]> {
+    const outputDir = path.join(
+      this.getDataDir(),
+      'meetings',
+      'transcription-chunks',
+      `${meetingId}_${Date.now()}`,
+    );
+    fs.mkdirSync(outputDir, { recursive: true });
+    const outputPattern = path.join(outputDir, 'chunk_%03d.mp3');
+    const ffmpegBinary = process.env.NEOCRM_FFMPEG_PATH || (process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+
+    try {
+      await execFileAsync(ffmpegBinary, [
+        '-y',
+        '-i', audioPath,
+        '-map', '0:a:0',
+        '-vn',
+        '-f', 'segment',
+        '-segment_time', String(TRANSCRIPTION_CHUNK_SECONDS),
+        '-reset_timestamps', '1',
+        '-c:a', 'libmp3lame',
+        '-b:a', '64k',
+        outputPattern,
+      ], {
+        windowsHide: true,
+        timeout: 180_000,
+        maxBuffer: 2 * 1024 * 1024,
+      });
+    } catch (err: any) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      console.warn('[MeetingService] 无法使用 ffmpeg 对音频分片:', err?.message || err);
+      return [];
+    }
+
+    const chunks = fs.readdirSync(outputDir)
+      .filter((name) => /^chunk_\d+\.mp3$/i.test(name))
+      .sort()
+      .map((name) => path.join(outputDir, name));
+    if (chunks.length < 2) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      return [];
+    }
+    return chunks;
+  }
+
+  private cleanupTranscriptionChunks(chunkPaths: string[]): void {
+    if (chunkPaths.length === 0) return;
+    const outputDir = path.dirname(chunkPaths[0]);
+    fs.rmSync(outputDir, { recursive: true, force: true });
   }
 
   // ==================== 专业术语库管理 ====================
@@ -346,6 +405,224 @@ export class MeetingService {
     }
   }
 
+  private getAudioTranscriptionConfig(options?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    language?: string;
+  }) {
+    const settings = this.getSettings();
+    let apiKey = (options?.apiKey || settings.apiKey || '').trim();
+    const baseUrl = (options?.baseUrl || settings.baseUrl || 'https://api.openai.com/v1').trim();
+    if (!apiKey && isOfficialOpenAiEndpoint(baseUrl)) {
+      const openAiProvider = this.aiService.getAiConfig().providers.find(
+        (provider) => provider.id === 'openai' && provider.enabled && provider.apiKey?.trim()
+      );
+      if (openAiProvider?.apiKey) apiKey = openAiProvider.apiKey.trim();
+    }
+
+    const model = options?.model || settings.model || 'gpt-transcribe';
+    const language = options?.language || settings.language || 'zh';
+    const promptText = settings.promptTerminologyEnabled && model === 'whisper-1'
+      ? this.buildWhisperPrompt()
+      : '';
+    const keywords = settings.promptTerminologyEnabled && model === 'gpt-transcribe'
+      ? this.getGlossary().filter((term) => term.enabled).map((term) => term.term).slice(0, 35)
+      : [];
+
+    return { apiKey, baseUrl, model, language, promptText, keywords };
+  }
+
+  private async requestAudioTranscriptionFile(
+    audioPath: string,
+    sourceFileName: string,
+    sourceSize: number,
+    config: ReturnType<MeetingService['getAudioTranscriptionConfig']>,
+    onRetry?: (message: string) => void,
+  ): Promise<any> {
+    if (!config.apiKey) throw new Error('未配置转写 API Key。请在「转写配置」中填写支持 OpenAI 音频转写接口的密钥。');
+    const endpoint = getTranscriptionEndpoint(config.baseUrl);
+    const requestTimeoutMs = getTranscriptionTimeoutMs(sourceSize);
+
+    const sendRequest = async (responseFormat?: 'verbose_json' | 'json') => {
+      const formData = new FormData();
+      formData.append('file', fs.createReadStream(audioPath), {
+        filename: sourceFileName,
+        contentType: getAudioMimeType(sourceFileName),
+        knownLength: sourceSize,
+      });
+      formData.append('model', config.model);
+      if (responseFormat) formData.append('response_format', responseFormat);
+      if (config.language && config.language !== 'auto') {
+        if (config.model === 'gpt-transcribe') formData.append('languages[]', config.language);
+        else formData.append('language', config.language);
+      }
+      if (config.promptText) formData.append('prompt', config.promptText);
+      for (const keyword of config.keywords) {
+        const cleanKeyword = keyword.replace(/[<>\r\n]/g, '').trim();
+        if (cleanKeyword) formData.append('keywords[]', cleanKeyword);
+      }
+
+      return axios.post(endpoint, formData, {
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          ...formData.getHeaders(),
+        },
+        timeout: requestTimeoutMs,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      });
+    };
+
+    for (let attempt = 0; attempt < MAX_TRANSCRIPTION_ATTEMPTS; attempt += 1) {
+      try {
+        const responseFormat = config.model === 'whisper-1' ? 'verbose_json' : undefined;
+        try {
+          return (await sendRequest(responseFormat)).data;
+        } catch (err: any) {
+          if (!shouldRetryWithoutVerboseJson(err)) throw err;
+          console.info('[MeetingService] 当前转写端点不支持 verbose_json，改用 json 响应格式重试');
+          return (await sendRequest('json')).data;
+        }
+      } catch (err: any) {
+        if (!isRetryableTranscriptionError(err) || attempt >= MAX_TRANSCRIPTION_ATTEMPTS - 1) throw err;
+        const delayMs = getTranscriptionRetryDelayMs(attempt);
+        const status = Number(err?.response?.status);
+        onRetry?.(`${status ? `HTTP ${status}` : '网络错误'}，${Math.ceil(delayMs / 1000)} 秒后重试...`);
+        console.warn(`[MeetingService] 实时片段转写暂时失败，${delayMs}ms 后重试`, err?.message || err);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    throw new Error('转写请求未完成');
+  }
+
+  private parseTranscriptionSegments(rawData: any, timeOffset = 0): {
+    segments: MeetingSegment[];
+    duration: number;
+  } {
+    const durationFromResponse = Number(rawData?.duration);
+    const rawSegments = Array.isArray(rawData?.segments) ? rawData.segments : [];
+    const speakerIds = new Map<string, number>();
+    const segments: MeetingSegment[] = rawSegments
+      .filter((seg: any) => typeof seg?.text === 'string' && seg.text.trim())
+      .map((seg: any, idx: number) => {
+        const text = seg.text.trim();
+        const speakerValue = seg.speaker_id ?? seg.speaker;
+        const speakerKey = speakerValue == null ? '' : String(speakerValue);
+        if (speakerKey && !speakerIds.has(speakerKey)) speakerIds.set(speakerKey, speakerIds.size + 1);
+        const speakerNum = speakerKey ? speakerIds.get(speakerKey)! : 1;
+        const start = Number(seg.start);
+        const end = Number(seg.end);
+        const startTime = timeOffset + (Number.isFinite(start) ? start : idx * 10);
+        const endTime = timeOffset + (Number.isFinite(end) && end > 0 ? end : (idx + 1) * 10);
+        return {
+          id: `seg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${idx}`,
+          speakerId: `spk_${speakerNum}`,
+          speakerName: `发言人 ${speakerNum}`,
+          startTime,
+          endTime,
+          text,
+          tone: 'neutral' as const,
+          toneLabel: '发言陈述',
+          matchedTerms: this.matchTermsInText(text),
+        };
+      });
+
+    if (segments.length === 0) {
+      const transcript = extractTranscriptionText(rawData);
+      if (transcript) {
+        let currentTime = timeOffset;
+        transcript
+          .split(/(?<=[。！？.!?；;\n])\s*/)
+          .map((sentence: string) => sentence.trim())
+          .filter(Boolean)
+          .forEach((text: string, idx: number) => {
+            const segmentDuration = Math.max(3, Math.round(text.length * 0.35));
+            segments.push({
+              id: `seg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${idx}`,
+              speakerId: 'spk_1',
+              speakerName: '发言人 1',
+              startTime: currentTime,
+              endTime: currentTime + segmentDuration,
+              text,
+              tone: 'neutral',
+              toneLabel: '发言陈述',
+              matchedTerms: this.matchTermsInText(text),
+            });
+            currentTime += segmentDuration;
+          });
+      }
+    }
+
+    const lastEnd = segments.reduce((max, segment) => Math.max(max, segment.endTime), timeOffset);
+    const responseDuration = Number.isFinite(durationFromResponse) && durationFromResponse > 0
+      ? timeOffset + durationFromResponse
+      : lastEnd;
+    return { segments, duration: responseDuration };
+  }
+
+  public async transcribeAudioChunk(
+    meetingId: string,
+    chunkPath: string,
+    startTimeSec: number,
+    options?: {
+      apiKey?: string;
+      baseUrl?: string;
+      model?: string;
+      language?: string;
+    },
+  ): Promise<MeetingRecord> {
+    const meeting = this.getMeetingById(meetingId);
+    if (!meeting) throw new Error(`未找到指定会议 [${meetingId}]`);
+    if (!chunkPath || !fs.existsSync(chunkPath)) throw new Error('实时音频片段不存在');
+
+    const stat = fs.statSync(chunkPath);
+    const sourceFileName = path.basename(chunkPath);
+    const config = this.getAudioTranscriptionConfig(options);
+    const validationError = validateOpenAiAudioFile(sourceFileName, stat.size, config.baseUrl);
+    if (validationError) throw new Error(validationError);
+
+    const rawData = await this.requestAudioTranscriptionFile(
+      chunkPath,
+      sourceFileName,
+      stat.size,
+      config,
+      (message) => {
+        meeting.status = 'transcribing';
+        meeting.statusMessage = `实时片段转写暂时不可用，${message}`;
+        this.saveMeeting(meeting);
+      },
+    );
+    const parsed = this.parseTranscriptionSegments(rawData, Math.max(0, Number(startTimeSec) || 0));
+    if (parsed.segments.length === 0) throw new Error('实时转写接口未返回有效文本');
+
+    const mergedSegments = [...meeting.segments, ...parsed.segments]
+      .sort((a, b) => a.startTime - b.startTime);
+    const allHitTerms = new Set<string>();
+    mergedSegments.forEach((segment) => segment.matchedTerms?.forEach((term) => allHitTerms.add(term.term)));
+    meeting.segments = mergedSegments;
+    meeting.speakers = this.calculateSpeakersFromSegments(mergedSegments);
+    meeting.duration = Math.max(meeting.duration || 0, Math.ceil(parsed.duration));
+    meeting.glossaryHitTerms = Array.from(allHitTerms);
+    meeting.status = 'transcribing';
+    meeting.statusMessage = `实时转写中，已完成 ${mergedSegments.length} 段发言`;
+    this.saveMeeting(meeting);
+    return meeting;
+  }
+
+  public deleteAudioFile(filePath: string): boolean {
+    if (!filePath) return false;
+    const audioRoot = path.resolve(this.getAudioStorageDir());
+    const target = path.resolve(filePath);
+    if (target !== audioRoot && !target.startsWith(`${audioRoot}${path.sep}`)) return false;
+    try {
+      if (fs.existsSync(target)) fs.unlinkSync(target);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ==================== OpenAI 语音转写 ====================
 
   /**
@@ -410,14 +687,17 @@ export class MeetingService {
 
         const endpoint = getTranscriptionEndpoint(baseUrl);
         requestTimeoutMs = getTranscriptionTimeoutMs(stat.size);
-        const mimeType = getAudioMimeType(fileName);
-
-        const sendRequest = async (responseFormat?: 'verbose_json' | 'json') => {
+        const sendRequest = async (
+          sourcePath: string,
+          sourceFileName: string,
+          sourceSize: number,
+          responseFormat?: 'verbose_json' | 'json',
+        ) => {
           const formData = new FormData();
-          formData.append('file', fs.createReadStream(meeting.audioPath!), {
-            filename: fileName,
-            contentType: mimeType,
-            knownLength: stat.size,
+          formData.append('file', fs.createReadStream(sourcePath), {
+            filename: sourceFileName,
+            contentType: getAudioMimeType(sourceFileName),
+            knownLength: sourceSize,
           });
           formData.append('model', model);
           if (responseFormat) formData.append('response_format', responseFormat);
@@ -442,21 +722,143 @@ export class MeetingService {
           });
         };
 
+        const requestTranscription = async (
+          sourcePath: string,
+          sourceFileName: string,
+          sourceSize: number,
+          statusPrefix = '转写服务',
+        ): Promise<any> => {
+          const timeoutMs = getTranscriptionTimeoutMs(sourceSize);
+          requestTimeoutMs = timeoutMs;
+          for (let attempt = 0; attempt < MAX_TRANSCRIPTION_ATTEMPTS; attempt += 1) {
+            try {
+              const responseFormat = model === 'whisper-1' ? 'verbose_json' : undefined;
+              try {
+                return (await sendRequest(sourcePath, sourceFileName, sourceSize, responseFormat)).data;
+              } catch (err: any) {
+                if (!shouldRetryWithoutVerboseJson(err)) throw err;
+                console.info('[MeetingService] 当前转写端点不支持 verbose_json，改用 json 响应格式重试');
+                return (await sendRequest(sourcePath, sourceFileName, sourceSize, 'json')).data;
+              }
+            } catch (err: any) {
+              if (!isRetryableTranscriptionError(err) || attempt >= MAX_TRANSCRIPTION_ATTEMPTS - 1) throw err;
+              const retryNumber = attempt + 1;
+              const delayMs = getTranscriptionRetryDelayMs(attempt);
+              const status = Number(err?.response?.status);
+              meeting.statusMessage = `${statusPrefix}暂时不可用${status ? `（HTTP ${status}）` : ''}，${Math.ceil(delayMs / 1000)} 秒后自动重试（${retryNumber}/${MAX_TRANSCRIPTION_ATTEMPTS - 1}）...`;
+              this.saveMeeting(meeting);
+              console.warn(`[MeetingService] 转写请求暂时失败，${delayMs}ms 后重试 (${retryNumber}/${MAX_TRANSCRIPTION_ATTEMPTS - 1})`, err?.message || err);
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+          }
+          throw new Error('转写请求未完成');
+        };
+
         let rawData: any;
         try {
-          const responseFormat = model === 'whisper-1' ? 'verbose_json' : undefined;
-          rawData = (await sendRequest(responseFormat)).data;
+          rawData = await requestTranscription(meeting.audioPath, fileName, stat.size);
         } catch (err: any) {
-          if (!shouldRetryWithoutVerboseJson(err)) throw err;
-          console.info('[MeetingService] 当前转写端点不支持 verbose_json，改用 json 响应格式重试');
-          rawData = (await sendRequest('json')).data;
+          requestErrorMessage = err?.response || err?.code
+            ? getTranscriptionErrorMessage(err, requestTimeoutMs)
+            : err?.message || '转写请求失败';
+          console.warn('[MeetingService] 完整音频转写失败:', requestErrorMessage);
+
+          if (isRetryableTranscriptionError(err)) {
+            const chunkPaths = this.splitAudioForTranscription(meeting.audioPath, meetingId);
+            const chunks = await chunkPaths;
+            if (chunks.length > 1) {
+              const mergedSegments: MeetingSegment[] = [];
+              let chunkOffset = 0;
+              let chunkSucceeded = true;
+              try {
+                for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+                  const chunkPath = chunks[chunkIndex];
+                  const chunkStat = fs.statSync(chunkPath);
+                  meeting.statusMessage = `完整音频处理超时，正在转写第 ${chunkIndex + 1}/${chunks.length} 段...`;
+                  this.saveMeeting(meeting);
+                  const chunkData = await requestTranscription(
+                    chunkPath,
+                    path.basename(chunkPath),
+                    chunkStat.size,
+                    `第 ${chunkIndex + 1}/${chunks.length} 段转写服务`,
+                  );
+
+                  const chunkStart = chunkOffset;
+                  const chunkDuration = Number.isFinite(Number(chunkData?.duration)) && Number(chunkData.duration) > 0
+                    ? Number(chunkData.duration)
+                    : TRANSCRIPTION_CHUNK_SECONDS;
+                  chunkOffset += chunkDuration;
+                  const chunkText = extractTranscriptionText(chunkData);
+                  if (Array.isArray(chunkData?.segments)) {
+                    const speakerIds = new Map<string, number>();
+                    chunkData.segments
+                      .filter((seg: any) => typeof seg?.text === 'string' && seg.text.trim())
+                      .forEach((seg: any, segmentIndex: number) => {
+                        const speakerValue = seg.speaker_id ?? seg.speaker;
+                        const speakerKey = speakerValue == null ? '' : String(speakerValue);
+                        if (speakerKey && !speakerIds.has(speakerKey)) speakerIds.set(speakerKey, speakerIds.size + 1);
+                        const speakerNum = speakerKey ? speakerIds.get(speakerKey)! : 1;
+                        const start = Number(seg.start);
+                        const end = Number(seg.end);
+                        const text = seg.text.trim();
+                        mergedSegments.push({
+                          id: `seg_${Date.now()}_${chunkIndex}_${segmentIndex}`,
+                          speakerId: `spk_${speakerNum}`,
+                          speakerName: `发言人 ${speakerNum}`,
+                          startTime: (Number.isFinite(start) ? start : segmentIndex * 10) + chunkStart,
+                          endTime: (Number.isFinite(end) && end > 0 ? end : (segmentIndex + 1) * 10) + chunkStart,
+                          text,
+                          tone: 'neutral',
+                          toneLabel: '发言陈述',
+                          matchedTerms: this.matchTermsInText(text),
+                        });
+                      });
+                  } else if (chunkText) {
+                    let currentTime = chunkStart;
+                    chunkText
+                      .split(/(?<=[。！？.!?；;\n])\s*/)
+                      .map((sentence: string) => sentence.trim())
+                      .filter(Boolean)
+                      .forEach((text: string, segmentIndex: number) => {
+                        const segmentDuration = Math.max(3, Math.round(text.length * 0.35));
+                        mergedSegments.push({
+                          id: `seg_${Date.now()}_${chunkIndex}_${segmentIndex}`,
+                          speakerId: 'spk_1',
+                          speakerName: '发言人 1',
+                          startTime: currentTime,
+                          endTime: currentTime + segmentDuration,
+                          text,
+                          tone: 'neutral',
+                          toneLabel: '发言陈述',
+                          matchedTerms: this.matchTermsInText(text),
+                        });
+                        currentTime += segmentDuration;
+                      });
+                  }
+                }
+              } catch (chunkErr: any) {
+                chunkSucceeded = false;
+                requestErrorMessage = chunkErr?.response || chunkErr?.code
+                  ? getTranscriptionErrorMessage(chunkErr, requestTimeoutMs)
+                  : chunkErr?.message || requestErrorMessage;
+                console.warn('[MeetingService] 音频分片转写失败:', requestErrorMessage);
+              } finally {
+                this.cleanupTranscriptionChunks(chunks);
+              }
+              if (chunkSucceeded && mergedSegments.length > 0) {
+                segments = mergedSegments;
+                totalDuration = Math.max(totalDuration, Math.round(chunkOffset));
+                rawData = null;
+              }
+            }
+          }
         }
 
-        if (Number.isFinite(Number(rawData?.duration)) && Number(rawData.duration) > 0) {
+        if (rawData && Number.isFinite(Number(rawData?.duration)) && Number(rawData.duration) > 0) {
           totalDuration = Math.round(Number(rawData.duration));
         }
 
-        if (Array.isArray(rawData?.segments)) {
+        if (rawData && Array.isArray(rawData?.segments)) {
           const speakerIds = new Map<string, number>();
           segments = rawData.segments
             .filter((seg: any) => typeof seg?.text === 'string' && seg.text.trim())
@@ -482,7 +884,7 @@ export class MeetingService {
             });
         }
 
-        if (segments.length === 0) {
+        if (rawData && segments.length === 0) {
           const transcript = extractTranscriptionText(rawData);
           if (transcript) {
             const sentences = transcript
@@ -553,6 +955,7 @@ export class MeetingService {
     options?: {
       providerId?: string;
       modelId?: string;
+      live?: boolean;
     }
   ): Promise<MeetingRecord> {
     const meeting = this.getMeetingById(meetingId);
@@ -560,8 +963,11 @@ export class MeetingService {
       throw new Error(`未找到指定会议 [${meetingId}]`);
     }
 
+    const previousStatus = meeting.status;
     meeting.status = 'summarizing';
-    meeting.statusMessage = '正在驱动大模型提炼核心决策、待办、语艺画像与图表数据...';
+    meeting.statusMessage = options?.live
+      ? '正在根据最新转写片段更新实时摘要...'
+      : '正在驱动大模型提炼核心决策、待办、语艺画像与图表数据...';
     this.saveMeeting(meeting);
 
     // 获取 AI 配置
@@ -774,12 +1180,30 @@ JSON Schema 约束如下：
   ]
 }`;
 
+    const maxTranscriptChars = 15000;
+    const transcriptContext = transcriptText.length <= maxTranscriptChars
+      ? transcriptText
+      : `${transcriptText.slice(0, 5500)}\n...（中间逐字稿已压缩，以下为最新内容）...\n${transcriptText.slice(-9500)}`;
+    const previousSummaryContext = options?.live && meeting.summary
+      ? JSON.stringify({
+        executiveSummary: meeting.summary.executiveSummary,
+        strategicContext: meeting.summary.strategicContext,
+        keyDecisions: meeting.summary.keyDecisions,
+        actionItems: meeting.summary.actionItems,
+        topics: meeting.summary.topics,
+        risksAndBlockers: meeting.summary.risksAndBlockers,
+      }).slice(0, 6000)
+      : '';
     const userPrompt = `会议标题：${meeting.title}
 会议时长：${this.formatTime(meeting.duration)}
 参会发言人：${meeting.speakers.map((s) => s.name).join(', ')}
 
 【完整逐字稿记录】：
-${transcriptText.slice(0, 15000)}
+${transcriptContext}
+${previousSummaryContext ? `
+【上一轮累计摘要（实时更新时必须保留其中仍然有效的决策、待办和风险，并结合新内容修正）】：
+${previousSummaryContext}
+` : ''}
 
 请立即按照 JSON 规范输出深度分析与语艺报告：`;
 
@@ -861,16 +1285,21 @@ ${transcriptText.slice(0, 15000)}
     }
 
     // 构建可视化图表数据
-    const charts = this.buildMeetingCharts(meeting, trajectoryData, summaryData.actionItems, milestoneGanttData, speechArtData?.speakerRadars, summaryData?.decisionTradeoffs);
+    const latestMeeting = this.getMeetingById(meetingId) || meeting;
+    const charts = this.buildMeetingCharts(latestMeeting, trajectoryData, summaryData.actionItems, milestoneGanttData, speechArtData?.speakerRadars, summaryData?.decisionTradeoffs);
 
-    meeting.summary = summaryData;
-    meeting.speechArt = speechArtData;
-    meeting.charts = charts;
-    meeting.status = 'completed';
-    meeting.statusMessage = '会议纪要、语艺分析与飞书妙计图表全部生成就绪';
-    this.saveMeeting(meeting);
+    latestMeeting.summary = summaryData;
+    latestMeeting.speechArt = speechArtData;
+    latestMeeting.charts = charts;
+    latestMeeting.status = options?.live
+      ? (previousStatus === 'transcribing' ? 'transcribing' : 'transcribed')
+      : 'completed';
+    latestMeeting.statusMessage = options?.live
+      ? '实时录音中，摘要已根据最新转写片段更新'
+      : '会议纪要、语艺分析与飞书妙计图表全部生成就绪';
+    this.saveMeeting(latestMeeting);
 
-    return meeting;
+    return latestMeeting;
   }
 
   // ==================== 图表数据组装 ====================

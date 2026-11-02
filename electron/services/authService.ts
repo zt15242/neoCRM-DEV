@@ -948,8 +948,8 @@ export class AuthService {
       authWin.webContents.on('did-navigate', injectCloseButton);
       authWin.webContents.on('did-navigate-in-page', injectCloseButton);
 
-      authWin.webContents.on('console-message', (_, __, message) => {
-        if (message === '__NEOCRM_CLOSE_WINDOW__') {
+      authWin.webContents.on('console-message', (details) => {
+        if (details.message === '__NEOCRM_CLOSE_WINDOW__') {
           if (!isSettled) {
             isSettled = true;
             setTimeout(() => {
@@ -1588,8 +1588,8 @@ export class AuthService {
         }
       });
 
-      win.webContents.on('console-message', (_, __, message) => {
-        if (message === '__NEOCRM_CLOSE_COOKIE_WINDOW__') {
+      win.webContents.on('console-message', (details) => {
+        if (details.message === '__NEOCRM_CLOSE_COOKIE_WINDOW__') {
           if (!isSettled) {
             isSettled = true;
             try { if (!win.isDestroyed()) win.close(); } catch {}

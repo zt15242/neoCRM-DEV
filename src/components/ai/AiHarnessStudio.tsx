@@ -1105,6 +1105,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         <div className="p-3.5 bg-transparent shrink-0">
           <div className="max-w-3xl mx-auto">
             <AiInputComposer
+              isCrmLoggedIn={crmSession.isLoggedIn}
+              crmSessionKey={`${crmSession.environment?.id || ''}:${crmSession.activeAccountId || ''}:${crmSession.tokenData?.tenant_id || ''}`}
               isStreaming={Boolean(anyActiveStream)}
               isStopping={Boolean(anyActiveStream?.stopping)}
               onSend={handleSendMessage}

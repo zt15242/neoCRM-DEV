@@ -82,6 +82,8 @@ interface ComposerContext {
 }
 
 interface AiInputComposerProps {
+  isCrmLoggedIn: boolean;
+  crmSessionKey: string;
   isStreaming: boolean;
   isStopping?: boolean;
   onSend: (
@@ -130,6 +132,8 @@ interface AiInputComposerProps {
 }
 
 export const AiInputComposer: React.FC<AiInputComposerProps> = ({
+  isCrmLoggedIn,
+  crmSessionKey,
   isStreaming,
   isStopping = false,
   onSend,
@@ -250,14 +254,20 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     onSwitchPanelTab,
   };
 
-  // 1. 初始化预热加载实体字典
+  // 登录后预热 CRM 对象，并在切换连接器时刷新缓存。
   useEffect(() => {
-    if (window.neoApi?.getEntities) {
-      window.neoApi.getEntities().then((list) => {
-        if (Array.isArray(list)) setCachedEntities(list);
-      }).catch(() => {});
-    }
-  }, []);
+    let cancelled = false;
+    setCachedEntities([]);
+    if (!isCrmLoggedIn || !window.neoApi?.getEntities) return;
+
+    window.neoApi.getEntities().then((list) => {
+      if (!cancelled && Array.isArray(list)) setCachedEntities(list);
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCrmLoggedIn, crmSessionKey]);
 
   // 2. 动态搜索项目文件 (当输入 @ 时)
   useEffect(() => {

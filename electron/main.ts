@@ -1,7 +1,7 @@
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, desktopCapturer } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EnvService } from './services/envService';
@@ -101,6 +101,47 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false,
     },
+  });
+
+  // 让渲染进程的 getDisplayMedia 能够拿到设备播放声音。
+  // Windows 使用 Electron 提供的 loopback 音频源；macOS 使用系统选择器，
+  // 是否能提供音轨仍由系统版本和“屏幕录制”权限决定，渲染进程会检查并提示降级状态。
+  win.webContents.session.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      void desktopCapturer
+        .getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 1, height: 1 },
+        })
+        .then((sources) => {
+          const source = sources[0];
+          if (!source) {
+            callback(null);
+            return;
+          }
+
+          callback({
+            video: source,
+            ...(process.platform === 'win32' && request.audioRequested
+              ? { audio: 'loopback' as const }
+              : {}),
+          });
+        })
+        .catch((error) => {
+          console.warn('[MediaCapture] 获取屏幕源失败:', error);
+          callback(null);
+        });
+    },
+    { useSystemPicker: process.platform === 'darwin' },
+  );
+
+  // 仅放行本应用所需的麦克风和屏幕/系统声音采集权限，不放行其他权限。
+  const mediaPermissions = new Set(['media', 'display-capture']);
+  win.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
+    return mediaPermissions.has(permission);
+  });
+  win.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(mediaPermissions.has(permission));
   });
 
   win.once('ready-to-show', () => {
@@ -208,8 +249,13 @@ ipcMain.handle('auth:loginWithBrowser', async (_, envId: string) => {
 ipcMain.handle('auth:loginWithEmbedded', async (_, envId: string) => {
   const env = envService.getEnvironmentById(envId);
   if (!env) throw new Error(`未找到环境: ${envId}`);
-  const tokenData = await authService.loginWithEmbeddedWindow(env, win || undefined);
-  return sessionStore.saveSessionAndSyncSalesforceCli(env, tokenData);
+  try {
+    const tokenData = await authService.loginWithEmbeddedWindow(env, win || undefined);
+    return sessionStore.saveSessionAndSyncSalesforceCli(env, tokenData);
+  } catch (error: any) {
+    if (error?.message === '用户取消了登录') return null;
+    throw error;
+  }
 });
 
 ipcMain.handle('auth:loginWithPassword', async (_, envId: string, username: string, pass: string) => {
@@ -911,8 +957,12 @@ ipcMain.handle('meeting:saveRecordedAudio', async (_, fileName: string, buffer: 
   meetingService.saveRecordedAudio(fileName, Buffer.from(buffer))
 );
 ipcMain.handle('meeting:getAudioDataUrl', async (_, filePath: string) => meetingService.getAudioDataUrl(filePath));
+ipcMain.handle('meeting:deleteAudioFile', async (_, filePath: string) => meetingService.deleteAudioFile(filePath));
 ipcMain.handle('meeting:transcribeAudio', async (_, meetingId: string, options?: any) =>
   meetingService.transcribeAudio(meetingId, options)
+);
+ipcMain.handle('meeting:transcribeAudioChunk', async (_, meetingId: string, chunkPath: string, startTimeSec: number, options?: any) =>
+  meetingService.transcribeAudioChunk(meetingId, chunkPath, startTimeSec, options)
 );
 ipcMain.handle('meeting:summarizeMeeting', async (_, meetingId: string, options?: any) =>
   meetingService.summarizeMeeting(meetingId, options)
