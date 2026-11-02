@@ -373,6 +373,7 @@ declare global {
       meetingGetSettings?: () => Promise<OpenAiAudioSettings>;
       meetingSaveSettings?: (settings: Partial<OpenAiAudioSettings>) => Promise<OpenAiAudioSettings>;
       meetingExportMarkdown?: (meetingId: string) => Promise<string>;
+      meetingSaveMarkdown?: (meetingId: string) => Promise<{ canceled: boolean; filePath?: string }>;
 
 
     };

@@ -11,22 +11,20 @@ import {
   MeetingSegment,
   MeetingSummary,
   MeetingActionItem,
-  MeetingTopicItem,
   SpeechArtAnalysis,
-  SpeakerSpeechArtProfile,
   MeetingChartData,
   GlossaryTerm,
   OpenAiAudioSettings,
   MatchedTermInfo,
-  TopicTreeNode,
   DecisionTradeoffItem,
   GanttMilestoneItem,
   SpeakerRadarScore,
-  SpeakerInteractionFlow,
   MeetingTranscriptionTask,
 } from '../../shared/meetingTypes';
 import { AiService } from './aiService';
-import { BUILTIN_SILICONFLOW_KEY } from '../../shared/constants';
+import { formatMeetingMarkdown } from '../../shared/meetingMarkdown';
+import { analyzeMeeting } from './meetingAnalysis';
+import { selectMeetingModel } from './meetingModelClient';
 import { resolveFfmpegBinary } from './ffmpegRuntime';
 import {
   extractTranscriptionText,
@@ -53,6 +51,7 @@ const MAX_TRANSCRIPTION_ATTEMPTS = 3;
  * 大模型会议智能总结、语艺沟通分析与飞书妙计级可视化图表生成。
  */
 export class MeetingService {
+  private readonly summaryTasks = new Map<string, Promise<MeetingRecord>>();
   private readonly transcriptionTasks = new Map<string, MeetingTranscriptionTask>();
   private readonly transcriptionTaskPromises = new Map<string, Promise<void>>();
   private readonly transcriptionTaskListeners = new Set<(task: MeetingTranscriptionTask) => void>();
@@ -1158,7 +1157,18 @@ export class MeetingService {
   /**
    * 使用大模型进行结构化总结、语艺沟通分析与图表数据生成
    */
-  public async summarizeMeeting(
+  public summarizeMeeting(
+    meetingId: string,
+    options?: { providerId?: string; modelId?: string; live?: boolean },
+  ): Promise<MeetingRecord> {
+    const running = this.summaryTasks.get(meetingId);
+    if (running) return running;
+    const task = this.runMeetingSummary(meetingId, options).finally(() => this.summaryTasks.delete(meetingId));
+    this.summaryTasks.set(meetingId, task);
+    return task;
+  }
+
+  private async runMeetingSummary(
     meetingId: string,
     options?: {
       providerId?: string;
@@ -1178,336 +1188,41 @@ export class MeetingService {
       : '正在驱动大模型提炼核心决策、待办、语艺画像与图表数据...';
     this.saveMeeting(meeting);
 
-    // 获取 AI 配置
-    const aiConfig = this.aiService.getAiConfig();
-    let provider = aiConfig.providers.find((p) => p.id === options?.providerId && p.enabled && p.apiKey?.trim())
-      || aiConfig.providers.find((p) => p.id === aiConfig.settings.defaultProviderId && p.enabled && p.apiKey?.trim())
-      || aiConfig.providers.find((p) => p.enabled && p.apiKey?.trim());
-
-    if (!provider?.apiKey?.trim() && BUILTIN_SILICONFLOW_KEY) {
-      provider = {
-        id: 'siliconflow_builtin',
-        name: '硅基流动 (内置)',
-        type: 'siliconflow' as any,
-        protocol: 'openai-completions',
-        baseUrl: 'https://api.siliconflow.cn/v1',
-        apiKey: BUILTIN_SILICONFLOW_KEY,
-        enabled: true,
-        models: [{ id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3' }],
-      };
+    try {
+      const { provider, modelId } = selectMeetingModel(this.aiService.getAiConfig(), options?.providerId, options?.modelId);
+      const result = await analyzeMeeting(meeting,
+        (system, input, maxTokens) => this.aiService.requestMeetingAnalysisText(provider, modelId, system, input, maxTokens),
+        (message) => {
+          const current = this.getMeetingById(meetingId);
+          if (current) { current.statusMessage = message; this.saveMeeting(current); }
+        });
+      const latest = this.getMeetingById(meetingId);
+      if (!latest) throw new Error('会议记录已删除');
+      result.summary.modelUsed = modelId;
+      // Preserve completed checkboxes for the same extracted task when a live summary is refreshed.
+      for (const action of result.summary.actionItems) {
+        action.completed = latest.summary?.actionItems.some(old => old.task === action.task && old.completed) || false;
+      }
+      latest.summary = result.summary;
+      latest.speechArt = result.speechArt;
+      latest.charts = this.buildMeetingCharts(latest, [], result.summary.actionItems, undefined, undefined, result.summary.decisionTradeoffs);
+      latest.status = options?.live
+        ? (previousStatus === 'transcribing' ? 'transcribing' : 'transcribed')
+        : 'completed';
+      latest.statusMessage = `已分析 ${result.summary.sourceSegmentCount} 段转写（${result.summary.sourceChunkCount} 个分段），生成 ${result.summary.topics.length} 个议题`;
+      this.saveMeeting(latest);
+      return latest;
+    } catch (error: any) {
+      // Retain the last successful result and all transcription data; never manufacture a summary.
+      const latest = this.getMeetingById(meetingId);
+      if (latest) {
+        latest.status = previousStatus === 'summarizing' ? 'transcribed' : previousStatus;
+        latest.statusMessage = `总结失败：${error?.message || '模型请求失败'}。已有转写与纪要已保留。`;
+        this.saveMeeting(latest);
+      }
+      console.warn('[MeetingService] 会议分析失败:', error?.message);
+      throw new Error(`会议总结失败：${error?.message || '模型请求失败'}`);
     }
-
-    const modelId = options?.modelId || aiConfig.settings.defaultModelId || provider?.models?.[0]?.id || 'deepseek-ai/DeepSeek-V3';
-
-    // 格式化逐句文本
-    const transcriptText = meeting.segments
-      .map((s) => `[${this.formatTime(s.startTime)} - ${this.formatTime(s.endTime)}] ${s.speakerName}: ${s.text}`)
-      .join('\n');
-
-    const systemPrompt = `你是一名全球顶级企业管理战略顾问（对标麦肯锡/BCG 全球合伙人）兼大型企业数字化转型首席系统架构师。
-你的任务是根据输入的会议逐字转写记录，产出极高水准、逻辑严密、兼具宏观商业战略与微观技术落地的飞书妙计级会议分析体系。
-
-分析必须严格输出标准合法的 JSON 格式，严禁包含任何前缀解释、markdown 代码块标记或无关闲聊：
-
-JSON Schema 约束如下：
-{
-  "summary": {
-    "executiveSummary": "2-3段精炼阐述宏观战略态势、核心争议焦点与最终裁决",
-    "strategicContext": "宏观战略研判与业务价值落地支撑点",
-    "keyDecisions": [
-      {
-        "id": "dec_1",
-        "content": "正式敲定的决策事项",
-        "context": "决策背景及权衡取舍"
-      }
-    ],
-    "decisionTradeoffs": [
-      {
-        "id": "dt_1",
-        "topic": "涉及议题",
-        "option": "备选方案名称",
-        "pros": ["核心优势收益1", "核心优势收益2"],
-        "cons": ["潜在劣势或实现成本1"],
-        "riskLevel": "low" | "medium" | "high",
-        "status": "adopted" | "rejected" | "pending",
-        "rationale": "裁决理由与底层考量"
-      }
-    ],
-    "topicTree": {
-      "id": "node_root",
-      "title": "会议总议程与北极星目标",
-      "type": "goal",
-      "description": "全会最终达成的核心目标",
-      "status": "agreed",
-      "children": [
-        {
-          "id": "node_topic_1",
-          "title": "议题名称",
-          "type": "topic",
-          "timeRange": "00:00 - 02:30",
-          "speaker": "主导发言人",
-          "status": "resolved",
-          "children": [
-            {
-              "id": "node_prob_1",
-              "title": "症结/痛点根因",
-              "type": "problem",
-              "description": "具体问题剖析",
-              "status": "risk"
-            },
-            {
-              "id": "node_sol_1",
-              "title": "探讨方案/权衡",
-              "type": "solution",
-              "description": "提出路线",
-              "status": "agreed"
-            },
-            {
-              "id": "node_dec_1",
-              "title": "拍板决议",
-              "type": "decision",
-              "description": "正式裁决",
-              "status": "agreed"
-            },
-            {
-              "id": "node_act_1",
-              "title": "落地待办项",
-              "type": "action",
-              "description": "执行人与交付要求",
-              "status": "pending"
-            }
-          ]
-        }
-      ]
-    },
-    "actionItems": [
-      {
-        "id": "act_1",
-        "task": "具体待落实任务",
-        "assignee": "建议负责人",
-        "priority": "high" | "medium" | "low",
-        "dueDate": "明确截止时间建议",
-        "completed": false
-      }
-    ],
-    "topics": [
-      {
-        "id": "top_1",
-        "title": "议题标题",
-        "timeRange": "00:00 - 05:20",
-        "keyPoints": ["核心讨论观点1", "核心讨论观点2"],
-        "speakers": ["发言人姓名"]
-      }
-    ],
-    "risksAndBlockers": [
-      {
-        "id": "risk_1",
-        "risk": "潜在技术或业务风险",
-        "suggestion": "缓解应对预案"
-      }
-    ]
-  },
-  "speechArt": {
-    "overallAtmosphere": "efficient" | "collaborative" | "contentious" | "deliberative" | "instructive",
-    "atmosphereLabel": "高效共识型",
-    "atmosphereScore": 92,
-    "cadenceSummary": "整体节奏与控场评价",
-    "speakerProfiles": [
-      {
-        "speakerId": "spk_1",
-        "speakerName": "发言人姓名",
-        "styleType": "decisive" | "analytical" | "collaborative" | "critical" | "action_driven",
-        "styleLabel": "果决决策型",
-        "toneDominance": "主要语调特征",
-        "questionRatio": 20,
-        "assertivenessScore": 90,
-        "empathyScore": 80,
-        "clarityScore": 95,
-        "strengths": ["亮点1"],
-        "improvementAreas": ["建议1"]
-      }
-    ],
-    "speakerRadars": [
-      {
-        "speakerId": "spk_1",
-        "speakerName": "发言人姓名",
-        "color": "#3b82f6",
-        "dimensions": {
-          "assertiveness": 92,
-          "empathy": 80,
-          "logicRigor": 95,
-          "contribution": 94,
-          "questionQuality": 82,
-          "pacingControl": 96
-        }
-      }
-    ],
-    "interactionFlows": [
-      {
-        "sourceSpeaker": "发件人",
-        "targetSpeaker": "收件人",
-        "count": 5,
-        "sentiment": "positive" | "neutral" | "debate",
-        "description": "互动特征描述"
-      }
-    ],
-    "coachingSuggestions": [
-      {
-        "targetSpeaker": "针对的具体发言人",
-        "scenario": "在何种讨论环节",
-        "observation": "沟通阻滞观察",
-        "suggestion": "语艺改进建议"
-      }
-    ]
-  },
-  "milestoneGantt": [
-    {
-      "id": "gantt_1",
-      "task": "任务名称",
-      "assignee": "负责人",
-      "startDay": 1,
-      "endDay": 3,
-      "priority": "high" | "medium" | "low",
-      "progress": 30
-    }
-  ],
-  "segmentTones": [
-    {
-      "segmentIndex": 0,
-      "tone": "positive" | "neutral" | "questioning" | "hesitant" | "assertive" | "consensus",
-      "toneLabel": "坚定决策"
-    }
-  ],
-  "sentimentTrajectory": [
-    {
-      "timeOffset": 60,
-      "timeFormatted": "01:00",
-      "sentimentScore": 0.5,
-      "milestoneLabel": "关键共识事件"
-    }
-  ]
-}`;
-
-    const maxTranscriptChars = 15000;
-    const transcriptContext = transcriptText.length <= maxTranscriptChars
-      ? transcriptText
-      : `${transcriptText.slice(0, 5500)}\n...（中间逐字稿已压缩，以下为最新内容）...\n${transcriptText.slice(-9500)}`;
-    const previousSummaryContext = options?.live && meeting.summary
-      ? JSON.stringify({
-        executiveSummary: meeting.summary.executiveSummary,
-        strategicContext: meeting.summary.strategicContext,
-        keyDecisions: meeting.summary.keyDecisions,
-        actionItems: meeting.summary.actionItems,
-        topics: meeting.summary.topics,
-        risksAndBlockers: meeting.summary.risksAndBlockers,
-      }).slice(0, 6000)
-      : '';
-    const userPrompt = `会议标题：${meeting.title}
-会议时长：${this.formatTime(meeting.duration)}
-参会发言人：${meeting.speakers.map((s) => s.name).join(', ')}
-
-【完整逐字稿记录】：
-${transcriptContext}
-${previousSummaryContext ? `
-【上一轮累计摘要（实时更新时必须保留其中仍然有效的决策、待办和风险，并结合新内容修正）】：
-${previousSummaryContext}
-` : ''}
-
-请立即按照 JSON 规范输出深度分析与语艺报告：`;
-
-    let summaryData: MeetingSummary | null = null;
-    let speechArtData: SpeechArtAnalysis | null = null;
-    let trajectoryData: any[] = [];
-    let milestoneGanttData: any[] = [];
-
-    if (provider?.apiKey?.trim()) {
-      try {
-        const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
-        const endpoint = cleanBaseUrl.endsWith('/v1') || cleanBaseUrl.includes('/v1/')
-          ? `${cleanBaseUrl}/chat/completions`
-          : `${cleanBaseUrl}/v1/chat/completions`;
-
-        const res = await axios.post(
-          endpoint,
-          {
-            model: modelId,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.2,
-            max_tokens: 3500,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${provider.apiKey.trim()}`,
-            },
-            timeout: 60000,
-          }
-        );
-
-        let content = res.data?.choices?.[0]?.message?.content || '';
-        content = content.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-        const parsed = JSON.parse(content);
-
-        if (parsed?.summary) {
-          summaryData = {
-            ...parsed.summary,
-            generatedAt: Date.now(),
-            modelUsed: modelId,
-          };
-        }
-        if (parsed?.speechArt) {
-          speechArtData = parsed.speechArt;
-        }
-        if (Array.isArray(parsed?.sentimentTrajectory)) {
-          trajectoryData = parsed.sentimentTrajectory;
-        }
-        if (Array.isArray(parsed?.milestoneGantt)) {
-          milestoneGanttData = parsed.milestoneGantt;
-        }
-
-        // 更新各分句的 tone 和 toneLabel
-        if (Array.isArray(parsed?.segmentTones)) {
-          for (const item of parsed.segmentTones) {
-            const idx = Number(item.segmentIndex);
-            if (meeting.segments[idx]) {
-              meeting.segments[idx].tone = item.tone;
-              meeting.segments[idx].toneLabel = item.toneLabel;
-            }
-          }
-        }
-      } catch (err: any) {
-        console.warn('[MeetingService] 大模型总结请求异常，转入本地智能生成:', err.message);
-      }
-    }
-
-    // 若无外部返回，使用高质量智能兜底生成
-    if (!summaryData || !speechArtData) {
-      const fallback = this.generateFallbackSummary(meeting);
-      milestoneGanttData = fallback.milestoneGantt;
-      summaryData = fallback.summary;
-      speechArtData = fallback.speechArt;
-      trajectoryData = fallback.trajectory;
-    }
-
-    // 构建可视化图表数据
-    const latestMeeting = this.getMeetingById(meetingId) || meeting;
-    const charts = this.buildMeetingCharts(latestMeeting, trajectoryData, summaryData.actionItems, milestoneGanttData, speechArtData?.speakerRadars, summaryData?.decisionTradeoffs);
-
-    latestMeeting.summary = summaryData;
-    latestMeeting.speechArt = speechArtData;
-    latestMeeting.charts = charts;
-    latestMeeting.status = options?.live
-      ? (previousStatus === 'transcribing' ? 'transcribing' : 'transcribed')
-      : 'completed';
-    latestMeeting.statusMessage = options?.live
-      ? '实时录音中，摘要已根据最新转写片段更新'
-      : '会议纪要、语艺分析与飞书妙计图表全部生成就绪';
-    this.saveMeeting(latestMeeting);
-
-    return latestMeeting;
   }
 
   // ==================== 图表数据组装 ====================
@@ -1556,17 +1271,8 @@ ${previousSummaryContext}
       }
     }
 
-    // 3. 情绪走势折线
-    let sentimentTrajectory = trajectory;
-    if (!sentimentTrajectory || sentimentTrajectory.length === 0) {
-      sentimentTrajectory = [
-        { timeOffset: 0, timeFormatted: '00:00', sentimentScore: 0.2, milestoneLabel: '议题开场' },
-        { timeOffset: Math.round(meeting.duration * 0.25), timeFormatted: this.formatTime(Math.round(meeting.duration * 0.25)), sentimentScore: -0.3, milestoneLabel: '方案争议' },
-        { timeOffset: Math.round(meeting.duration * 0.5), timeFormatted: this.formatTime(Math.round(meeting.duration * 0.5)), sentimentScore: 0.4, milestoneLabel: '论证对齐' },
-        { timeOffset: Math.round(meeting.duration * 0.75), timeFormatted: this.formatTime(Math.round(meeting.duration * 0.75)), sentimentScore: 0.8, milestoneLabel: '敲定方案' },
-        { timeOffset: meeting.duration, timeFormatted: this.formatTime(meeting.duration), sentimentScore: 0.9, milestoneLabel: '待办认领' },
-      ];
-    }
+    // Missing evidence must remain empty instead of creating a fixed emotional narrative.
+    const sentimentTrajectory = trajectory || [];
 
     // 4. 术语出现频次统计
     const termMap: Record<string, { count: number; category: string }> = {};
@@ -1617,72 +1323,11 @@ ${previousSummaryContext}
 
   public exportMeetingMarkdown(meetingId: string): string {
     const meeting = this.getMeetingById(meetingId);
-    if (!meeting) return '';
-
-    const lines: string[] = [];
-    lines.push(`# ${meeting.title}`);
-    lines.push(`- **会议时间**: ${new Date(meeting.date).toLocaleString()}`);
-    lines.push(`- **会议时长**: ${this.formatTime(meeting.duration)}`);
-    lines.push(`- **参会人员**: ${meeting.speakers.map((s) => `${s.name} (${s.talkRatio}%)`).join(', ')}`);
-    lines.push(`- **命中术语**: ${meeting.glossaryHitTerms?.join(', ') || '无'}`);
-    lines.push('');
-
-    if (meeting.summary) {
-      lines.push('## 一、核心要旨与决策速览');
-      lines.push(meeting.summary.executiveSummary);
-      lines.push('');
-
-      lines.push('### 关键决议');
-      meeting.summary.keyDecisions.forEach((d, i) => {
-        lines.push(`${i + 1}. **${d.content}**`);
-        if (d.context) lines.push(`   *背景权衡*: ${d.context}`);
-      });
-      lines.push('');
-
-      lines.push('### 落实待办清单');
-      meeting.summary.actionItems.forEach((a, i) => {
-        const flag = a.completed ? '[x]' : '[ ]';
-        lines.push(`- ${flag} **${a.task}** | 负责人: @${a.assignee} | 优先级: ${a.priority.toUpperCase()} | 截止: ${a.dueDate || '尽快'}`);
-      });
-      lines.push('');
-
-      lines.push('### 分议题讨论纪要');
-      meeting.summary.topics.forEach((t) => {
-        lines.push(`#### ${t.title} (${t.timeRange})`);
-        lines.push(`*主要发言*: ${t.speakers.join(', ')}`);
-        t.keyPoints.forEach((p) => lines.push(`- ${p}`));
-        lines.push('');
-      });
-    }
-
-    if (meeting.speechArt) {
-      lines.push('## 二、语艺与沟通效能洞察');
-      lines.push(`- **会议综合沟通氛围**: ${meeting.speechArt.atmosphereLabel} (协同指数: ${meeting.speechArt.atmosphereScore}分)`);
-      lines.push(`- **节奏控场点评**: ${meeting.speechArt.cadenceSummary}`);
-      lines.push('');
-      lines.push('### 各发言人语艺画像');
-      meeting.speechArt.speakerProfiles.forEach((p) => {
-        lines.push(`#### ${p.speakerName} · ${p.styleLabel}`);
-        lines.push(`- 语调特征: ${p.toneDominance}`);
-        lines.push(`- 沟通质效得分: 坚定说服力 ${p.assertivenessScore} / 倾听共情 ${p.empathyScore} / 逻辑清晰 ${p.clarityScore}`);
-        lines.push(`- 语艺闪光点: ${p.strengths.join('；')}`);
-        lines.push(`- 提升改进点: ${p.improvementAreas.join('；')}`);
-        lines.push('');
-      });
-    }
-
-    lines.push('## 三、完整会议逐字记录');
-    meeting.segments.forEach((s) => {
-      const toneBadge = s.toneLabel ? ` [${s.toneLabel}]` : '';
-      lines.push(`**[${this.formatTime(s.startTime)} - ${this.formatTime(s.endTime)}] ${s.speakerName}${toneBadge}**:`);
-      lines.push(`${s.text}`);
-      lines.push('');
-    });
-
-    return lines.join('\n');
+    if (!meeting) throw new Error('会议记录不存在');
+    return formatMeetingMarkdown(meeting);
   }
 
-  // ==================== 辅助计算与兜底生成 ====================
+  // ==================== 辅助计算 ====================
 
   private calculateSpeakersFromSegments(segments: MeetingSegment[]): MeetingSpeaker[] {
     const speakerMap: Record<
@@ -1729,7 +1374,7 @@ ${previousSummaryContext}
     return `${m.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
   }
 
-  // ==================== 智能仿真与默认数据 ====================
+  // ==================== 默认术语库 ====================
 
   private getDefaultGlossary(): GlossaryTerm[] {
     return [
@@ -1847,283 +1492,4 @@ ${previousSummaryContext}
   }
 
 
-  private generateFallbackSummary(meeting: MeetingRecord): {
-    summary: MeetingSummary;
-    speechArt: SpeechArtAnalysis;
-    trajectory: any[];
-    milestoneGantt: GanttMilestoneItem[];
-  } {
-    const title = meeting.title || '专项业务研讨会';
-    const speakers = meeting.speakers && meeting.speakers.length > 0
-      ? meeting.speakers
-      : [{ id: 'spk_1', name: '发言人 1', avatarColor: '#3b82f6', talkTimeSeconds: meeting.duration || 60, talkRatio: 100, wordCount: 0 }];
-
-    const primarySpeaker = speakers[0]?.name || '主要发言人';
-    const secondSpeaker = speakers[1]?.name || speakers[0]?.name || '参会人';
-
-    const segmentsText = meeting.segments.map((s) => s.text).join(' ');
-    const shortSummary = segmentsText.length > 80
-      ? segmentsText.slice(0, 160) + '...'
-      : `本次会议围绕「${title}」展开，各方针对核心目标、业务诉求与实施落地路径达成了明确共识，并梳理了后续执行待办。`;
-
-    const topicTree: TopicTreeNode = {
-      id: 'node_root',
-      title: `${title} - 核心议程与目标`,
-      type: 'goal',
-      description: `围绕「${title}」统筹业务诉求与实施落地闭环`,
-      status: 'agreed',
-      children: [
-        {
-          id: 'node_topic_1',
-          title: `议题一：${title}现状与核心诉求分析`,
-          type: 'topic',
-          timeRange: '00:00 - 中场',
-          speaker: primarySpeaker,
-          status: 'resolved',
-          children: [
-            {
-              id: 'node_prob_1',
-              title: '现状梳理与关键痛点',
-              type: 'problem',
-              description: '梳理业务瓶颈与各环节协同难点',
-              speaker: secondSpeaker,
-              status: 'risk',
-            },
-            {
-              id: 'node_sol_1',
-              title: '拟定优化对策与技术路径',
-              type: 'solution',
-              description: '提出针对性落地方案，平衡业务连续性与实施成本',
-              speaker: primarySpeaker,
-              status: 'agreed',
-            },
-            {
-              id: 'node_dec_1',
-              title: '决议：正式立项并分阶段推进',
-              type: 'decision',
-              description: '按既定里程碑对齐交付标准与质量底线',
-              speaker: primarySpeaker,
-              status: 'agreed',
-            },
-          ],
-        },
-      ],
-    };
-
-    const decisionTradeoffs: DecisionTradeoffItem[] = [
-      {
-        id: 'dt_1',
-        topic: '业务方案推进策略',
-        option: '分阶段渐进式落地 (采纳方案)',
-        pros: ['平稳可控，降低一次性切换的业务中断风险', '各环节权责清晰，便于快速纠偏'],
-        cons: ['整体推进周期相对较长'],
-        riskLevel: 'low',
-        status: 'adopted',
-        rationale: `符合「${title}」核心诉求，保障生产与业务环境高可用。`,
-      },
-      {
-        id: 'dt_2',
-        topic: '应急与备用方案',
-        option: '维持原有粗放模式 (否决)',
-        pros: ['无需额外投入短期研发改造精力'],
-        cons: ['长期隐患突出，效率与对账时效无法达到预期指标'],
-        riskLevel: 'high',
-        status: 'rejected',
-        rationale: '无法满足未来业务规模化扩张，一致决议废弃。',
-      },
-    ];
-
-    const milestoneGantt: GanttMilestoneItem[] = [
-      { id: 'gantt_1', task: `梳理「${title}」业务细节与技术字段对齐`, assignee: secondSpeaker, startDay: 1, endDay: 3, priority: 'high', progress: 40 },
-      { id: 'gantt_2', task: '完成系统配置与联调脚本准备', assignee: primarySpeaker, startDay: 2, endDay: 4, priority: 'medium', progress: 20 },
-      { id: 'gantt_3', task: '推进端到端联合验收与第一阶段结案评审', assignee: primarySpeaker, startDay: 4, endDay: 6, priority: 'high', progress: 0 },
-    ];
-
-    const speakerRadars: SpeakerRadarScore[] = speakers.map((sp, idx) => ({
-      speakerId: sp.id,
-      speakerName: sp.name,
-      color: sp.avatarColor || '#3b82f6',
-      dimensions: {
-        assertiveness: 80 + (idx % 2 === 0 ? 12 : -6),
-        empathy: 82 + (idx % 2 === 1 ? 12 : -4),
-        logicRigor: 88 + (idx * 3) % 10,
-        contribution: 85 + (idx * 4) % 12,
-        questionQuality: 80 + (idx * 5) % 15,
-        pacingControl: 84 + (idx * 2) % 10,
-      },
-    }));
-
-    const interactionFlows: SpeakerInteractionFlow[] = speakers.length > 1
-      ? [
-          {
-            sourceSpeaker: speakers[0].name,
-            targetSpeaker: speakers[1].name,
-            count: 4,
-            sentiment: 'positive',
-            description: '主导议程推进并与参会人深度对齐细节',
-          },
-        ]
-      : [];
-
-    const summary: MeetingSummary = {
-      executiveSummary: `本次会议针对「${title}」进行了深入研讨与战略推演。${shortSummary}`,
-      strategicContext: `以「${title}」为核心牵引，确保业务流程端到端打通与关键指标履约，建立可持续的数字化运作规范。`,
-      keyDecisions: [
-        {
-          id: 'dec_1',
-          content: `确立「${title}」核心工作原则与第一阶段里程碑推进路线`,
-          context: '统筹考量交付可行性与业务平稳过渡要求。',
-        },
-        {
-          id: 'dec_2',
-          content: '明确跨职能协同与责任认领机制，确立各阶段对齐节点',
-          context: '消减沟通断层，保障执行效率与信息透明度。',
-        },
-      ],
-      decisionTradeoffs,
-      topicTree,
-      actionItems: [
-        {
-          id: 'act_1',
-          task: `落实「${title}」第一阶段任务拆解与交付排期`,
-          assignee: primarySpeaker,
-          priority: 'high',
-          dueDate: '本周五 18:00',
-          completed: false,
-        },
-        {
-          id: 'act_2',
-          task: '组织下一轮业务联调与数据核对对齐',
-          assignee: secondSpeaker,
-          priority: 'medium',
-          dueDate: '下周二 17:00',
-          completed: false,
-        },
-      ],
-      topics: [
-        {
-          id: 'top_1',
-          title: `${title} 现状评估与核心共识`,
-          timeRange: `00:00 - ${this.formatTime(meeting.duration)}`,
-          keyPoints: ['梳理现状瓶颈与痛点', '敲定行动待办与责任分工'],
-          speakers: speakers.map((s) => s.name),
-        },
-      ],
-      risksAndBlockers: [
-        {
-          id: 'risk_1',
-          risk: '跨部门协作周期与外部依赖可能带来排期扰动',
-          suggestion: '建立每日简短站会机制，遇到阻碍第一时间预警。',
-        },
-      ],
-      generatedAt: Date.now(),
-      modelUsed: '智能分析引擎',
-    };
-
-    const speechArt: SpeechArtAnalysis = {
-      overallAtmosphere: 'collaborative',
-      atmosphereLabel: '高效协同型',
-      atmosphereScore: 90,
-      cadenceSummary: `全会紧扣「${title}」展开，发言节奏明确，讨论指向性清晰，展现了良好的沟通质效。`,
-      speakerProfiles: speakers.map((sp, idx) => ({
-        speakerId: sp.id,
-        speakerName: sp.name,
-        styleType: idx === 0 ? 'decisive' : 'collaborative',
-        styleLabel: idx === 0 ? '果决决策型' : '温和协同型',
-        toneDominance: idx === 0 ? '目标导向，把控全局' : '务实严谨，关注细节落地',
-        questionRatio: 20,
-        assertivenessScore: 85,
-        empathyScore: 85,
-        clarityScore: 90,
-        strengths: ['紧扣议程主题', '观点表述清晰'],
-        improvementAreas: ['可进一步增加前瞻性方案论证'],
-      })),
-      speakerRadars,
-      interactionFlows,
-      coachingSuggestions: [
-        {
-          targetSpeaker: primarySpeaker,
-          scenario: '议题决议收拢环节',
-          observation: '在下达分工后建议留出简短缓冲时间，以便参会人员充分确认实施细节',
-          suggestion: '推荐在拍板后追加一句：“大家对该节点的资源依赖是否还有需要协同的地方？”，以进一步提升共识度。',
-        },
-      ],
-    };
-
-    const trajectory = [
-      { timeOffset: 0, timeFormatted: '00:00', sentimentScore: 0.3, milestoneLabel: '议题开场' },
-      { timeOffset: Math.round(meeting.duration * 0.3), timeFormatted: this.formatTime(Math.round(meeting.duration * 0.3)), sentimentScore: 0.1, milestoneLabel: '痛点剖析' },
-      { timeOffset: Math.round(meeting.duration * 0.7), timeFormatted: this.formatTime(Math.round(meeting.duration * 0.7)), sentimentScore: 0.7, milestoneLabel: '方案对齐' },
-      { timeOffset: meeting.duration, timeFormatted: this.formatTime(meeting.duration), sentimentScore: 0.9, milestoneLabel: '达成共识' },
-    ];
-
-    return {
-      summary,
-      speechArt,
-      trajectory,
-      milestoneGantt,
-    };
-  }
-
-  private getDefaultMeetings(): MeetingRecord[] {
-    const fallback = this.generateFallbackTranscription('NeoCRM 与 Salesforce 跨系统客户数据中台架构评审会');
-    const segments = fallback.segments;
-    const duration = fallback.duration;
-    const speakers = this.calculateSpeakersFromSegments(segments);
-
-    const hitTerms = new Set<string>();
-    segments.forEach((s) => s.matchedTerms?.forEach((t) => hitTerms.add(t.term)));
-
-    const summaryPack = this.generateFallbackSummary({
-      id: 'meeting_demo_01',
-      title: 'NeoCRM 与 Salesforce 跨系统客户数据中台架构评审会',
-      date: Date.now() - 3600000 * 2,
-      duration,
-      status: 'completed',
-      speakers,
-      segments,
-      createdAt: Date.now() - 3600000 * 2,
-      updatedAt: Date.now(),
-    });
-
-    const charts = this.buildMeetingCharts(
-      {
-        id: 'meeting_demo_01',
-        title: 'NeoCRM 与 Salesforce 跨系统客户数据中台架构评审会',
-        date: Date.now() - 3600000 * 2,
-        duration,
-        status: 'completed',
-        speakers,
-        segments,
-        createdAt: Date.now() - 3600000 * 2,
-        updatedAt: Date.now(),
-      },
-      summaryPack.trajectory,
-      summaryPack.summary.actionItems,
-      summaryPack.milestoneGantt,
-      summaryPack.speechArt.speakerRadars,
-      summaryPack.summary.decisionTradeoffs
-    );
-
-    return [
-      {
-        id: 'meeting_demo_01',
-        title: 'NeoCRM 与 Salesforce 跨系统客户数据中台架构评审会',
-        date: Date.now() - 3600000 * 2,
-        duration,
-        status: 'completed',
-        statusMessage: '会议分析全部就绪',
-        language: 'zh',
-        tags: ['跨系统集成', '架构评审', 'SaaS中台', 'CPQ'],
-        speakers,
-        segments,
-        summary: summaryPack.summary,
-        speechArt: summaryPack.speechArt,
-        charts,
-        glossaryHitTerms: Array.from(hitTerms),
-        createdAt: Date.now() - 3600000 * 2,
-        updatedAt: Date.now(),
-      },
-    ];
-  }
 }

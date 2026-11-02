@@ -232,6 +232,7 @@ export const neoApi = {
   meetingGetSettings: () => ipcRenderer.invoke('meeting:getSettings'),
   meetingSaveSettings: (settings: any) => ipcRenderer.invoke('meeting:saveSettings', settings),
   meetingExportMarkdown: (meetingId: string) => ipcRenderer.invoke('meeting:exportMarkdown', meetingId),
+  meetingSaveMarkdown: (meetingId: string) => ipcRenderer.invoke('meeting:saveMarkdown', meetingId),
 
 
   onAiStreamEvent: (callback: (event: any) => void) => {

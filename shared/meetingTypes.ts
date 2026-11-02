@@ -135,6 +135,8 @@ export interface MeetingSummary {
   }>;
   generatedAt: number;
   modelUsed?: string;
+  sourceSegmentCount?: number;
+  sourceChunkCount?: number;
 }
 
 /**

@@ -40,6 +40,9 @@ import { MeetingGlossaryModal } from './MeetingGlossaryModal';
 import { MeetingRecordModal } from './MeetingRecordModal';
 import { MeetingSettingsModal } from './MeetingSettingsModal';
 import { MeetingAudioProgress, type AudioProcessingState } from './MeetingAudioProgress';
+import { useMeetingPanels } from './useMeetingPanels';
+import { formatMeetingMarkdown } from '../../../shared/meetingMarkdown';
+import { copyMeetingText } from '../../utils/meetingClipboard';
 
 interface MeetingAssistantViewProps {
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
@@ -48,6 +51,7 @@ interface MeetingAssistantViewProps {
 export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
   showToast,
 }) => {
+  const panels = useMeetingPanels();
   const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
   const [activeMeetingId, setActiveMeetingId] = useState<string>('');
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -393,22 +397,40 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       });
     }
     setIsSummarizing(true);
+    let summaryPending = true;
+    const progressTimer = setInterval(async () => {
+      try {
+        const current = await window.neoApi?.meetingGetMeeting?.(targetId);
+        if (summaryPending && current?.status === 'summarizing') {
+          setMeetings(prev => prev.map(m => m.id === targetId ? current : m));
+          if (!options?.live) updateAudioProcessing(targetId, { label: current.statusMessage || '正在分析会议...', tone: 'info' });
+        }
+      } catch { /* The final request still reports errors. */ }
+    }, 2000);
     if (!options?.silent) showToast?.('info', options?.live ? '正在根据最新转写片段更新会议摘要...' : '大模型正在提炼会议决策、待办、语艺画像与图表...');
 
     try {
       const updated = await window.neoApi.meetingSummarizeMeeting(targetId, { live: options?.live });
+      summaryPending = false;
       setMeetings((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (!options?.live) {
         updateAudioProcessing(targetId, { stage: 3, label: '音频转写与会议分析已完成', tone: 'success' });
       }
-      if (!options?.silent) showToast?.('success', '智能纪要、语艺画像与飞书妙计图表全部生成完成！');
+      if (!options?.silent) showToast?.('success', `会议纪要已生成，共 ${updated.summary?.topics.length || 0} 个议题`);
     } catch (err: any) {
+      summaryPending = false;
+      try {
+        const current = await window.neoApi?.meetingGetMeeting?.(targetId);
+        if (current) setMeetings(prev => prev.map(m => m.id === targetId ? current : m));
+      } catch { /* Keep the original analysis error visible. */ }
       if (!options?.live) {
         updateAudioProcessing(targetId, { label: `总结失败：${err?.message || 'AI 分析服务异常'}`, tone: 'error' });
       }
       if (!options?.silent) showToast?.('error', `大模型总结失败: ${err.message}`);
       else console.warn('[MeetingAssistantView] 实时总结失败:', err);
     } finally {
+      summaryPending = false;
+      clearInterval(progressTimer);
       setIsSummarizing(false);
     }
   };
@@ -551,11 +573,24 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
 
   // 9. 导出 Markdown
   const handleExportMarkdown = async () => {
-    if (!activeMeetingId || !window.neoApi?.meetingExportMarkdown) return;
+    if (!activeMeeting) return;
     try {
-      const md = await window.neoApi.meetingExportMarkdown(activeMeetingId);
-      navigator.clipboard.writeText(md);
-      showToast?.('success', '已导出并复制完整会议纪要 Markdown 文档');
+      if (window.neoApi?.meetingSaveMarkdown) {
+        const result = await window.neoApi.meetingSaveMarkdown(activeMeeting.id);
+        if (result.canceled) return;
+        showToast?.('success', `会议纪要已保存：${result.filePath}`);
+      } else {
+        const blob = new Blob([formatMeetingMarkdown(activeMeeting)], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${activeMeeting.title.replace(/[\\/:*?"<>|]/g, '_') || '会议纪要'}.md`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        showToast?.('success', '会议纪要下载已开始');
+      }
     } catch (err: any) {
       showToast?.('error', `导出失败: ${err.message}`);
     }
@@ -581,7 +616,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
   });
 
   return (
-    <div className="flex-1 h-full w-full min-h-0 flex flex-col bg-slate-100 overflow-hidden select-none">
+    <div className="flex-1 h-full w-full min-h-0 flex flex-col bg-slate-100 overflow-hidden select-text">
       {/* 顶部主工作台状态栏 */}
       <div className="h-12 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center space-x-3">
@@ -650,9 +685,9 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       )}
 
       {/* 主体三栏布局 */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      <div ref={panels.containerRef} className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
         {/* 左侧：会议列表栏 */}
-        <div className="w-72 border-r border-slate-200 bg-white flex flex-col shrink-0">
+        <div style={{ width: panels.listWidth }} className="min-w-0 border-r border-slate-200 bg-white flex flex-col shrink-0">
           {/* 会议搜索 */}
           <div className="p-3 border-b border-slate-100">
             <div className="relative">
@@ -762,6 +797,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
           </div>
         </div>
 
+        {panels.separator('list')}
         {/* 中右工作区 */}
         {activeMeeting ? (
           <div className="flex-1 min-w-0 flex flex-col bg-white">
@@ -799,7 +835,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
               </div>
 
               {/* 操作按钮 */}
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => triggerTranscription()}
                   disabled={isTranscribing}
@@ -831,7 +867,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
             {/* 中栏与右栏分割容器 */}
             <div className="flex-1 min-h-0 flex overflow-hidden">
               {/* 中间：逐字逐句转写流 */}
-              <div className="flex-1 min-w-[340px] flex flex-col border-r border-slate-200 overflow-hidden">
+              <div className="flex-1 min-w-0 flex flex-col border-r border-slate-200 overflow-hidden select-text">
                 <MeetingTranscriptPane
                   segments={activeMeeting.segments}
                   speakers={activeMeeting.speakers}
@@ -846,11 +882,12 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
                 />
               </div>
 
+              {panels.separator('analysis')}
               {/* 右侧：AI 分析多标签面板 */}
-              <div className="w-[450px] xl:w-[500px] flex flex-col bg-slate-50/50 overflow-hidden shrink-0">
+              <div style={{ width: panels.analysisWidth }} className="min-w-0 flex flex-col bg-slate-50/50 overflow-hidden shrink-0">
                 {/* 选项卡导航 */}
-                <div className="h-11 border-b border-slate-200 px-4 flex items-center justify-between bg-white shrink-0">
-                  <div className="flex items-center space-x-1 bg-slate-100 p-0.5 rounded-xl text-xs">
+                <div className="min-h-11 border-b border-slate-200 p-2 flex items-center bg-white shrink-0">
+                  <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-0.5 rounded-xl text-xs">
                     <button
                       onClick={() => setRightTab('summary')}
                       className={`px-3 py-1 rounded-lg font-medium transition-colors flex items-center space-x-1.5 cursor-pointer ${
@@ -910,6 +947,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
                       onTriggerSummarize={() => triggerSummarize()}
                       onToggleActionItem={handleToggleActionItem}
                       onExportMarkdown={handleExportMarkdown}
+                      onCopyMarkdown={async () => { await copyMeetingText(formatMeetingMarkdown(activeMeeting, false)); }}
                       showToast={showToast}
                     />
                   )}

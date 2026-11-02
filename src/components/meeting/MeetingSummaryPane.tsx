@@ -28,6 +28,7 @@ interface MeetingSummaryPaneProps {
   onTriggerSummarize: () => void;
   onToggleActionItem: (actionId: string) => void;
   onExportMarkdown: () => void;
+  onCopyMarkdown: () => Promise<void>;
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
@@ -37,30 +38,22 @@ export const MeetingSummaryPane: React.FC<MeetingSummaryPaneProps> = ({
   onTriggerSummarize,
   onToggleActionItem,
   onExportMarkdown,
+  onCopyMarkdown,
   showToast,
 }) => {
   const [copied, setCopied] = useState(false);
   const [actionFilter, setActionFilter] = useState<'all' | 'pending' | 'completed'>('all');
 
-  const copyMarkdown = () => {
+  const copyMarkdown = async () => {
     if (!summary) return;
-    const lines: string[] = [];
-    lines.push('### 会议核心要旨');
-    lines.push(summary.executiveSummary);
-    lines.push('');
-    lines.push('### 关键决议');
-    summary.keyDecisions.forEach((d, i) => lines.push(`${i + 1}. ${d.content}`));
-    lines.push('');
-    lines.push('### 落实待办清单');
-    summary.actionItems.forEach((a) => {
-      const mark = a.completed ? '[x]' : '[ ]';
-      lines.push(`- ${mark} ${a.task} (@${a.assignee}) [${a.priority.toUpperCase()}] 截止: ${a.dueDate || '尽快'}`);
-    });
-
-    navigator.clipboard.writeText(lines.join('\n'));
-    setCopied(true);
-    showToast?.('success', '已复制核心纪要与待办清单');
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await onCopyMarkdown();
+      setCopied(true);
+      showToast?.('success', '已复制完整会议纪要');
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error: any) {
+      showToast?.('error', `复制失败：${error.message}`);
+    }
   };
 
   if (!summary) {
@@ -100,20 +93,20 @@ export const MeetingSummaryPane: React.FC<MeetingSummaryPaneProps> = ({
   const completedCount = summary.actionItems.filter((i) => i.completed).length;
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+    <div className="flex-1 min-h-0 min-w-0 overflow-y-auto px-4 py-5 space-y-6 select-text break-words">
       {/* 顶部操作工具栏 */}
-      <div className="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
-        <div className="flex items-center space-x-2 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-slate-500">
           <Sparkles className="w-4 h-4 text-blue-600" />
           <span className="font-medium text-slate-700">AI 智能纪要</span>
           {summary.modelUsed && (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200/60">
+            <span className="max-w-full break-all text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200/60">
               {summary.modelUsed}
             </span>
           )}
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={copyMarkdown}
             className="px-2.5 py-1 text-xs rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1.5 transition-colors cursor-pointer"
@@ -127,7 +120,7 @@ export const MeetingSummaryPane: React.FC<MeetingSummaryPaneProps> = ({
             className="px-2.5 py-1 text-xs rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1.5 transition-colors cursor-pointer"
           >
             <Download className="w-3.5 h-3.5 text-slate-600" />
-            <span>导出文档</span>
+            <span>下载纪要</span>
           </button>
 
           <button
@@ -141,13 +134,22 @@ export const MeetingSummaryPane: React.FC<MeetingSummaryPaneProps> = ({
         </div>
       </div>
 
+      {summary.modelUsed === '智能分析引擎' && (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+          这是旧版本的本地生成结果，未经模型分析，可能包含固定话术。请点击重新分析，基于完整转写生成纪要。
+        </div>
+      )}
+      {summary.sourceSegmentCount !== undefined && (
+        <p className="text-xs text-slate-500">已分析 {summary.sourceSegmentCount} 段转写 · {summary.sourceChunkCount} 个分段 · {summary.topics.length} 个议题</p>
+      )}
+
       {/* 1. 核心要旨与宏观态势 */}
       <div className="bg-gradient-to-br from-blue-50/70 via-indigo-50/30 to-white rounded-2xl p-5 border border-blue-100 shadow-xs space-y-3">
         <div className="flex items-center space-x-2 text-blue-900 font-bold text-sm">
           <FileText className="w-4 h-4 text-blue-600" />
           <span>核心要旨与宏观决议速览</span>
         </div>
-        <p className="text-[13.5px] leading-relaxed text-slate-700 font-normal">
+        <p className="text-[13.5px] whitespace-pre-wrap leading-relaxed text-slate-700 font-normal">
           {summary.executiveSummary}
         </p>
       </div>
@@ -156,7 +158,7 @@ export const MeetingSummaryPane: React.FC<MeetingSummaryPaneProps> = ({
         <div className="bg-slate-900 text-white rounded-2xl p-5 shadow-xs space-y-2">
           <div className="flex items-center space-x-2 text-cyan-400 font-bold text-xs uppercase tracking-wider">
             <Target className="w-4 h-4" />
-            <span>战略背景研判与宏观商业目标 (麦肯锡级)</span>
+            <span>会议背景与业务目标</span>
           </div>
           <p className="text-xs text-slate-200 leading-relaxed font-light">
             {summary.strategicContext}
@@ -264,7 +266,7 @@ export const MeetingSummaryPane: React.FC<MeetingSummaryPaneProps> = ({
                       )}
                     </button>
                     <span
-                      className={`text-xs text-slate-800 leading-normal truncate ${
+                      className={`text-xs text-slate-800 leading-relaxed whitespace-pre-wrap break-words ${
                         act.completed ? 'line-through text-slate-400' : 'font-medium'
                       }`}
                     >

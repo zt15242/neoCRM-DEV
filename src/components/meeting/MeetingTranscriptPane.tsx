@@ -14,6 +14,7 @@ import {
   ArrowDownCircle,
 } from 'lucide-react';
 import { MeetingSegment, MeetingSpeaker, MatchedTermInfo } from '../../../shared/meetingTypes';
+import { copyMeetingText } from '../../utils/meetingClipboard';
 
 interface MeetingTranscriptPaneProps {
   segments: MeetingSegment[];
@@ -62,11 +63,15 @@ export const MeetingTranscriptPane: React.FC<MeetingTranscriptPaneProps> = ({
   };
 
   // 复制单句文本
-  const copyText = (segId: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(segId);
-    showToast?.('success', '已复制本句转写文本');
-    setTimeout(() => setCopiedId(null), 1500);
+  const copyText = async (segId: string, text: string) => {
+    try {
+      await copyMeetingText(text);
+      setCopiedId(segId);
+      showToast?.('success', '已复制本句转写文本');
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch (error: any) {
+      showToast?.('error', `复制失败：${error.message}`);
+    }
   };
 
   // 过滤片段
@@ -153,9 +158,9 @@ export const MeetingTranscriptPane: React.FC<MeetingTranscriptPaneProps> = ({
     <div className="flex-1 h-full min-h-0 flex flex-col bg-slate-50/60 overflow-hidden relative">
       {/* 顶部搜索与发言人筛选栏 */}
       <div className="px-5 py-3 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shadow-2xs z-10">
-        <div className="flex items-center space-x-3 flex-1 min-w-[240px]">
+        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
           {/* 搜索框 */}
-          <div className="relative flex-1 max-w-md">
+          <div className="relative flex-1 basis-40 min-w-0 max-w-md">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -172,11 +177,11 @@ export const MeetingTranscriptPane: React.FC<MeetingTranscriptPaneProps> = ({
           </div>
 
           {/* 发言人下拉筛选 */}
-          <div className="relative">
+          <div className="relative min-w-0 max-w-full">
             <select
               value={selectedSpeakerFilter}
               onChange={(e) => setSelectedSpeakerFilter(e.target.value)}
-              className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 text-xs py-1.5 pl-3 pr-8 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              className="max-w-full appearance-none bg-slate-50 border border-slate-200 text-slate-700 text-xs py-1.5 pl-3 pr-8 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
             >
               <option value="all">全部发言人 ({segments.length}句)</option>
               {speakers.map((sp) => (
@@ -230,11 +235,11 @@ export const MeetingTranscriptPane: React.FC<MeetingTranscriptPaneProps> = ({
                 }`}
               >
                 {/* 顶部说话人与时间栏 */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center space-x-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <div className="flex min-w-0 items-center space-x-2.5">
                     {/* 头像 */}
                     <div
-                      className="w-7 h-7 rounded-full text-white text-xs font-bold flex items-center justify-center shadow-xs"
+                      className="w-7 h-7 shrink-0 rounded-full text-white text-xs font-bold flex items-center justify-center shadow-xs"
                       style={{ backgroundColor: avatarColor }}
                     >
                       {initial}

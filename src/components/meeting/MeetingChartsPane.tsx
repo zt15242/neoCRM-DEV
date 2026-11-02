@@ -474,6 +474,7 @@ export const MeetingChartsPane: React.FC<MeetingChartsPaneProps> = ({
       )}
 
       {/* 5. 情绪与共识走势波动图 (Sentiment & Consensus Curve) */}
+      {trajectory.length > 0 && (
       <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2 text-slate-900 font-bold text-sm">
@@ -570,6 +571,8 @@ export const MeetingChartsPane: React.FC<MeetingChartsPaneProps> = ({
           </div>
         )}
       </div>
+
+      )}
 
       {/* 6. 核心专业术语提及频次排行与待办认领矩阵 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

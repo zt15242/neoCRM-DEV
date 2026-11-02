@@ -22,6 +22,7 @@ import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { EmailService } from './services/emailService';
 import { MeetingService } from './services/meetingService';
+import { saveMeetingDocument } from './services/meetingDocument';
 import { WorkspaceService } from './services/workspaceService';
 import { configurePackagedEsbuildBinary } from './services/esbuildRuntime';
 import { FeishuService } from './services/feishuService';
@@ -986,5 +987,12 @@ ipcMain.handle('meeting:resetGlossary', async () => meetingService.resetGlossary
 ipcMain.handle('meeting:getSettings', async () => meetingService.getSettings());
 ipcMain.handle('meeting:saveSettings', async (_, settings) => meetingService.saveSettings(settings));
 ipcMain.handle('meeting:exportMarkdown', async (_, meetingId: string) => meetingService.exportMeetingMarkdown(meetingId));
+ipcMain.handle('meeting:saveMarkdown', async (event, meetingId: string) => {
+  const meeting = meetingService.getMeetingById(meetingId);
+  if (!meeting) throw new Error('会议记录不存在');
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  return saveMeetingDocument(meeting, app.getPath('downloads'), options =>
+    owner ? dialog.showSaveDialog(owner, options) : dialog.showSaveDialog(options));
+});
 
 setInterval(() => { void feishuService.runScheduler(); }, 60_000);

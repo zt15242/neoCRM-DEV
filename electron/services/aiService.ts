@@ -1,4 +1,5 @@
 import { CodeSyncService } from './codeSyncService';
+import { requestMeetingModelText } from './meetingModelClient';
 import { resolveSalesforceAlias } from './salesforceService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
@@ -87,6 +88,10 @@ export class AiService {
   };
   public setWorkBuddyService(service: any) {
     this.workbuddyService = service;
+  }
+
+  public requestMeetingAnalysisText(provider: AiProviderConfig, modelId: string, system: string, input: string, maxTokens: number): Promise<string> {
+    return requestMeetingModelText(provider, modelId, system, input, maxTokens, this.workbuddyService);
   }
 
   public setWorkspaceService(service: any) {
