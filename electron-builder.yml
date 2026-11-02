@@ -1,5 +1,7 @@
 appId: com.neocrm.developer.desktop
 productName: NeoCRM Desktop
+beforePack: scripts/ffmpeg-before-pack.cjs
+afterPack: scripts/ffmpeg-after-pack.cjs
 directories:
   output: release
   buildResources: build
@@ -19,6 +21,10 @@ publish:
   owner: zt15242
   repo: neoCRM-DEV
 mac:
+  extraResources:
+    - from: resources/ffmpeg/darwin-${arch}
+      to: bin/ffmpeg
+      filter: [ffmpeg, ffmpeg.LICENSE, ffmpeg.README, SOURCE.json]
   identity: null
   gatekeeperAssess: false
   hardenedRuntime: false
@@ -37,6 +43,10 @@ mac:
         - x64
   category: public.app-category.developer-tools
 win:
+  extraResources:
+    - from: resources/ffmpeg/win32-${arch}
+      to: bin/ffmpeg
+      filter: [ffmpeg.exe, ffmpeg.LICENSE, ffmpeg.README, SOURCE.json]
   target:
     - target: nsis
       arch:

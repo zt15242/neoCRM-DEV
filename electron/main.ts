@@ -71,6 +71,9 @@ const workbuddyService = new WorkBuddyService();
 aiService.setWorkBuddyService(workbuddyService);
 const emailService = new EmailService(aiService);
 const meetingService = new MeetingService(aiService);
+meetingService.onTranscriptionTaskUpdated((task) => {
+  win?.webContents.send('meeting:transcriptionTaskUpdated', task);
+});
 const projectService = new ProjectService();
 const workspaceService = new WorkspaceService(sessionStore, dataService, emailService, metadataService, projectService);
 aiService.setWorkspaceService(workspaceService);
@@ -960,6 +963,15 @@ ipcMain.handle('meeting:getAudioDataUrl', async (_, filePath: string) => meeting
 ipcMain.handle('meeting:deleteAudioFile', async (_, filePath: string) => meetingService.deleteAudioFile(filePath));
 ipcMain.handle('meeting:transcribeAudio', async (_, meetingId: string, options?: any) =>
   meetingService.transcribeAudio(meetingId, options)
+);
+ipcMain.handle('meeting:startTranscriptionTask', async (_, meetingId: string, options?: any) =>
+  meetingService.startTranscriptionTask(meetingId, options)
+);
+ipcMain.handle('meeting:getTranscriptionTask', async (_, meetingId: string) =>
+  meetingService.getTranscriptionTask(meetingId)
+);
+ipcMain.handle('meeting:cancelTranscriptionTask', async (_, meetingId: string) =>
+  meetingService.cancelTranscriptionTask(meetingId)
 );
 ipcMain.handle('meeting:transcribeAudioChunk', async (_, meetingId: string, chunkPath: string, startTimeSec: number, options?: any) =>
   meetingService.transcribeAudioChunk(meetingId, chunkPath, startTimeSec, options)

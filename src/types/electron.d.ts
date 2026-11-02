@@ -8,7 +8,7 @@ import {
 } from '../../shared/mailTypes';
 import type { WorkspaceDataSources, WorkspaceExecutionLog, WorkspacePage, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
 import type { FeishuWorkspaceSettings } from '../../shared/feishuTypes';
-import type { MeetingRecord, GlossaryTerm, OpenAiAudioSettings } from '../../shared/meetingTypes';
+import type { MeetingRecord, GlossaryTerm, OpenAiAudioSettings, MeetingTranscriptionTask } from '../../shared/meetingTypes';
 import { 
   NeoEnvironment, 
   SessionState, 
@@ -360,6 +360,10 @@ declare global {
       meetingGetAudioDataUrl?: (filePath: string) => Promise<string>;
       meetingDeleteAudioFile?: (filePath: string) => Promise<boolean>;
       meetingTranscribeAudio?: (meetingId: string, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingRecord>;
+      meetingStartTranscriptionTask?: (meetingId: string, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingTranscriptionTask>;
+      meetingGetTranscriptionTask?: (meetingId: string) => Promise<MeetingTranscriptionTask | null>;
+      meetingCancelTranscriptionTask?: (meetingId: string) => Promise<MeetingTranscriptionTask | null>;
+      onMeetingTranscriptionTaskUpdated?: (callback: (task: MeetingTranscriptionTask) => void) => () => void;
       meetingTranscribeAudioChunk?: (meetingId: string, chunkPath: string, startTimeSec: number, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingRecord>;
       meetingSummarizeMeeting?: (meetingId: string, options?: { providerId?: string; modelId?: string; live?: boolean }) => Promise<MeetingRecord>;
       meetingGetGlossary?: () => Promise<GlossaryTerm[]>;

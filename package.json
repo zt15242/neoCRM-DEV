@@ -1,12 +1,13 @@
 {
   "name": "neocrm-desktop",
-  "version": "1.8.27",
+  "version": "1.8.28",
   "description": "NeoCRM 桌面端开发者工具，支持多环境切换、OAuth2 授权登录与会话管理",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "start": "electron .",
+    "prepare:ffmpeg": "node scripts/prepare-ffmpeg.mjs",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
     "dist:all": "npm run build && electron-builder -mw",

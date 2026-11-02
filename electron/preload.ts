@@ -220,6 +220,9 @@ export const neoApi = {
   meetingGetAudioDataUrl: (filePath: string) => ipcRenderer.invoke('meeting:getAudioDataUrl', filePath),
   meetingDeleteAudioFile: (filePath: string) => ipcRenderer.invoke('meeting:deleteAudioFile', filePath),
   meetingTranscribeAudio: (meetingId: string, options?: any) => ipcRenderer.invoke('meeting:transcribeAudio', meetingId, options),
+  meetingStartTranscriptionTask: (meetingId: string, options?: any) => ipcRenderer.invoke('meeting:startTranscriptionTask', meetingId, options),
+  meetingGetTranscriptionTask: (meetingId: string) => ipcRenderer.invoke('meeting:getTranscriptionTask', meetingId),
+  meetingCancelTranscriptionTask: (meetingId: string) => ipcRenderer.invoke('meeting:cancelTranscriptionTask', meetingId),
   meetingTranscribeAudioChunk: (meetingId: string, chunkPath: string, startTimeSec: number, options?: any) => ipcRenderer.invoke('meeting:transcribeAudioChunk', meetingId, chunkPath, startTimeSec, options),
   meetingSummarizeMeeting: (meetingId: string, options?: any) => ipcRenderer.invoke('meeting:summarizeMeeting', meetingId, options),
   meetingGetGlossary: () => ipcRenderer.invoke('meeting:getGlossary'),
@@ -235,6 +238,11 @@ export const neoApi = {
     const handler = (_: any, data: any) => callback(data);
     ipcRenderer.on('ai:streamEvent', handler);
     return () => ipcRenderer.removeListener('ai:streamEvent', handler);
+  },
+  onMeetingTranscriptionTaskUpdated: (callback: (task: any) => void) => {
+    const handler = (_: any, data: any) => callback(data);
+    ipcRenderer.on('meeting:transcriptionTaskUpdated', handler);
+    return () => ipcRenderer.removeListener('meeting:transcriptionTaskUpdated', handler);
   },
 };
 

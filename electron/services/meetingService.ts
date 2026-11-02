@@ -23,9 +23,11 @@ import {
   GanttMilestoneItem,
   SpeakerRadarScore,
   SpeakerInteractionFlow,
+  MeetingTranscriptionTask,
 } from '../../shared/meetingTypes';
 import { AiService } from './aiService';
 import { BUILTIN_SILICONFLOW_KEY } from '../../shared/constants';
+import { resolveFfmpegBinary } from './ffmpegRuntime';
 import {
   extractTranscriptionText,
   getAudioMimeType,
@@ -40,7 +42,9 @@ import {
 } from './meetingTranscription';
 
 const execFileAsync = promisify(execFile);
-const TRANSCRIPTION_CHUNK_SECONDS = 60;
+// Windows 网关对较大的单次 multipart 请求更容易返回 502。30 秒一段也能覆盖
+// 30~60 秒的录音，确保导入长音频不会先尝试上传完整文件。
+const TRANSCRIPTION_CHUNK_SECONDS = 30;
 const MAX_TRANSCRIPTION_ATTEMPTS = 3;
 
 /**
@@ -49,8 +53,81 @@ const MAX_TRANSCRIPTION_ATTEMPTS = 3;
  * 大模型会议智能总结、语艺沟通分析与飞书妙计级可视化图表生成。
  */
 export class MeetingService {
+  private readonly transcriptionTasks = new Map<string, MeetingTranscriptionTask>();
+  private readonly transcriptionTaskPromises = new Map<string, Promise<void>>();
+  private readonly transcriptionTaskListeners = new Set<(task: MeetingTranscriptionTask) => void>();
+
   constructor(private aiService: AiService) {
     this.ensureInitialized();
+  }
+
+  public onTranscriptionTaskUpdated(listener: (task: MeetingTranscriptionTask) => void): () => void {
+    this.transcriptionTaskListeners.add(listener);
+    return () => this.transcriptionTaskListeners.delete(listener);
+  }
+
+  private publishTranscriptionTask(task: MeetingTranscriptionTask): MeetingTranscriptionTask {
+    const next = { ...task, updatedAt: Date.now() };
+    this.transcriptionTasks.set(task.meetingId, next);
+    for (const listener of this.transcriptionTaskListeners) {
+      try {
+        listener(next);
+      } catch (error) {
+        console.warn('[MeetingService] 转写任务进度通知失败:', error);
+      }
+    }
+    return next;
+  }
+
+  public getTranscriptionTask(meetingId: string): MeetingTranscriptionTask | null {
+    return this.transcriptionTasks.get(meetingId) || null;
+  }
+
+  public startTranscriptionTask(
+    meetingId: string,
+    options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string },
+  ): MeetingTranscriptionTask {
+    const active = this.transcriptionTasks.get(meetingId);
+    if (active && ['queued', 'splitting', 'transcribing'].includes(active.status)) return active;
+
+    const now = Date.now();
+    const task: MeetingTranscriptionTask = {
+      taskId: `transcription_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      meetingId,
+      status: 'queued',
+      totalChunks: 0,
+      completedChunks: 0,
+      currentChunk: 0,
+      message: '已加入后台转写队列',
+      startedAt: now,
+      updatedAt: now,
+    };
+    this.publishTranscriptionTask(task);
+    const promise = this.runTranscriptionTask(task, options);
+    this.transcriptionTaskPromises.set(meetingId, promise);
+    void promise.finally(() => {
+      if (this.transcriptionTaskPromises.get(meetingId) === promise) {
+        this.transcriptionTaskPromises.delete(meetingId);
+      }
+    });
+    return task;
+  }
+
+  public async cancelTranscriptionTask(meetingId: string): Promise<MeetingTranscriptionTask | null> {
+    const task = this.transcriptionTasks.get(meetingId);
+    if (!task || !['queued', 'splitting', 'transcribing'].includes(task.status)) return task || null;
+    const cancelled = this.publishTranscriptionTask({
+      ...task,
+      status: 'cancelled',
+      message: `已停止转写，已完成 ${task.completedChunks}/${task.totalChunks || '?'} 段`,
+    });
+    const meeting = this.getMeetingById(meetingId);
+    if (meeting) {
+      meeting.status = meeting.segments.length > 0 ? 'transcribed' : 'idle';
+      meeting.statusMessage = cancelled.message;
+      this.saveMeeting(meeting);
+    }
+    return cancelled;
   }
 
   private getDataDir(): string {
@@ -131,10 +208,15 @@ export class MeetingService {
     );
     fs.mkdirSync(outputDir, { recursive: true });
     const outputPattern = path.join(outputDir, 'chunk_%03d.mp3');
-    const ffmpegBinary = process.env.NEOCRM_FFMPEG_PATH || (process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-
     try {
+      const ffmpegBinary = resolveFfmpegBinary({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appPath: app.getAppPath(),
+        overridePath: process.env.NEOCRM_FFMPEG_PATH,
+      });
       await execFileAsync(ffmpegBinary, [
+        '-hide_banner', '-loglevel', 'error',
         '-y',
         '-i', audioPath,
         '-map', '0:a:0',
@@ -153,16 +235,18 @@ export class MeetingService {
     } catch (err: any) {
       fs.rmSync(outputDir, { recursive: true, force: true });
       console.warn('[MeetingService] 无法使用 ffmpeg 对音频分片:', err?.message || err);
-      return [];
+      throw new Error(
+        `音频分段失败，未发送整段音频请求。${err?.message || '无法运行音频处理工具'}${app.isPackaged ? '。请检查音频文件是否有效，或重新安装应用以修复内置工具。' : '。开发环境可运行 npm run prepare:ffmpeg 准备内置工具。'}`,
+      );
     }
 
     const chunks = fs.readdirSync(outputDir)
       .filter((name) => /^chunk_\d+\.mp3$/i.test(name))
       .sort()
       .map((name) => path.join(outputDir, name));
-    if (chunks.length < 2) {
+    if (chunks.length === 0) {
       fs.rmSync(outputDir, { recursive: true, force: true });
-      return [];
+      throw new Error('ffmpeg 未生成有效的音频片段，已停止转写以避免上传整段长音频。');
     }
     return chunks;
   }
@@ -608,6 +692,130 @@ export class MeetingService {
     meeting.statusMessage = `实时转写中，已完成 ${mergedSegments.length} 段发言`;
     this.saveMeeting(meeting);
     return meeting;
+  }
+
+  private async runTranscriptionTask(
+    initialTask: MeetingTranscriptionTask,
+    options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string },
+  ): Promise<void> {
+    const meetingId = initialTask.meetingId;
+    let chunks: string[] = [];
+    let temporaryChunks = false;
+    try {
+      const meeting = this.getMeetingById(meetingId);
+      if (!meeting) throw new Error(`未找到指定会议 [${meetingId}]`);
+      if (!meeting.audioPath || !fs.existsSync(meeting.audioPath)) throw new Error('会议音频文件不存在，请重新导入或录制。');
+
+      const config = this.getAudioTranscriptionConfig(options);
+      if (!config.apiKey) throw new Error('未配置转写 API Key。请在「转写配置」中填写支持 OpenAI 音频转写接口的密钥。');
+      const sourcePath = meeting.audioPath;
+      this.publishTranscriptionTask({
+        ...initialTask,
+        status: 'splitting',
+        message: '正在将音频切分为顺序处理的片段...',
+      });
+      chunks = await this.splitAudioForTranscription(sourcePath, meetingId);
+      temporaryChunks = chunks.length > 0;
+      const taskAfterSplit = this.transcriptionTasks.get(meetingId);
+      if (taskAfterSplit?.status === 'cancelled') return;
+
+      const totalChunks = chunks.length;
+      let task = this.publishTranscriptionTask({
+        ...initialTask,
+        status: 'transcribing',
+        totalChunks,
+        completedChunks: 0,
+        currentChunk: 1,
+        message: `音频已切分为 ${totalChunks} 段，准备依次转写...`,
+      });
+      meeting.status = 'transcribing';
+      meeting.statusMessage = task.message;
+      this.saveMeeting(meeting);
+
+      let timeOffset = 0;
+      for (let index = 0; index < totalChunks; index += 1) {
+        task = this.transcriptionTasks.get(meetingId) || task;
+        if (task.status === 'cancelled') return;
+
+        const chunkPath = chunks[index];
+        const chunkStat = fs.statSync(chunkPath);
+        const chunkName = temporaryChunks ? path.basename(chunkPath) : path.basename(sourcePath);
+        task = this.publishTranscriptionTask({
+          ...task,
+          status: 'transcribing',
+          currentChunk: index + 1,
+          message: `正在转写第 ${index + 1}/${totalChunks} 段...`,
+        });
+        meeting.statusMessage = task.message;
+        this.saveMeeting(meeting);
+
+        // Deliberately await each chunk: the next request starts only after this one succeeds.
+        const rawData = await this.requestAudioTranscriptionFile(
+          chunkPath,
+          chunkName,
+          chunkStat.size,
+          config,
+          (message) => {
+            const current = this.transcriptionTasks.get(meetingId);
+            if (!current || current.status === 'cancelled') return;
+            this.publishTranscriptionTask({ ...current, message: `第 ${index + 1}/${totalChunks} 段${message}` });
+            meeting.statusMessage = `第 ${index + 1}/${totalChunks} 段${message}`;
+            this.saveMeeting(meeting);
+          },
+        );
+        task = this.transcriptionTasks.get(meetingId) || task;
+        if (task.status === 'cancelled') return;
+
+        const parsed = this.parseTranscriptionSegments(rawData, timeOffset);
+        if (parsed.segments.length === 0) throw new Error(`第 ${index + 1}/${totalChunks} 段没有返回有效转写文本`);
+        meeting.segments = [...meeting.segments, ...parsed.segments].sort((a, b) => a.startTime - b.startTime);
+        meeting.speakers = this.calculateSpeakersFromSegments(meeting.segments);
+        meeting.duration = Math.max(meeting.duration || 0, Math.ceil(parsed.duration));
+        const hitTerms = new Set<string>();
+        meeting.segments.forEach((segment) => segment.matchedTerms?.forEach((term) => hitTerms.add(term.term)));
+        meeting.glossaryHitTerms = Array.from(hitTerms);
+        timeOffset = Math.max(timeOffset, parsed.duration, (index + 1) * TRANSCRIPTION_CHUNK_SECONDS);
+        meeting.status = 'transcribing';
+
+        const completedChunks = index + 1;
+        const isDone = completedChunks === totalChunks;
+        meeting.statusMessage = isDone
+          ? '分段转写完成，准备进行会议总结'
+          : `已完成 ${completedChunks}/${totalChunks} 段，正在请求下一段...`;
+        this.saveMeeting(meeting);
+        task = this.publishTranscriptionTask({
+          ...task,
+          completedChunks,
+          currentChunk: isDone ? totalChunks : completedChunks + 1,
+          message: meeting.statusMessage,
+        });
+      }
+
+      meeting.status = 'transcribed';
+      meeting.statusMessage = '转写完成，准备进行智能总结与语艺分析';
+      this.saveMeeting(meeting);
+      const current = this.transcriptionTasks.get(meetingId);
+      if (current && current.status !== 'cancelled') {
+        this.publishTranscriptionTask({ ...current, status: 'completed', message: meeting.statusMessage });
+      }
+    } catch (error: any) {
+      const message = error?.response || error?.code
+        ? getTranscriptionErrorMessage(error, getTranscriptionTimeoutMs(0))
+        : error?.message || '转写任务失败';
+      const meeting = this.getMeetingById(meetingId);
+      if (meeting) {
+        meeting.status = meeting.segments.length > 0 ? 'transcribed' : 'error';
+        meeting.statusMessage = message;
+        this.saveMeeting(meeting);
+      }
+      const current = this.transcriptionTasks.get(meetingId) || initialTask;
+      if (current.status !== 'cancelled') {
+        this.publishTranscriptionTask({ ...current, status: 'error', error: message, message });
+      }
+      console.warn('[MeetingService] 后台分段转写失败:', message);
+    } finally {
+      if (temporaryChunks) this.cleanupTranscriptionChunks(chunks);
+    }
   }
 
   public deleteAudioFile(filePath: string): boolean {

@@ -28,6 +28,7 @@ import {
   MeetingRecord,
   GlossaryTerm,
   OpenAiAudioSettings,
+  MeetingTranscriptionTask,
 } from '../../../shared/meetingTypes';
 import { MeetingAudioPlayer } from './MeetingAudioPlayer';
 import { MeetingTranscriptPane } from './MeetingTranscriptPane';
@@ -62,6 +63,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
   const liveSummaryBusyRef = useRef(false);
   const liveSummaryPendingRef = useRef<string | null>(null);
   const liveSummaryTaskRef = useRef<Promise<void> | null>(null);
+  const summarizedTranscriptionTasksRef = useRef(new Set<string>());
 
   // 弹窗状态
   const [showRecordModal, setShowRecordModal] = useState(false);
@@ -328,7 +330,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
   const triggerTranscription = async (meetingId?: string, options?: { summarize?: boolean }) => {
     const targetId = meetingId || activeMeetingId;
     if (!targetId) return;
-    if (!window.neoApi?.meetingTranscribeAudio) {
+    if (!window.neoApi?.meetingStartTranscriptionTask) {
       updateAudioProcessing(targetId, { label: '未检测到音频转写接口', tone: 'error' });
       return;
     }
@@ -338,26 +340,29 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       ...(fileName ? { fileName } : {}),
       stage: 1,
       startedAt: Date.now(),
-      label: '正在上传音频并转写...',
+      label: '正在准备后台分段转写...',
       tone: 'info',
     });
     setIsTranscribing(true);
-    showToast?.('info', '正在通过已配置的转写服务识别音频...');
+    showToast?.('info', '已启动后台分段转写，完成一段后会自动请求下一段...');
 
     try {
-      const updated = await window.neoApi.meetingTranscribeAudio(targetId);
-      setMeetings((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
-      showToast?.('success', '音频转写完成，正在自动开启深度总结与语艺分析...');
-      updateAudioProcessing(targetId, { stage: 2, label: '转写完成，正在准备 AI 总结...', tone: 'info' });
-      if (options?.summarize !== false) {
-        await triggerSummarize(targetId);
-      } else {
-        updateAudioProcessing(targetId, { stage: 2, label: '音频转写已完成', tone: 'success' });
+      const task = await window.neoApi.meetingStartTranscriptionTask(targetId);
+      updateAudioProcessing(targetId, {
+        label: task.message,
+        tone: task.status === 'completed' ? 'success' : task.status === 'error' || task.status === 'cancelled' ? 'error' : 'info',
+        completedChunks: task.completedChunks,
+        totalChunks: task.totalChunks,
+        currentChunk: task.currentChunk,
+        taskStatus: task.status,
+      });
+      if (task.status === 'error' || task.status === 'cancelled') {
+        updateAudioProcessing(targetId, { label: task.error || task.message, tone: 'error' });
+        setIsTranscribing(false);
       }
     } catch (err: any) {
       updateAudioProcessing(targetId, { label: `转写失败：${err?.message || '转写服务异常'}`, tone: 'error' });
       showToast?.('error', `语音转写失败: ${err.message}`);
-    } finally {
       setIsTranscribing(false);
     }
   };
@@ -407,6 +412,35 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
       setIsSummarizing(false);
     }
   };
+
+  useEffect(() => {
+    if (!window.neoApi?.onMeetingTranscriptionTaskUpdated) return;
+    return window.neoApi.onMeetingTranscriptionTaskUpdated((task: MeetingTranscriptionTask) => {
+      const fileName = meetings.find((meeting) => meeting.id === task.meetingId)?.audioFileName;
+      const running = ['queued', 'splitting', 'transcribing'].includes(task.status);
+      updateAudioProcessing(task.meetingId, {
+        fileName,
+        stage: task.status === 'completed' ? 2 : 1,
+        label: task.error || task.message,
+        tone: task.status === 'completed' ? 'success' : task.status === 'error' || task.status === 'cancelled' ? 'error' : 'info',
+        completedChunks: task.completedChunks,
+        totalChunks: task.totalChunks,
+        currentChunk: task.currentChunk,
+        taskStatus: task.status,
+      });
+      if (!running) setIsTranscribing(false);
+      void window.neoApi?.meetingGetMeeting?.(task.meetingId).then((updated) => {
+        if (updated) setMeetings((prev) => prev.map((meeting) => meeting.id === updated.id ? updated : meeting));
+      });
+      if (task.status === 'completed' && !summarizedTranscriptionTasksRef.current.has(task.taskId)) {
+        summarizedTranscriptionTasksRef.current.add(task.taskId);
+        showToast?.('success', '分段转写完成，正在自动开启会议总结与语艺分析...');
+        void triggerSummarize(task.meetingId);
+      } else if (task.status === 'error') {
+        showToast?.('error', `分段转写失败：${task.error || task.message}`);
+      }
+    });
+  }, [meetings, showToast]);
 
   // 6. 切换待办完成状态
   const handleToggleActionItem = async (actionId: string) => {
@@ -602,6 +636,11 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
         <MeetingAudioProgress
           key={audioProcessing.meetingId}
           processing={audioProcessing}
+          onCancel={audioProcessing.taskStatus && ['queued', 'splitting', 'transcribing'].includes(audioProcessing.taskStatus)
+            ? () => {
+                void window.neoApi?.meetingCancelTranscriptionTask?.(audioProcessing.meetingId);
+              }
+            : undefined}
           onDismiss={() => setAudioProcessingByMeeting((current) => {
             const next = { ...current };
             delete next[audioProcessing.meetingId];

@@ -10,6 +10,10 @@ export interface AudioProcessingState {
   finishedAt?: number;
   label: string;
   tone: 'info' | 'success' | 'error';
+  completedChunks?: number;
+  totalChunks?: number;
+  currentChunk?: number;
+  taskStatus?: 'queued' | 'splitting' | 'transcribing' | 'completed' | 'error' | 'cancelled';
 }
 
 const stages = ['准备音频', '音频转写', 'AI 总结'];
@@ -17,7 +21,8 @@ const stages = ['准备音频', '音频转写', 'AI 总结'];
 export const MeetingAudioProgress: React.FC<{
   processing: AudioProcessingState;
   onDismiss: () => void;
-}> = ({ processing, onDismiss }) => {
+  onCancel?: () => void;
+}> = ({ processing, onDismiss, onCancel }) => {
   const [now, setNow] = useState(Date.now);
 
   useEffect(() => {
@@ -88,11 +93,26 @@ export const MeetingAudioProgress: React.FC<{
           </div>
         ))}
       </div>
+      {processing.totalChunks ? (
+        <div className="mt-2">
+          <div className="flex justify-between text-[11px] text-slate-600 mb-1">
+            <span>{processing.taskStatus === 'splitting' ? '正在切分音频' : `分段转写 ${Math.min(processing.completedChunks || 0, processing.totalChunks)}/${processing.totalChunks}`}</span>
+            <span className="tabular-nums">{Math.round(((processing.completedChunks || 0) / processing.totalChunks) * 100)}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="音频分段转写进度" aria-valuemin={0} aria-valuemax={processing.totalChunks} aria-valuenow={processing.completedChunks || 0}>
+            <div className="h-full rounded-full bg-blue-500 transition-[width]" style={{ width: `${Math.min(100, ((processing.completedChunks || 0) / processing.totalChunks) * 100)}%` }} />
+          </div>
+          {processing.taskStatus === 'transcribing' && (processing.currentChunk || 0) > (processing.completedChunks || 0) && (
+            <p className="mt-1 text-[10px] text-slate-400">当前请求第 {processing.currentChunk}/{processing.totalChunks} 段，完成后立即请求下一段</p>
+          )}
+        </div>
+      ) : null}
       {running && (
         <p className="mt-1.5 text-[10px] text-slate-400">
-          阶段进度 · {processing.stage === 1 ? '正在等待转写服务处理，长音频可能需要较长时间' : processing.stage === 2 ? '正在分析转写内容，请稍候' : '正在准备音频文件'}
+          阶段进度 · {processing.taskStatus === 'splitting' ? '后台正在切分音频' : processing.totalChunks ? '每段完成后会立即串行请求下一段' : processing.stage === 1 ? '正在等待转写服务处理，长音频可能需要较长时间' : processing.stage === 2 ? '正在分析转写内容，请稍候' : '正在准备音频文件'}
         </p>
       )}
+      {running && onCancel && <button type="button" onClick={onCancel} className="mt-2 text-[11px] text-rose-600 hover:text-rose-700">停止转写</button>}
     </div>
   );
 };

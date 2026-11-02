@@ -211,6 +211,27 @@ export interface MeetingChartData {
 
 export type MeetingStatus = 'idle' | 'transcribing' | 'transcribed' | 'summarizing' | 'completed' | 'error';
 
+export type MeetingTranscriptionTaskStatus =
+  | 'queued'
+  | 'splitting'
+  | 'transcribing'
+  | 'completed'
+  | 'error'
+  | 'cancelled';
+
+export interface MeetingTranscriptionTask {
+  taskId: string;
+  meetingId: string;
+  status: MeetingTranscriptionTaskStatus;
+  totalChunks: number;
+  completedChunks: number;
+  currentChunk: number;
+  message: string;
+  error?: string;
+  startedAt: number;
+  updatedAt: number;
+}
+
 export interface MeetingRecord {
   id: string;
   title: string;
