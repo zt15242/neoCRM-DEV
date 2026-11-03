@@ -189,7 +189,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
       </div>
 
       {/* 1. DeepSeek 官方卡片 (推荐) */}
-      <div className="rounded-2xl border-2 border-sky-300 bg-gradient-to-br from-sky-50/60 via-white to-blue-50/40 p-5 shadow-xs relative overflow-hidden">
+      <div className="rounded-2xl border-2 border-sky-300 dark:border-sky-500/40 bg-gradient-to-br from-sky-50/60 via-white to-blue-50/40 dark:from-slate-900/90 dark:via-slate-900/80 dark:to-slate-900/90 p-5 shadow-xs relative overflow-hidden">
         <div className="flex items-start justify-between">
           <div className="flex items-start space-x-3.5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-blue-600 flex items-center justify-center text-white shadow-md shadow-sky-500/20 shrink-0">
@@ -198,7 +198,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <h4 className="text-sm font-bold text-slate-900">DeepSeek 官方平台</h4>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 font-semibold border border-sky-200">
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 font-semibold border border-sky-200 dark:border-sky-800">
                   官方直连 • 推荐
                 </span>
                 {deepseek?.apiKey ? (
@@ -229,7 +229,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         </div>
 
         {/* DeepSeek 表单 */}
-        <div className="mt-4 pt-4 border-t border-sky-100 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+        <div className="mt-4 pt-4 border-t border-sky-100 dark:border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           <div>
             <label className="block text-slate-700 font-medium mb-1">
               DeepSeek API Key <span className="text-rose-500">*</span>
@@ -287,8 +287,8 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         {/* DeepSeek 操作按钮 */}
         <div className="mt-4 flex items-center justify-between">
           <div className="flex items-center space-x-2 text-[11px] text-slate-500">
-            <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">deepseek-chat</span>
-            <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">deepseek-reasoner</span>
+            <span className="font-mono bg-white dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">deepseek-chat</span>
+            <span className="font-mono bg-white dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">deepseek-reasoner</span>
           </div>
 
           <div className="flex items-center space-x-2">

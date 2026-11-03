@@ -292,8 +292,8 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
               onClick={() => onOpenDetail(env.id)}
               className={`group relative p-4 rounded-2xl border text-left cursor-pointer transition-all duration-200 select-none flex flex-col justify-between ${
                 isSelected
-                  ? 'bg-gradient-to-br from-sky-50/80 via-white to-slate-50 border-sky-400 shadow-md ring-2 ring-sky-400/40'
-                  : 'bg-white border-slate-200/90 hover:border-slate-300 hover:shadow-sm'
+                  ? 'bg-gradient-to-br from-sky-50/80 via-white to-slate-50 dark:from-slate-900/90 dark:via-slate-900/80 dark:to-slate-900/90 border-sky-400 dark:border-sky-500 shadow-md ring-2 ring-sky-400/40 dark:ring-sky-400/20'
+                  : 'bg-white dark:bg-slate-900/50 border-slate-200/90 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-sm'
               }`}
             >
               {/* 卡片顶部：品牌图标、标题、生效状态 */}
@@ -387,9 +387,9 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                 {/* 实例服务地址 (针对 Salesforce 与 纷享销客定制) */}
                 {env.productType === 'salesforce' ? (
                   <div className="pt-1 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-cyan-50/50 p-2 rounded-xl border border-cyan-100">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-cyan-50/50 dark:bg-cyan-950/30 p-2 rounded-xl border border-cyan-100 dark:border-cyan-900/50 text-slate-600 dark:text-slate-300">
                       <div className="truncate pr-2">
-                        <span className="text-cyan-800 font-semibold">{env.neoBaseURL}</span>
+                        <span className="text-cyan-800 dark:text-cyan-300 font-semibold">{env.neoBaseURL}</span>
                         {env.clientId ? (
                           <span className="ml-1.5 text-slate-600">· Key: {env.clientId.slice(0, 8)}...</span>
                         ) : (
@@ -424,9 +424,9 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                   </div>
                 ) : env.productType === 'fxiaoke' ? (
                   <div className="pt-1 space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-orange-50/50 p-2 rounded-xl border border-orange-100">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-600 bg-orange-50/50 dark:bg-orange-950/30 p-2 rounded-xl border border-orange-100 dark:border-orange-900/50 text-slate-600 dark:text-slate-300">
                       <div className="truncate pr-2">
-                        <span className="text-orange-700 font-semibold">{env.cloudDomain || 'open.fxiaoke.com'}</span>
+                        <span className="text-orange-700 dark:text-orange-300 font-semibold">{env.cloudDomain || 'open.fxiaoke.com'}</span>
                         {env.clientId ? (
                           <span className="ml-1.5 text-slate-600">· appId: {env.clientId}</span>
                         ) : (

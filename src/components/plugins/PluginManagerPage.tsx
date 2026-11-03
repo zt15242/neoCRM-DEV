@@ -268,16 +268,16 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
               {filteredSessionPlugins.map((plugin) => (
                 <div
                   key={plugin.id}
-                  className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/40 hover:bg-white hover:border-purple-300 hover:shadow-xs transition-all flex flex-col justify-between space-y-2"
+                  className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/40 dark:bg-slate-900/50 hover:bg-white dark:hover:bg-slate-800/80 hover:border-purple-300 dark:hover:border-purple-500/50 hover:shadow-xs transition-all flex flex-col justify-between space-y-2"
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs font-bold text-purple-900 truncate" title={plugin.name}>
+                      <span className="font-mono text-xs font-bold text-purple-900 dark:text-purple-300 truncate" title={plugin.name}>
                         {plugin.name}
                       </span>
                       <span className="text-[10px] font-mono text-slate-400 shrink-0">{plugin.version}</span>
                     </div>
-                    <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2" title={plugin.description}>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-300 leading-relaxed line-clamp-2" title={plugin.description}>
                       {plugin.description || 'DeepSeek Harness 智能体会话级核心驱动'}
                     </p>
                   </div>
@@ -330,7 +330,7 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
               {filteredGlobalPlugins.map((plugin) => (
                 <div
                   key={plugin.id}
-                  className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/40 hover:bg-white hover:border-sky-300 hover:shadow-xs transition-all flex flex-col justify-between space-y-2"
+                  className="p-3.5 rounded-xl border border-slate-200/90 bg-slate-50/40 dark:bg-slate-900/50 hover:bg-white dark:hover:bg-slate-800/80 hover:border-sky-300 dark:hover:border-sky-500/50 hover:shadow-xs transition-all flex flex-col justify-between space-y-2"
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
@@ -339,7 +339,7 @@ export const PluginManagerPage: React.FC<PluginManagerPageProps> = ({
                       </span>
                       <span className="text-[10px] font-mono text-slate-400 shrink-0">{plugin.version}</span>
                     </div>
-                    <p className="text-[11px] text-slate-500 leading-relaxed line-clamp-2" title={plugin.description}>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-300 leading-relaxed line-clamp-2" title={plugin.description}>
                       {plugin.description || 'DeepSeek Harness 系统级微内核基础组件'}
                     </p>
                   </div>

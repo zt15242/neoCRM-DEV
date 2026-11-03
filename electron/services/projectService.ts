@@ -12,36 +12,22 @@ export class ProjectService {
   public getProjects(): WorkspaceProject[] {
     const file = this.getStoragePath();
     if (!fs.existsSync(file)) {
-      const defaultProj: WorkspaceProject = {
-        id: 'proj_default',
-        name: path.basename(process.cwd()) || 'neoCRM-DEV',
-        localPath: process.cwd(),
-        description: '默认本地开发工程工作区',
-        isDefault: true,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      this.writeStorage([defaultProj]);
-      return [defaultProj];
+      return [];
     }
 
     try {
       const list = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      if (Array.isArray(list) && list.length > 0) {
-        return list;
+      if (Array.isArray(list)) {
+        // 彻底移除默认的 neoCRM-DEV 项目，后续不再自动提供
+        const cleaned = list.filter((p) => p && p.id !== 'proj_default' && !(p.name === 'neoCRM-DEV' && p.isDefault));
+        if (cleaned.length !== list.length) {
+          this.writeStorage(cleaned);
+        }
+        return cleaned;
       }
     } catch {}
 
-    const fallback: WorkspaceProject = {
-      id: 'proj_default',
-      name: path.basename(process.cwd()) || 'neoCRM-DEV',
-      localPath: process.cwd(),
-      description: '默认本地开发工程工作区',
-      isDefault: true,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    return [fallback];
+    return [];
   }
 
   private writeStorage(projects: WorkspaceProject[]) {
@@ -75,7 +61,7 @@ export class ProjectService {
       name: cleanName,
       localPath: cleanPath,
       description: payload.description || '',
-      isDefault: projects.length === 0,
+      isDefault: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -87,10 +73,6 @@ export class ProjectService {
 
   public deleteProject(projectId: string): boolean {
     let projects = this.getProjects();
-    const target = projects.find((p) => p.id === projectId);
-    if (target?.isDefault) {
-      throw new Error('默认项目工作区不可删除');
-    }
     projects = projects.filter((p) => p.id !== projectId);
     this.writeStorage(projects);
     return true;

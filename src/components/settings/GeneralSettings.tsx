@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AiHarnessSettings } from '../../../shared/types';
+import { CURRENT_APP_VERSION } from '../../../shared/constants';
 import { 
   Sliders, 
   Trash2, 
@@ -28,6 +29,15 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
   const [startupTab, setStartupTab] = useState(settings.defaultStartupTab || 'dashboard');
   const [sqlLimit, setSqlLimit] = useState(settings.defaultSqlLimit || 100);
   const [clearing, setClearing] = useState(false);
+  const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
+
+  useEffect(() => {
+    if (window.neoApi?.getAppVersion) {
+      window.neoApi.getAppVersion().then((v) => {
+        if (v) setAppVersion(`v${v.replace(/^v/, '')}`);
+      }).catch(() => {});
+    }
+  }, []);
 
   const handleSave = async () => {
     try {
@@ -65,14 +75,14 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
         </div>
         <button
           onClick={handleSave}
-          className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs"
+          className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs cursor-pointer"
         >
           保存通用设置
         </button>
       </div>
 
       {/* 工作台基础选项 */}
-      <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-4">
+      <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-4 shadow-2xs">
         <div className="flex items-center space-x-2 text-slate-800 font-bold text-sm">
           <Sliders className="w-4 h-4 text-sky-600" />
           <span>工作台偏好</span>
@@ -113,7 +123,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
       </div>
 
       {/* DML 请求头信息展示 */}
-      <div className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 space-y-2">
+      <div className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 space-y-2 shadow-2xs">
         <div className="flex items-center space-x-2 text-emerald-800 font-bold text-sm">
           <ShieldCheck className="w-4 h-4 text-emerald-600" />
           <span>销售易 DML 执行请求头规范 (系统已全局内置)</span>
@@ -129,7 +139,7 @@ xsy-inner-source: bff`}
       </div>
 
       {/* 缓存与存储维护 */}
-      <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-3">
+      <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-3 shadow-2xs">
         <div className="flex items-center space-x-2 text-slate-800 font-bold text-sm">
           <HardDrive className="w-4 h-4 text-slate-600" />
           <span>本地存储与维护</span>
@@ -145,7 +155,7 @@ xsy-inner-source: bff`}
           <button
             onClick={handleClearSessions}
             disabled={clearing}
-            className="px-3.5 py-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-medium flex items-center space-x-1"
+            className="px-3.5 py-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-medium flex items-center space-x-1 cursor-pointer"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>{clearing ? '清空中...' : '清空 AI 会话'}</span>
@@ -156,12 +166,12 @@ xsy-inner-source: bff`}
           <div>
             <div className="font-semibold text-slate-800">检查软件版本更新</div>
             <div className="text-[11px] text-slate-400 mt-0.5">
-              当前版本: v1.3.3（通过国内 CDN 加速自动检测）
+              当前版本: {appVersion}（通过官方发布通道自动检测）
             </div>
           </div>
           <button
             onClick={onCheckUpdate}
-            className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center space-x-1"
+            className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center space-x-1 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>检查最新版本</span>

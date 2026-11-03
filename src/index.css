@@ -5,7 +5,6 @@
     box-sizing: border-box;
   }
   html {
-    /* Keep Tailwind rem-based text stable when the host restores an accessibility text scale. */
     font-size: 16px !important;
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
@@ -14,18 +13,282 @@
     user-select: none;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     font-size: 16px;
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: var(--theme-bg-base, #f8fafc);
+    color: var(--theme-text-primary, #0f172a);
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 }
 
-/* 浅色主题滚动条 */
+/* ========================================================================= */
+/* 主题色盘定义与 Design Tokens (对齐 DSH Codex UI / Catppuccin)            */
+/* ========================================================================= */
+
+html[data-theme="codex-dark"] {
+  --theme-accent: #339cff;
+  --theme-bg-base: #0d0f12;
+  --theme-bg-layer-1: #13151a;
+  --theme-bg-layer-2: #181a20;
+  --theme-bg-layer-3: #22252c;
+  --theme-hover-1: #1a1c22;
+  --theme-hover-2: #242730;
+  --theme-hover-3: #2d313c;
+  --theme-border: rgba(255, 255, 255, 0.08);
+  --theme-border-strong: rgba(255, 255, 255, 0.16);
+  --theme-text-primary: #fafafa;
+  --theme-text-secondary: #d4d4d8;
+  --theme-text-tertiary: #a1a1aa;
+  --theme-text-muted: #71717a;
+  --theme-input-bg: #181a20;
+}
+
+html[data-theme="catppuccin-mocha"] {
+  --theme-accent: #cba6f7;
+  --theme-bg-base: #1e1e2e;
+  --theme-bg-layer-1: #181825;
+  --theme-bg-layer-2: #313244;
+  --theme-bg-layer-3: #45475a;
+  --theme-hover-1: #2a2b3d;
+  --theme-hover-2: #3a3c52;
+  --theme-hover-3: #4c4e66;
+  --theme-border: rgba(203, 166, 247, 0.18);
+  --theme-border-strong: rgba(203, 166, 247, 0.32);
+  --theme-text-primary: #cdd6f4;
+  --theme-text-secondary: #bac2de;
+  --theme-text-tertiary: #a6adc8;
+  --theme-text-muted: #6c7086;
+  --theme-input-bg: #1e1e2e;
+}
+
+html[data-theme="catppuccin-latte"] {
+  --theme-accent: #8839ef;
+  --theme-bg-base: #eff1f5;
+  --theme-bg-layer-1: #ffffff;
+  --theme-bg-layer-2: #e6e9ef;
+  --theme-bg-layer-3: #ccd0da;
+  --theme-hover-1: #e6e9ef;
+  --theme-hover-2: #ccd0da;
+  --theme-hover-3: #bcc0cc;
+  --theme-border: rgba(136, 57, 239, 0.14);
+  --theme-border-strong: rgba(136, 57, 239, 0.26);
+  --theme-text-primary: #4c4f69;
+  --theme-text-secondary: #5c5f77;
+  --theme-text-tertiary: #6c6f85;
+  --theme-text-muted: #9ca0b0;
+  --theme-input-bg: #ffffff;
+}
+
+html[data-theme="codex-light"] {
+  --theme-accent: #0169cc;
+  --theme-bg-base: #f8fafc;
+  --theme-bg-layer-1: #ffffff;
+  --theme-bg-layer-2: #f1f5f9;
+  --theme-bg-layer-3: #e2e8f0;
+  --theme-hover-1: #f1f5f9;
+  --theme-hover-2: #e2e8f0;
+  --theme-hover-3: #cbd5e1;
+  --theme-border: rgba(0, 0, 0, 0.08);
+  --theme-border-strong: rgba(0, 0, 0, 0.15);
+  --theme-text-primary: #0f172a;
+  --theme-text-secondary: #334155;
+  --theme-text-tertiary: #64748b;
+  --theme-text-muted: #94a3b8;
+  --theme-input-bg: #ffffff;
+}
+
+/* ========================================================================= */
+/* 暗色模式全局覆盖 (Codex Dark & Catppuccin Mocha 彻底接管 UI 全局色彩)    */
+/* ========================================================================= */
+
+html[data-dark-mode="true"] body {
+  background-color: var(--theme-bg-base, #0d0f12) !important;
+  color: var(--theme-text-primary, #fafafa) !important;
+  color-scheme: dark;
+}
+
+/* 1. 核心容器与卡片底色全面替换 */
+html[data-dark-mode="true"] .bg-white,
+html[data-dark-mode="true"] .bg-white\/95,
+html[data-dark-mode="true"] .bg-white\/90,
+html[data-dark-mode="true"] .bg-white\/80,
+html[data-dark-mode="true"] .bg-white\/70,
+html[data-dark-mode="true"] main {
+  background-color: var(--theme-bg-layer-1, #13151a) !important;
+  color: var(--theme-text-primary, #fafafa);
+}
+
+html[data-dark-mode="true"] .bg-slate-50,
+html[data-dark-mode="true"] .bg-slate-50\/50,
+html[data-dark-mode="true"] .bg-slate-50\/60,
+html[data-dark-mode="true"] .bg-slate-50\/70,
+html[data-dark-mode="true"] .bg-slate-50\/80,
+html[data-dark-mode="true"] .bg-slate-50\/90,
+html[data-dark-mode="true"] .bg-slate-50\/95,
+html[data-dark-mode="true"] aside {
+  background-color: var(--theme-bg-base, #0d0f12) !important;
+}
+
+html[data-dark-mode="true"] .bg-slate-100,
+html[data-dark-mode="true"] .bg-slate-100\/60,
+html[data-dark-mode="true"] .bg-slate-100\/70,
+html[data-dark-mode="true"] .bg-slate-100\/80,
+html[data-dark-mode="true"] .bg-slate-100\/90 {
+  background-color: var(--theme-bg-layer-2, #181a20) !important;
+}
+
+html[data-dark-mode="true"] .bg-slate-200,
+html[data-dark-mode="true"] .bg-slate-200\/50,
+html[data-dark-mode="true"] .bg-slate-200\/60,
+html[data-dark-mode="true"] .bg-slate-200\/70,
+html[data-dark-mode="true"] .bg-slate-200\/80,
+html[data-dark-mode="true"] .bg-slate-200\/90 {
+  background-color: var(--theme-bg-layer-3, #22252c) !important;
+}
+
+/* 2. 边框全面转为柔和半透明暗色线 */
+html[data-dark-mode="true"] .border-slate-100,
+html[data-dark-mode="true"] .border-slate-200,
+html[data-dark-mode="true"] .border-slate-200\/60,
+html[data-dark-mode="true"] .border-slate-200\/70,
+html[data-dark-mode="true"] .border-slate-200\/80,
+html[data-dark-mode="true"] .border-slate-200\/90,
+html[data-dark-mode="true"] .border-slate-300 {
+  border-color: var(--theme-border, rgba(255, 255, 255, 0.08)) !important;
+}
+
+/* 3. 文字颜色层级适配 */
+html[data-dark-mode="true"] .text-slate-900,
+html[data-dark-mode="true"] .text-slate-800 {
+  color: var(--theme-text-primary, #fafafa) !important;
+}
+html[data-dark-mode="true"] .text-slate-700,
+html[data-dark-mode="true"] .text-slate-600 {
+  color: var(--theme-text-secondary, #d4d4d8) !important;
+}
+html[data-dark-mode="true"] .text-slate-500 {
+  color: var(--theme-text-tertiary, #a1a1aa) !important;
+}
+html[data-dark-mode="true"] .text-slate-400 {
+  color: var(--theme-text-muted, #71717a) !important;
+}
+
+/* 4. 交互悬停背景适配 */
+html[data-dark-mode="true"] .hover\:bg-slate-50:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-50\/60:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-50\/80:hover {
+  background-color: var(--theme-hover-1, #1a1c22) !important;
+}
+
+html[data-dark-mode="true"] .hover\:bg-slate-100:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-100\/60:hover {
+  background-color: var(--theme-hover-2, #242730) !important;
+}
+
+html[data-dark-mode="true"] .hover\:bg-slate-200:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-200\/50:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-200\/60:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-200\/70:hover,
+html[data-dark-mode="true"] .hover\:bg-slate-200\/80:hover {
+  background-color: var(--theme-hover-3, #2d313c) !important;
+}
+
+html[data-dark-mode="true"] .hover\:text-slate-900:hover,
+html[data-dark-mode="true"] .hover\:text-slate-800:hover,
+html[data-dark-mode="true"] .hover\:text-slate-700:hover {
+  color: #ffffff !important;
+}
+
+/* 5. 输入框、文本域与下拉选择 */
+html[data-dark-mode="true"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-dark-mode="true"] textarea,
+html[data-dark-mode="true"] select {
+  background-color: var(--theme-input-bg, #181a20) !important;
+  color: var(--theme-text-primary, #fafafa) !important;
+  border-color: var(--theme-border, rgba(255, 255, 255, 0.12)) !important;
+}
+
+html[data-dark-mode="true"] input::placeholder,
+html[data-dark-mode="true"] textarea::placeholder {
+  color: var(--theme-text-muted, #71717a) !important;
+}
+
+/* 6. 高对比度主按键 (发送键、New chat) 强化 */
+html[data-dark-mode="true"] .bg-slate-900 {
+  background-color: var(--theme-accent, #339cff) !important;
+  color: #ffffff !important;
+}
+
+html[data-dark-mode="true"] .hover\:bg-slate-800:hover {
+  filter: brightness(1.15) !important;
+}
+
+/* 7. 模态窗外壳投影增强 */
+html[data-dark-mode="true"] .shadow-2xl {
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--theme-border) !important;
+}
+
+/* ========================================================================= */
+/* Latte 拿铁暖白主题专属覆盖                                               */
+/* ========================================================================= */
+html[data-theme="catppuccin-latte"] body {
+  background-color: var(--theme-bg-base, #eff1f5) !important;
+  color: var(--theme-text-primary, #4c4f69) !important;
+}
+html[data-theme="catppuccin-latte"] .bg-slate-50,
+html[data-theme="catppuccin-latte"] .bg-slate-50\/95,
+html[data-theme="catppuccin-latte"] .bg-slate-50\/90,
+html[data-theme="catppuccin-latte"] .bg-slate-50\/70,
+html[data-theme="catppuccin-latte"] aside {
+  background-color: #eff1f5 !important;
+}
+html[data-theme="catppuccin-latte"] .border-slate-200,
+html[data-theme="catppuccin-latte"] .border-slate-100 {
+  border-color: rgba(136, 57, 239, 0.14) !important;
+}
+html[data-theme="catppuccin-latte"] .text-slate-900,
+html[data-theme="catppuccin-latte"] .text-slate-800 {
+  color: #4c4f69 !important;
+}
+
+/* ========================================================================= */
+/* 物理级地面漫反射光斑 (Ambient Ground Glow)                                */
+/* ========================================================================= */
+html[data-ground-glow="true"] body {
+  background-image:
+    radial-gradient(50% 36% at 20% 0%, rgba(51, 156, 255, 0.07), transparent 70%),
+    radial-gradient(42% 38% at 85% 8%, rgba(64, 201, 119, 0.05), transparent 65%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+html[data-dark-mode="true"][data-ground-glow="true"] body {
+  background-image:
+    radial-gradient(55% 42% at 20% 0%, rgba(51, 156, 255, 0.12), transparent 70%),
+    radial-gradient(45% 40% at 85% 8%, rgba(64, 201, 119, 0.08), transparent 65%);
+}
+
+html[data-theme="catppuccin-mocha"][data-ground-glow="true"] body {
+  background-image:
+    radial-gradient(55% 42% at 20% 0%, rgba(203, 166, 247, 0.15), transparent 70%),
+    radial-gradient(45% 40% at 85% 8%, rgba(137, 180, 250, 0.10), transparent 65%);
+}
+
+/* 玻璃质感与云母悬浮 (Mica Glassmorphism) */
+html[data-glass="true"] .glass-panel {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+html[data-glass="true"] .glass-card {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+/* 滚动条 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: #cbd5e1;
@@ -33,6 +296,13 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+html[data-dark-mode="true"] ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+html[data-dark-mode="true"] ::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
 }
 
 /* 窗口拖拽与交互隔离 */
@@ -44,7 +314,7 @@
   -webkit-app-region: no-drag;
 }
 
-/* Keep third-party email markup from changing the application's typography. */
+/* 邮件正文隔离 */
 .mail-body-html,
 .mail-body-html * {
   font-family: inherit !important;
@@ -56,4 +326,98 @@
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+/* ========================================================================= */
+/* 暗色/摩卡模式高级自适应安全增强 (消除刺眼渐变白斑与低对比度文字)         */
+/* ========================================================================= */
+
+html[data-dark-mode="true"] .via-white {
+  --tw-gradient-via: var(--theme-bg-layer-1, #13151a) var(--tw-gradient-via-position) !important;
+}
+
+html[data-dark-mode="true"] .from-sky-50\/60,
+html[data-dark-mode="true"] .from-sky-50\/80,
+html[data-dark-mode="true"] .from-sky-50 {
+  --tw-gradient-from: var(--theme-bg-layer-2, #181a20) var(--tw-gradient-from-position) !important;
+}
+
+html[data-dark-mode="true"] .to-blue-50\/40,
+html[data-dark-mode="true"] .to-slate-50,
+html[data-dark-mode="true"] .to-sky-50 {
+  --tw-gradient-to: var(--theme-bg-layer-2, #181a20) var(--tw-gradient-to-position) !important;
+}
+
+/* 高对比度彩色文字提升 (杜绝在暗底上发乌发黑无法辨识) */
+html[data-dark-mode="true"] .text-purple-900,
+html[data-dark-mode="true"] .text-purple-950 {
+  color: #d8b4fe !important;
+}
+
+html[data-dark-mode="true"] .text-indigo-900,
+html[data-dark-mode="true"] .text-indigo-800 {
+  color: #c7d2fe !important;
+}
+
+html[data-dark-mode="true"] .text-sky-900,
+html[data-dark-mode="true"] .text-sky-800 {
+  color: #7dd3fc !important;
+}
+
+html[data-dark-mode="true"] .text-cyan-800,
+html[data-dark-mode="true"] .text-cyan-700 {
+  color: #67e8f9 !important;
+}
+
+html[data-dark-mode="true"] .text-orange-800,
+html[data-dark-mode="true"] .text-orange-700 {
+  color: #fdba74 !important;
+}
+
+html[data-dark-mode="true"] .text-emerald-800,
+html[data-dark-mode="true"] .text-emerald-700 {
+  color: #6ee7b7 !important;
+}
+
+html[data-dark-mode="true"] .text-amber-800,
+html[data-dark-mode="true"] .text-amber-700 {
+  color: #fde68a !important;
+}
+
+/* 标签胶囊微透背景映射 */
+html[data-dark-mode="true"] .bg-purple-50 {
+  background-color: rgba(192, 132, 252, 0.12) !important;
+}
+
+html[data-dark-mode="true"] .bg-sky-50,
+html[data-dark-mode="true"] .bg-sky-50\/20,
+html[data-dark-mode="true"] .bg-sky-50\/40,
+html[data-dark-mode="true"] .bg-sky-50\/60,
+html[data-dark-mode="true"] .bg-sky-50\/70,
+html[data-dark-mode="true"] .bg-sky-50\/80 {
+  background-color: rgba(56, 189, 248, 0.12) !important;
+}
+
+html[data-dark-mode="true"] .bg-indigo-50,
+html[data-dark-mode="true"] .bg-indigo-50\/40,
+html[data-dark-mode="true"] .bg-indigo-50\/70 {
+  background-color: rgba(129, 140, 248, 0.12) !important;
+}
+
+html[data-dark-mode="true"] .bg-cyan-50,
+html[data-dark-mode="true"] .bg-cyan-50\/50 {
+  background-color: rgba(34, 211, 238, 0.12) !important;
+}
+
+html[data-dark-mode="true"] .bg-orange-50,
+html[data-dark-mode="true"] .bg-orange-50\/50 {
+  background-color: rgba(251, 146, 60, 0.12) !important;
+}
+
+html[data-dark-mode="true"] .bg-amber-50 {
+  background-color: rgba(251, 191, 36, 0.12) !important;
+}
+
+html[data-dark-mode="true"] .bg-emerald-50 {
+  background-color: rgba(52, 211, 153, 0.12) !important;
 }

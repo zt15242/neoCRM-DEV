@@ -18,6 +18,7 @@ import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI
 import { AiSidebar } from './AiSidebar';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
+import { MessageTurnNavigator } from './MessageTurnNavigator';
 import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
 import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
@@ -53,7 +54,11 @@ import {
   PanelLeftOpen,
   MoreHorizontal,
   Folder,
-  RotateCcw
+  RotateCcw,
+  Telescope,
+  Hammer,
+  ScanLine,
+  Bug
 } from 'lucide-react';
 
 interface AiHarnessStudioProps {
@@ -77,6 +82,53 @@ interface AiHarnessStudioProps {
   onToggleSidebar?: () => void;
   platform?: string;
 }
+
+const SUGGESTION_CATEGORIES = [
+  {
+    id: "explore",
+    title: "业务调研 (Explore)",
+    desc: "查询当前租户的核心实体模型、字段字典与数据结构",
+    Icon: Telescope,
+    color: "text-sky-600 bg-sky-50 border-sky-200",
+    tasks: [
+      { label: "探索核心业务实体与字段字典", prompt: "请查询当前连接环境的核心实体列表及其标准与自定义字段元数据" },
+      { label: "执行只读业务数据探索 (XOQL/SQL)", prompt: "请在当前环境中安全执行数据查询，分析近期商机与合同数据的分布情况" },
+    ],
+  },
+  {
+    id: "build",
+    title: "方案构建 (Build)",
+    desc: "设计自动化流、审批流架构或 Nex/APL 代码组件",
+    Icon: Hammer,
+    color: "text-purple-600 bg-purple-50 border-purple-200",
+    tasks: [
+      { label: "设计自动化流程配置方案 (Flow)", prompt: "请为当前业务对象设计一套自动化流程，包含触发条件、动作流转与规则校验" },
+      { label: "设计多级条件审批流架构 (Approval)", prompt: "请根据业务需求设计多级金额审批流方案，并在人工评审确认后再执行部署" },
+    ],
+  },
+  {
+    id: "review",
+    title: "审计对账 (Review)",
+    desc: "对账字段类型约束、大批量数据与代码规范",
+    Icon: ScanLine,
+    color: "text-emerald-600 bg-emerald-50 border-emerald-200",
+    tasks: [
+      { label: "校验字段类型与系统配置一致性", prompt: "请对账当前对象的字段定义，排查货币与浮点类型差异，确保类型完全吻合" },
+      { label: "审查本地工程与脚本质量", prompt: "请审计当前工作区下的组件代码与业务脚本，检查是否有潜在的报错与边界遗漏" },
+    ],
+  },
+  {
+    id: "fix",
+    title: "排查诊断 (Fix)",
+    desc: "诊断执行日志、配置缺陷并执行安全上锁发布",
+    Icon: Bug,
+    color: "text-orange-600 bg-orange-50 border-orange-200",
+    tasks: [
+      { label: "诊断流程与接口报错原因", prompt: "请帮我排查最近一次流程或接口调用报错的根本原因，并给出针对性修复方案" },
+      { label: "方案安全锁与生产环境发布确认", prompt: "请先完成方案的自主分析与纠错，待我人工确认后再执行最终的环境部署与上锁" },
+    ],
+  },
+];
 
 export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   crmSession,
@@ -325,23 +377,39 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
 
+  const handleJumpToTop = () => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  const handleJumpToBottom = () => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  };
+
   useEffect(() => {
     if (activeSession?.mode) {
       setCurrentSessionMode(activeSession.mode);
     }
   }, [activeSessionId, activeSession?.mode]);
 
-  // 切换会话时，根据当前会话是否处于后台流式执行中，智能定位滚动位置
+  // 打开/切换会话时，默认自动跳到最新最后一条消息 (对齐用户需求)
   useEffect(() => {
     if (!messagesContainerRef.current) return;
-    if (activeSessionId && activeStreams[activeSessionId]) {
-      // 正在流式推进中的会话，切回时平滑跟随到底部最新进展
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-    } else {
-      // 静态历史会话，重置到顶部方便从头阅读
-      messagesContainerRef.current.scrollTop = 0;
-    }
-  }, [activeSessionId, activeStreams]);
+    const scrollToEnd = () => {
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    };
+    scrollToEnd();
+    const timer = setTimeout(scrollToEnd, 60);
+    return () => clearTimeout(timer);
+  }, [activeSessionId]);
 
   // 处于当前会话流式输出新增量时，平滑跟随到底部
   useEffect(() => {
@@ -801,7 +869,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
 
       {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
-      <div className="flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden">
+      <div className="flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden relative">
         {/* 顶部 Codex 风格标题与分栏控制栏 */}
         <div className={`h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0 select-none ${
           platform === 'darwin' && sidebarCollapsed ? 'pl-20 window-drag' : ''
@@ -940,8 +1008,22 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           </div>
         </div>
 
-        {/* 中部消息流展示区 (严格受限于视口，具备独立滚轮滚动与自适应高度) */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-4 min-h-0 select-text">
+        {/* 中部消息展示区：独立的左侧刻度导轨槽位与独立滚动的消息流 (彼此物理隔离，绝不重叠覆盖) */}
+        <div className="flex-1 flex flex-row min-w-0 min-h-0 overflow-hidden relative">
+          {/* 左侧独立的刻度导轨列 (Dedicated Gutter Rail · 绝不与消息内容重叠) */}
+          {activeSession && activeSession.messages && activeSession.messages.length >= 2 && (
+            <div className="w-5 shrink-0 flex flex-col items-center justify-center select-none py-2 z-10 border-r border-transparent">
+              <MessageTurnNavigator
+                messages={activeSession.messages}
+                containerRef={messagesContainerRef}
+                onJumpToTop={handleJumpToTop}
+                onJumpToBottom={handleJumpToBottom}
+              />
+            </div>
+          )}
+
+          {/* 独立滚动的消息内容区 */}
+          <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-4 min-h-0 select-text">
           {/* 未配置 API Key 时的极速激活横幅 */}
           {!isCurrentProviderConfigured && (
             <div className="mb-6 rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 via-white to-sky-50 p-4 shadow-xs">
@@ -990,46 +1072,101 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
           {/* 空会话欢迎引导页 */}
           {(!activeSession || activeSession.messages.length === 0) ? (
-            <div className="max-w-3xl mx-auto py-8 space-y-6">
-              <div className="text-center space-y-2.5">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-sky-600 via-indigo-600 to-blue-500 text-white flex items-center justify-center mx-auto shadow-md shadow-sky-500/20">
-                  <Sparkles className="w-6 h-6" />
+            <div className="max-w-4xl mx-auto py-10 px-2 space-y-8 animate-in fade-in duration-200">
+              {/* 居中品牌标语与状态徽标 (对齐 DSH Codex UI 核心美学) */}
+              <div className="text-center space-y-3">
+                <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-100/90 border border-slate-200/80 text-[11px] font-mono text-slate-600 mb-1 shadow-2xs">
+                  <Sparkles className="w-3.5 h-3.5 text-sky-600" />
+                  <span>NeoCRM AI Studio · 探索未至之境</span>
+                  <span className="px-1.5 py-0.2 rounded bg-sky-100 text-sky-800 text-[9px] font-bold">预览版</span>
                 </div>
-                <h3 className="text-lg font-bold text-slate-800">
-                  {currentPreset.name}
-                </h3>
-                <p className="text-xs text-slate-500 max-w-lg mx-auto leading-relaxed">
+
+                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900">
+                  {currentPreset.name.split(" (")[0]}
+                </h1>
+                <p className="text-xs text-slate-500 max-w-xl mx-auto leading-relaxed">
                   {currentPreset.description}
                 </p>
 
-                {/* 当前租户连接状态提示 */}
-                <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-white border border-slate-200 text-[11px] text-slate-600 shadow-2xs">
-                  <ShieldCheck className={`w-3.5 h-3.5 ${crmSession.isLoggedIn ? 'text-emerald-500' : 'text-amber-500'}`} />
-                  <span>
+                {/* 当前租户连接状态提示胶囊 */}
+                <div className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-white border border-slate-200 text-xs text-slate-700 shadow-2xs">
+                  <ShieldCheck className={`w-4 h-4 ${crmSession.isLoggedIn ? "text-emerald-500" : "text-amber-500"}`} />
+                  <span className="font-medium">
                     {crmSession.isLoggedIn
-                      ? `已连接租户: ${crmSession.tokenData?.userInfo?.tenantName || crmSession.environment?.name}`
-                      : '未登录销售易租户（登录后 AI 可直接读取您的真实对象与执行 SQL）'}
+                      ? `已连接: ${crmSession.tokenData?.userInfo?.tenantName || crmSession.environment?.name || "沙盒环境"}`
+                      : "未连接 CRM 租户（登录后 AI 可直接读取真实对象与执行安全数据探索）"}
                   </span>
                 </div>
               </div>
 
-              {/* 快捷指令卡片网格 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-                {currentPreset.quickPrompts.map((prompt, index) => (
-                  <button
-                    key={index}
-                    onClick={() => handleSendMessage(prompt, entityRefs)}
-                    className="text-left p-3.5 rounded-2xl bg-white hover:bg-sky-50/60 border border-slate-200/90 hover:border-sky-300 transition-all shadow-2xs group cursor-pointer"
-                  >
-                    <div className="flex items-start justify-between">
-                      <span className="text-xs font-medium text-slate-700 group-hover:text-sky-800 leading-relaxed">
-                        {prompt}
-                      </span>
-                      <Sparkles className="w-3.5 h-3.5 text-slate-300 group-hover:text-sky-500 shrink-0 ml-2 mt-0.5 transition-colors" />
-                    </div>
-                  </button>
-                ))}
+              {/* 4 大场景建议卡片网格 (业务调研 / 方案构建 / 审计对账 / 排查诊断) */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    推荐业务场景 (Suggestions)
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">点击直接发起分析</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {SUGGESTION_CATEGORIES.map((cat) => {
+                    const CatIcon = cat.Icon;
+                    return (
+                      <div
+                        key={cat.id}
+                        className="p-4 rounded-2xl bg-white hover:bg-slate-50/80 border border-slate-200/90 hover:border-slate-300 transition-all shadow-2xs flex flex-col justify-between space-y-3"
+                      >
+                        <div className="space-y-1.5">
+                          <div className="flex items-center space-x-2">
+                            <div className={`p-1.5 rounded-lg border ${cat.color}`}>
+                              <CatIcon className="w-4 h-4" />
+                            </div>
+                            <span className="font-bold text-xs text-slate-800">{cat.title}</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 leading-normal line-clamp-2">
+                            {cat.desc}
+                          </p>
+                        </div>
+
+                        <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                          {cat.tasks.map((task, tIdx) => (
+                            <button
+                              key={tIdx}
+                              type="button"
+                              onClick={() => handleSendMessage(task.prompt, entityRefs)}
+                              className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-50/80 hover:bg-sky-50 text-[11px] text-slate-700 hover:text-sky-800 font-medium transition-colors truncate block cursor-pointer border border-slate-200/60 hover:border-sky-200"
+                              title={task.prompt}
+                            >
+                              • {task.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+
+              {/* 当前预设角色的专属快速指令 */}
+              {currentPreset.quickPrompts && currentPreset.quickPrompts.length > 0 && (
+                <div className="pt-2 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-1">
+                    角色专属指令 ({currentPreset.name.split(" (")[0]})
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {currentPreset.quickPrompts.map((prompt, index) => (
+                      <button
+                        key={index}
+                        onClick={() => handleSendMessage(prompt, entityRefs)}
+                        className="px-3 py-1.5 rounded-xl bg-white hover:bg-sky-50/80 border border-slate-200/80 hover:border-sky-300 text-xs text-slate-700 hover:text-sky-800 font-medium transition-all shadow-2xs cursor-pointer flex items-center space-x-1.5"
+                      >
+                        <Sparkles className="w-3 h-3 text-sky-500 shrink-0" />
+                        <span className="truncate max-w-md">{prompt}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="max-w-4xl mx-auto space-y-4">
@@ -1060,9 +1197,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
               {/* 消息列表 */}
               {activeSession.messages.map((msg, idx) => (
-                <AiMessageItem
-                  key={msg.id}
-                  message={msg}
+                <div key={msg.id} id={`msg-${msg.id}`} className="scroll-mt-4">
+                  <AiMessageItem
+                    message={msg}
                   isStreamingCurrent={streamingMessageId === msg.id}
                   isLastMessage={idx === activeSession.messages.length - 1}
                   projectPath={activeProject?.localPath}
@@ -1095,10 +1232,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   onSendMessage={(txt) => handleSendMessage(txt)}
                   showToast={showToast}
                 />
+                </div>
               ))}
               {/* end marker */}
+              <div className="h-14 shrink-0 pointer-events-none" />
             </div>
           )}
+        </div>
         </div>
 
         {/* 底部多功能输入框 */}

@@ -41,6 +41,7 @@ import {
   LoaderCircle
 } from 'lucide-react';
 import { AiSessionMode } from '../../../shared/types';
+import { globalInputHistory, HistoryCursor } from '../../utils/inputHistory';
 import { 
   AiContextEntityRef, 
   AiFileAttachment, 
@@ -180,6 +181,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [activeCommand, setActiveCommand] = useState<SlashCommandItem | null>(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
+  const historyCursorRef = useRef<HistoryCursor>(new HistoryCursor());
 
   const DSH_MODES = [
     {
@@ -691,6 +693,40 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       }
     }
 
+    // 终端风格输入历史快速召回 (↑ / ↓)
+    if (!slashMenuOpen && !mentionMenuOpen) {
+      if (e.key === 'ArrowUp') {
+        const isStart = !text || (textareaRef.current?.selectionStart === 0 && textareaRef.current?.selectionEnd === 0);
+        if (isStart) {
+          const recalled = historyCursorRef.current.move(-1, text, globalInputHistory.getEntries());
+          if (recalled !== undefined) {
+            e.preventDefault();
+            setText(recalled);
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.selectionStart = textareaRef.current.selectionEnd = recalled.length;
+                adjustTextareaHeight();
+              }
+            }, 0);
+            return;
+          }
+        }
+      } else if (e.key === 'ArrowDown') {
+        const recalled = historyCursorRef.current.move(1, text, globalInputHistory.getEntries());
+        if (recalled !== undefined) {
+          e.preventDefault();
+          setText(recalled);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = textareaRef.current.selectionEnd = recalled.length;
+              adjustTextareaHeight();
+            }
+          }, 0);
+          return;
+        }
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -782,6 +818,10 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         : `[${activeCommand.command}] 请基于 ${activeCommand.name} 协助处理`;
     }
 
+    if (trimmed) {
+      globalInputHistory.add(trimmed);
+      historyCursorRef.current.reset();
+    }
     onSend(messageToSend, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
     setText('');
     setAttachments([]);
@@ -870,7 +910,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           focusTextarea();
         }
       }}
-      className="bg-white rounded-2xl border border-slate-200/90 shadow-sm hover:border-slate-300 transition-all p-3 space-y-2 relative cursor-text"
+      className="bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/90 shadow-md hover:border-slate-300 transition-all p-3 space-y-2 relative cursor-text glass-card"
     >
       {/* ================= 浮层 A: 快捷指令自动匹配菜单 (/ Slash Commands) ================= */}
       {slashMenuOpen && filteredCommands.length > 0 && (
@@ -1266,6 +1306,14 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         {/* 右侧控制区: 模型选择器 + Codex 经典圆黑向上发送箭头 */}
         <div className="flex items-center space-x-2">
           {/* 模型下拉选择器 */}
+          {globalInputHistory.getEntries().length > 0 && !activeCommand && (
+            <span
+              className="hidden lg:inline-flex items-center text-[10px] text-slate-400 font-mono px-1.5 py-0.5 rounded bg-slate-100/80 cursor-help"
+              title="按方向键 ↑ / ↓ 可快速召回前序历史发送过的提示词草稿"
+            >
+              ↑↓ 历史
+            </span>
+          )}
           {configuredProviders.length > 0 && onSelectModel && (
             <div className="relative">
               <button

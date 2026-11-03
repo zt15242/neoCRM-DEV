@@ -182,10 +182,15 @@ export const App: React.FC = () => {
 
         if (window.neoApi?.projectGetProjects) {
           const pList = await window.neoApi.projectGetProjects();
-          if (Array.isArray(pList) && pList.length > 0) {
-            setProjects(pList);
-            if (!activeProjectId) {
-              setActiveProjectId(pList[0].id);
+          if (Array.isArray(pList)) {
+            const cleanList = pList.filter((p) => p && p.id !== 'proj_default' && !(p.name === 'neoCRM-DEV' && p.isDefault));
+            setProjects(cleanList);
+            if (cleanList.length > 0) {
+              if (!activeProjectId || !cleanList.some((p) => p.id === activeProjectId)) {
+                setActiveProjectId(cleanList[0].id);
+              }
+            } else {
+              setActiveProjectId(null);
             }
           }
         }
@@ -422,7 +427,8 @@ export const App: React.FC = () => {
       if (window.neoApi?.projectSaveProject) {
         const saved = await window.neoApi.projectSaveProject(payload);
         const pList = await window.neoApi.projectGetProjects();
-        setProjects(pList);
+        const cleanList = pList.filter((p) => p && p.id !== 'proj_default' && !(p.name === 'neoCRM-DEV' && p.isDefault));
+        setProjects(cleanList);
         setActiveProjectId(saved.id);
         showToast('success', `本地项目工作区 [${saved.name}] 保存成功`);
       }
@@ -436,9 +442,10 @@ export const App: React.FC = () => {
       if (window.neoApi?.projectDeleteProject) {
         await window.neoApi.projectDeleteProject(projectId);
         const pList = await window.neoApi.projectGetProjects();
-        setProjects(pList);
-        if (activeProjectId === projectId && pList.length > 0) {
-          setActiveProjectId(pList[0].id);
+        const cleanList = pList.filter((p) => p && p.id !== 'proj_default' && !(p.name === 'neoCRM-DEV' && p.isDefault));
+        setProjects(cleanList);
+        if (activeProjectId === projectId) {
+          setActiveProjectId(cleanList.length > 0 ? cleanList[0].id : null);
         }
         showToast('info', '已移除项目工作区');
       }

@@ -3,6 +3,7 @@ import { CURRENT_APP_VERSION } from '../../shared/constants';
 import { 
   SquarePen,
   PanelLeftClose,
+  PanelLeftOpen,
   LayoutTemplate, 
   Search, 
   Trash2, 
@@ -28,10 +29,13 @@ import {
   History,
   HelpCircle,
   FileText,
-  Minus,
-  Square,
-  ShieldCheck,
-  MoreHorizontal
+  Star,
+  Cloud,
+  Flame,
+  Mic,
+  Mail,
+  Plus,
+  ExternalLink
 } from 'lucide-react';
 import { 
   AiChatSession, 
@@ -41,7 +45,6 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { Mail, Plus, ExternalLink, FolderPlus, Plug, Cloud, Flame, BarChart3, Mic } from 'lucide-react';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
 
 export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'mail' | 'workspace' | 'meeting';
@@ -79,6 +82,23 @@ interface AppSidebarProps {
   onOpenFolderInExplorer?: (folderPath: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+}
+
+/** 格式化相对时间 (对齐 DSH Codex UI: 刚刚, 5分钟, 2小时, 2天, 1个月) */
+function formatRelativeTime(timestamp?: number): string {
+  if (!timestamp) return '';
+  const now = Date.now();
+  const diffMs = Math.max(0, now - timestamp);
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return `${diffMin}分钟`;
+  if (diffHour < 24) return `${diffHour}小时`;
+  if (diffDay < 30) return `${diffDay}天`;
+  return `${Math.floor(diffDay / 30)}个月`;
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -124,21 +144,20 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       }).catch(() => {});
     }
   }, []);
+
   const isMac = platform === 'darwin';
   const [keyword, setKeyword] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
-
-  // 程序启动时默认全部折叠收起 (用户要求启动自动缩起)
+  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false);
 
   const toggleProjectExpand = (id: string) => {
     setExpandedProjectIds((prev) =>
       prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
     );
   };
-  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false);
 
   const getPresetIcon = (iconName: string) => {
     switch (iconName) {
@@ -158,8 +177,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         return Box;
       case 'Code2':
         return Code2;
-      case 'BarChart3':
-        return BarChart3;
       case 'LayoutTemplate':
         return LayoutTemplate;
       default:
@@ -189,13 +206,217 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   });
 
   const currentPreset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
-  const activeTenantName = session.tokenData?.userInfo?.tenantName || session.environment?.name || 'neoCRM-DEV';
-  const activeUserName = session.tokenData?.userInfo?.name || (session.isLoggedIn ? '已登录' : '未登录');
+  const activeTenantName = session.tokenData?.userInfo?.tenantName || session.environment?.name || 'NeoCRM-DEV';
+  const activeUserName = session.tokenData?.userInfo?.name || (session.isLoggedIn ? '已连接' : '未登录');
 
+  // =========================================================================
+  // 1. 折叠收起态: 100% 对齐 DSH 官方 56px (w-14) 原生导轨
+  // =========================================================================
+  if (collapsed) {
+    return (
+      <aside
+        className="w-14 transition-all duration-200 ease-in-out bg-slate-50/90 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative items-center py-2 justify-between"
+        title="按 Cmd+B / Ctrl+B 展开侧边栏"
+      >
+        {/* 顶部: Mac红绿灯避让、展开按钮与高对比度新建对话按钮 */}
+        <div className={`w-full flex flex-col items-center space-y-2 shrink-0 ${isMac ? 'pt-8' : 'pt-1'}`}>
+          {/* 展开侧栏切换按钮 */}
+          <button
+            onClick={onToggleCollapse}
+            title={isMac ? '展开侧边栏 (⌘B)' : '展开侧边栏 (Ctrl+B)'}
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-200/70 transition-colors cursor-pointer"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
+          </button>
+
+          {/* 高对比度新建对话按钮 */}
+          <button
+            onClick={onNewChatDraft}
+            title={isMac ? '新建会话 (⌥⌘N)' : '新建会话 (Ctrl+Alt+N)'}
+            className="w-9 h-9 rounded-xl bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center shadow-xs cursor-pointer active:scale-95 transition-all"
+          >
+            <SquarePen className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* 中间: 垂直功能图标导轨 (带 Active 状态左侧指示条与悬停 Tooltip) */}
+        <div className="w-full flex-1 flex flex-col items-center py-3 space-y-1.5 overflow-y-auto">
+          {/* AI 对话 */}
+          <button
+            onClick={() => onSelectTab('ai')}
+            title="AI 智能体助手"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'ai'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'ai' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-sky-600 rounded-r-full" />
+            )}
+            <Sparkles className="w-4 h-4 text-sky-600" />
+          </button>
+
+          {/* 会议助手 */}
+          <button
+            onClick={() => onSelectTab('meeting')}
+            title="会议助手 (妙计级转写与深度总结)"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'meeting'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'meeting' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-indigo-600 rounded-r-full" />
+            )}
+            <Mic className="w-4 h-4 text-indigo-600" />
+          </button>
+
+          {/* 智能邮件 */}
+          <button
+            onClick={() => onSelectTab('mail')}
+            title="智能邮件中心 (Foxmail 风格 AI 画像)"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'mail'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'mail' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-sky-600 rounded-r-full" />
+            )}
+            <Mail className="w-4 h-4 text-sky-600" />
+          </button>
+
+          {/* 自定义工作台 */}
+          <button
+            onClick={() => onSelectTab('workspace')}
+            title="自定义工作台与看板"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'workspace'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'workspace' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-emerald-600 rounded-r-full" />
+            )}
+            <LayoutTemplate className="w-4 h-4 text-emerald-600" />
+          </button>
+
+          {/* 连接器控制台 */}
+          <button
+            onClick={() => onSelectTab('dashboard')}
+            title="CRM 连接器中心与登录状态"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'dashboard'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'dashboard' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-sky-600 rounded-r-full" />
+            )}
+            <LayoutDashboard className="w-4 h-4 text-sky-600" />
+          </button>
+
+          {/* 流程资产库 */}
+          <button
+            onClick={onOpenFlowManager}
+            title="流程资产库 (自动流程 & 审批流)"
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-200/60 hover:text-slate-900 transition-colors cursor-pointer"
+          >
+            <Workflow className="w-4 h-4 text-teal-600" />
+          </button>
+
+          {/* 打印模板库 */}
+          <button
+            onClick={onOpenPrintManager}
+            title="Word/Excel 打印模板库"
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-200/60 hover:text-slate-900 transition-colors cursor-pointer"
+          >
+            <Printer className="w-4 h-4 text-amber-600" />
+          </button>
+
+          {/* 对象与字段 */}
+          <button
+            onClick={() => onSelectTab('metadata')}
+            title="对象与字段元数据管理"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'metadata'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'metadata' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-indigo-500 rounded-r-full" />
+            )}
+            <Box className="w-4 h-4 text-indigo-500" />
+          </button>
+
+          {/* 数据中心 */}
+          <button
+            onClick={() => onSelectTab('data')}
+            title="数据中心 (XOQL / SOQL / DML)"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center relative transition-colors cursor-pointer ${
+              activeTab === 'data'
+                ? 'bg-slate-200 text-slate-900 font-bold shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+            }`}
+          >
+            {activeTab === 'data' && (
+              <span className="absolute left-0 top-2 bottom-2 w-1 bg-sky-600 rounded-r-full" />
+            )}
+            <Database className="w-4 h-4 text-sky-600" />
+          </button>
+        </div>
+
+        {/* 底部: 设置、系统日志与连接状态小点 */}
+        <div className="w-full flex flex-col items-center space-y-2 shrink-0 pb-1">
+          {onOpenLogs && (
+            <button
+              onClick={onOpenLogs}
+              title="查看软件运行日志"
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-200/60 transition-colors cursor-pointer"
+            >
+              <FileText className="w-4 h-4" />
+            </button>
+          )}
+
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              title="系统与 AI 设置"
+              className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-200/60 transition-colors cursor-pointer"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* 用户与租户连接状态小点 */}
+          <div
+            title={`连接租户: ${activeTenantName} (${session.isLoggedIn ? '已登录' : '未登录'})`}
+            className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-700 text-xs font-bold relative cursor-pointer"
+            onClick={onOpenHistory}
+          >
+            {activeUserName.slice(0, 1)}
+            <span
+              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white ${
+                session.isLoggedIn ? 'bg-emerald-500' : 'bg-amber-400'
+              }`}
+            />
+          </div>
+        </div>
+      </aside>
+    );
+  }
+
+  // =========================================================================
+  // 2. 展开态: 260px 沉浸式模块化侧栏 (含项目树与会话历史、星标、时间标签)
+  // =========================================================================
   return (
-    <aside className={`${
-  collapsed ? 'w-0 opacity-0 -translate-x-full border-r-0 pointer-events-none' : 'w-64 opacity-100 translate-x-0'
-} transition-all duration-200 ease-in-out bg-slate-50 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative`}>
+    <aside className="w-64 opacity-100 translate-x-0 transition-all duration-200 ease-in-out bg-slate-50/95 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative">
       {/* 1. 顶部 Header (Codex 样式红绿灯安全边距、品牌下拉与搜索) */}
       <div className={`border-b border-slate-200/60 flex items-center justify-between shrink-0 px-3 ${
         isMac ? 'pt-8 pb-2.5 window-drag' : 'py-2.5'
@@ -312,7 +533,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
-              title="折叠隐藏侧边栏 (Cmd+B / Ctrl+B)"
+              title={isMac ? '折叠侧边栏 (⌘B)' : '折叠侧边栏 (Ctrl+B)'}
               className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition-colors cursor-pointer"
             >
               <PanelLeftClose className="w-4 h-4" />
@@ -343,21 +564,25 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         </div>
       )}
 
-      {/* 3. Codex 快捷导航条目 (全部功能移至此处) */}
+      {/* 3. Codex 快捷导航条目 */}
       <div className="px-2 py-2 space-y-0.5 border-b border-slate-200/60">
         {/* New chat */}
         <button
           onClick={onNewChatDraft}
-          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-2.5 cursor-pointer ${
+          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center justify-between cursor-pointer ${
             activeTab === 'ai' && !activeSessionId
               ? 'bg-slate-200 text-slate-900 font-bold'
               : 'text-slate-800 hover:bg-slate-200/60'
           }`}
         >
-          <SquarePen className="w-4 h-4 text-slate-600" />
-          <span>New chat</span>
+          <div className="flex items-center space-x-2.5">
+            <SquarePen className="w-4 h-4 text-slate-600" />
+            <span>New chat</span>
+          </div>
+          <span className="text-[10px] text-slate-400 font-mono">
+            {isMac ? '⌥⌘N' : 'Ctrl+Alt+N'}
+          </span>
         </button>
-
 
         {/* 会议助手 (类似飞书妙计) */}
         <button
@@ -395,6 +620,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           </span>
         </button>
 
+        {/* 自定义工作台 */}
         <button
           onClick={() => onSelectTab('workspace')}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center space-x-2.5 cursor-pointer ${
@@ -451,8 +677,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           </span>
         </button>
 
-
-
         {/* 对象与字段元数据 */}
         <button
           onClick={() => onSelectTab('metadata')}
@@ -480,7 +704,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         </button>
       </div>
 
-      {/* 4. Projects 本地项目工作区文件夹列表 (完全对齐 Codex 多项目本地目录树) */}
+      {/* 4. Projects 本地项目工作区文件夹列表 (对齐 Codex 多项目目录树与会话历史) */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         <div className="px-2 pt-1 pb-1 flex items-center justify-between text-[11px] font-semibold text-slate-400">
           <div className="flex items-center space-x-1">
@@ -507,20 +731,17 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           projects.map((proj) => {
             const isExpanded = expandedProjectIds.includes(proj.id);
             const isCurrentActive = activeProjectId === proj.id;
-            // 过滤属于当前项目的会话 (未分配项目时默认归入 default 项目)
-            const projSessions = filteredSessions.filter((s) => s.projectId === proj.id || (!s.projectId && proj.isDefault));
+            const projSessions = filteredSessions.filter((s) => s.projectId === proj.id || (!s.projectId && (proj.isDefault || proj === projects[0])));
 
             return (
               <div key={proj.id} className="space-y-0.5">
                 <div
                   onClick={(e) => {
                     e.stopPropagation();
-                    // 单击项目行：仅展开/收起目录，不切换当前活跃项目
                     toggleProjectExpand(proj.id);
                   }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
-                    // 双击项目行：才算正式切换工作区项目！
                     onSelectProject?.(proj.id);
                   }}
                   title={`本地路径: ${proj.localPath}\n• 单击: 展开/收起目录\n• 双击: 切换为当前工作区项目`}
@@ -571,8 +792,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                         <Edit3 className="w-2.5 h-2.5" />
                       </button>
                     )}
-                    {/* 移除项目 (默认项目不可删除) */}
-                    {!proj.isDefault && onDeleteProject && (
+                    {/* 移除项目 */}
+                    {onDeleteProject && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -584,7 +805,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                         <Trash2 className="w-2.5 h-2.5" />
                       </button>
                     )}
-                    {/* 展开/收起箭头 (点击仅触发展开/折叠，绝不切换项目) */}
+                    {/* 展开/收起箭头 */}
                     <div
                       onClick={(e) => {
                         e.stopPropagation();
@@ -600,7 +821,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                   </div>
                 </div>
 
-                {/* 项目展开下的子会话列表 (Codex Pill 样式) */}
+                {/* 项目展开下的子会话列表 (Codex 样式，含星标和相对时间戳) */}
                 {isExpanded && (
                   <div className="pl-3 space-y-0.5">
                     {projSessions.length === 0 ? (
@@ -611,6 +832,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                       projSessions.map((sess) => {
                         const isActive = activeTab === 'ai' && activeSessionId === sess.id;
                         const isEditing = editingId === sess.id;
+                        const relTime = formatRelativeTime(sess.updatedAt || sess.createdAt);
 
                         return (
                           <div
@@ -622,7 +844,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                                 : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-900'
                             }`}
                           >
-                            <div className="flex items-center space-x-2 min-w-0 flex-1">
+                            <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                              {isActive ? (
+                                <Star className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                              ) : (
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-300 group-hover:bg-slate-400 shrink-0" />
+                              )}
                               {isEditing ? (
                                 <form onSubmit={(e) => handleSaveRename(sess.id, e)} className="flex items-center space-x-1 flex-1">
                                   <input
@@ -647,30 +874,37 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                                   </button>
                                 </form>
                               ) : (
-                                <span className="truncate">{sess.title}</span>
+                                <span className="truncate flex-1">{sess.title}</span>
                               )}
                             </div>
 
-                            {/* 悬停快捷重命名与删除 */}
+                            {/* 相对时间标签与悬停操作 */}
                             {!isEditing && (
-                              <div className="hidden group-hover:flex items-center space-x-0.5 shrink-0 ml-1">
-                                <button
-                                  onClick={(e) => handleStartRename(sess, e)}
-                                  title="重命名"
-                                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded"
-                                >
-                                  <Edit3 className="w-2.5 h-2.5" />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onDeleteSession(sess.id);
-                                  }}
-                                  title="删除"
-                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
-                                >
-                                  <Trash2 className="w-2.5 h-2.5" />
-                                </button>
+                              <div className="flex items-center space-x-1 shrink-0 ml-1">
+                                {relTime && (
+                                  <span className="text-[10px] text-slate-400 font-mono group-hover:hidden">
+                                    {relTime}
+                                  </span>
+                                )}
+                                <div className="hidden group-hover:flex items-center space-x-0.5">
+                                  <button
+                                    onClick={(e) => handleStartRename(sess, e)}
+                                    title="重命名"
+                                    className="p-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded"
+                                  >
+                                    <Edit3 className="w-2.5 h-2.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onDeleteSession(sess.id);
+                                    }}
+                                    title="删除"
+                                    className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                                  >
+                                    <Trash2 className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
@@ -724,10 +958,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             <FileText className="w-3.5 h-3.5" />
           </button>
 
-          {/* 系统设置 (弹窗展示，含模型、插件扩展、技能库) */}
+          {/* 系统设置 */}
           <button
             onClick={onOpenSettings}
-            title="系统与 AI 设置 (含模型供应商、插件扩展中心、技能库与系统偏好)"
+            title="系统与 AI 设置"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
           >
             <Settings className="w-3.5 h-3.5" />

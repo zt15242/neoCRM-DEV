@@ -122,7 +122,7 @@ try {
 
   // 使用带注释的 tag (包含更新说明)
   execSync(`git tag -a ${tag} -F RELEASE_NOTES.md`, { stdio: 'inherit' });
-  execSync(`git push origin main`, { stdio: 'inherit' });
+  execSync(`git push origin HEAD:main`, { stdio: 'inherit' });
   execSync(`git push origin ${tag} --force`, { stdio: 'inherit' });
   console.log(`\n✅ 成功推送标签 ${tag}！GitHub Actions 将自动执行多平台构建并归档包含此更新说明的 Release。`);
 } catch (err) {

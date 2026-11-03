@@ -1,4 +1,3 @@
-import { LogSettings } from './LogSettings';
 import React, { useState, useEffect } from 'react';
 import { 
   AiProviderConfig, 
@@ -10,7 +9,8 @@ import {
   BUILTIN_AI_PROVIDERS, 
   DEFAULT_AI_SETTINGS,
   BUILTIN_MCP_SERVERS,
-  BUILTIN_AI_SKILLS
+  BUILTIN_AI_SKILLS,
+  CURRENT_APP_VERSION
 } from '../../../shared/constants';
 import { ModelProviderSettings } from './ModelProviderSettings';
 import { McpSettings } from './McpSettings';
@@ -18,6 +18,8 @@ import { SkillSettings } from './SkillSettings';
 import { AgentHarnessSettings } from './AgentHarnessSettings';
 import { GeneralSettings } from './GeneralSettings';
 import { FeishuWorkspaceSettings } from './FeishuWorkspaceSettings';
+import { LogSettings } from './LogSettings';
+import { ThemeSettingsCard } from './ThemeSettingsCard';
 import { PluginManagerPage } from '../plugins/PluginManagerPage';
 import { 
   Cpu, 
@@ -29,9 +31,13 @@ import {
   X,
   FileText,
   MessageSquare,
+  Palette,
+  Search,
+  RefreshCw,
+  FolderOpen
 } from 'lucide-react';
 
-export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general' | 'logs' | 'feishu';
+export type SettingsSubTab = 'models' | 'plugins' | 'skills' | 'agent' | 'general' | 'logs' | 'feishu' | 'appearance';
 
 interface SettingsManagerProps {
   isOpen: boolean;
@@ -41,6 +47,80 @@ interface SettingsManagerProps {
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
 }
 
+interface NavItem {
+  id: SettingsSubTab;
+  name: string;
+  sub: string;
+  icon: any;
+  badge?: string;
+  category: 'personal' | 'integrations' | 'system';
+}
+
+const SETTINGS_NAV_ITEMS: NavItem[] = [
+  // 1. 个人与偏好
+  {
+    id: 'general',
+    name: '通用偏好',
+    sub: '启动页面、SQL条数限制与缓存维护',
+    icon: Sliders,
+    category: 'personal',
+  },
+  {
+    id: 'appearance',
+    name: '界面与换肤',
+    sub: 'Codex黑白主题、物理毛玻璃与地面漫反射',
+    icon: Palette,
+    badge: 'UI',
+    category: 'personal',
+  },
+  // 2. AI 与扩展集成
+  {
+    id: 'models',
+    name: '模型与供应商',
+    sub: 'OpenAI、DeepSeek、Anthropic、Gemini等接口',
+    icon: Cpu,
+    category: 'integrations',
+  },
+  {
+    id: 'plugins',
+    name: '插件与扩展中心',
+    sub: 'DSH MCP 协议工具与生态插件看护',
+    icon: Plug,
+    badge: 'DSH',
+    category: 'integrations',
+  },
+  {
+    id: 'skills',
+    name: 'Skill 技能库',
+    sub: '个人专属业务技能包与提示词资产',
+    icon: Lightbulb,
+    category: 'integrations',
+  },
+  {
+    id: 'agent',
+    name: '智能体引擎',
+    sub: '上下文轮数、系统提示词与自动化配置',
+    icon: Sparkles,
+    category: 'integrations',
+  },
+  {
+    id: 'feishu',
+    name: '飞书群机器人',
+    sub: '定时执行组件看板并自动推送群聊',
+    icon: MessageSquare,
+    badge: 'BOT',
+    category: 'integrations',
+  },
+  // 3. 系统与诊断
+  {
+    id: 'logs',
+    name: '软件运行日志',
+    sub: '本地控制台诊断日志排查与导出',
+    icon: FileText,
+    category: 'system',
+  },
+];
+
 export const SettingsManager: React.FC<SettingsManagerProps> = ({
   isOpen,
   initialTab = 'models',
@@ -49,11 +129,33 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   showToast,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>(initialTab);
+  const [searchQuery, setSearchQuery] = useState('');
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
   const [settings, setSettings] = useState<AiHarnessSettings>(DEFAULT_AI_SETTINGS);
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(BUILTIN_MCP_SERVERS);
   const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
   const [loading, setLoading] = useState(true);
+  const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
+
+  useEffect(() => {
+    if (window.neoApi?.getAppVersion) {
+      window.neoApi.getAppVersion().then((v) => {
+        if (v) setAppVersion(`v${v.replace(/^v/, '')}`);
+      }).catch(() => {});
+    }
+  }, []);
+
+  // 支持键盘 Esc 退出设置弹窗
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // 当外部切换打开时，对齐初始 Tab
   useEffect(() => {
@@ -145,115 +247,209 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     await window.neoApi.aiClearSessions();
   };
 
+  // 搜索过滤导航项
+  const q = searchQuery.trim().toLowerCase();
+  const filteredNavItems = SETTINGS_NAV_ITEMS.filter((item) => {
+    if (!q) return true;
+    return item.name.toLowerCase().includes(q) || item.sub.toLowerCase().includes(q);
+  });
+
+  const personalItems = filteredNavItems.filter((i) => i.category === 'personal');
+  const integrationItems = filteredNavItems.filter((i) => i.category === 'integrations');
+  const systemItems = filteredNavItems.filter((i) => i.category === 'system');
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150 select-none">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/90 w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden">
-        {/* 顶部标题栏 */}
-        <div className="px-6 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150 select-none">
+      {/* 全屏双岛工作台容器 */}
+      <div className="bg-white/95 rounded-2xl shadow-2xl border border-slate-200/90 w-full max-w-6xl h-[92vh] flex flex-col overflow-hidden relative">
+        {/* 顶部标题栏 (含快速动作与关闭键) */}
+        <div className="px-5 py-3 border-b border-slate-200/70 flex items-center justify-between bg-slate-50/90 shrink-0">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-slate-800 text-white shadow-xs">
+            <div className="p-2 rounded-xl bg-slate-900 text-white shadow-xs">
               <SettingsIcon className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-800">系统与 AI 设置 (Settings Studio)</h3>
-              <p className="text-[11px] text-slate-400">配置模型 API 供应商、DeepSeek Harness 插件中心、技能库与系统偏好</p>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-sm font-bold text-slate-900">设置中心 (Settings Studio)</h3>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 font-mono font-semibold">
+                  {appVersion}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                AI 模型供应商、DSH 插件扩展中心、技能库、主题换肤与桌面运行环境
+              </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 cursor-pointer transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={onCheckUpdate}
+              className="px-2.5 py-1 text-xs rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 flex items-center space-x-1.5 transition-colors cursor-pointer"
+              title="检查最新软件更新"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>检查更新</span>
+            </button>
+            <button
+              onClick={onClose}
+              title="关闭设置 (Esc)"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 cursor-pointer transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* 主体两栏布局: 左侧设置导航菜单，右侧设置内容 */}
+        {/* 主体两栏布局: 左侧模块导航列表，右侧设置内容 */}
         <div className="flex-1 flex overflow-hidden">
-          {/* 左侧设置导航菜单 */}
-          <div className="w-60 bg-slate-50/50 border-r border-slate-100 p-3 flex flex-col justify-between shrink-0">
-            <div className="space-y-1">
-              <button
-                onClick={() => setActiveSubTab('models')}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                  activeSubTab === 'models'
-                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-                }`}
-              >
-                <Cpu className="w-4 h-4 shrink-0" />
-                <span>模型与供应商 (Models)</span>
-              </button>
+          {/* 左侧模块导航列 (带即时搜索框) */}
+          <div className="w-64 bg-slate-50/70 border-r border-slate-200/80 p-3 flex flex-col justify-between shrink-0 overflow-y-auto">
+            <div className="space-y-3">
+              {/* 搜索框 */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="搜索设置项..."
+                  className="w-full pl-8 pr-7 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-sky-500 transition-colors shadow-2xs"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
 
-              <button
-                onClick={() => setActiveSubTab('plugins')}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
-                  activeSubTab === 'plugins'
-                    ? 'bg-white text-purple-700 shadow-2xs border border-purple-200/80 font-bold'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-                }`}
-              >
-                <div className="flex items-center space-x-2.5 truncate">
-                  <Plug className="w-4 h-4 shrink-0 text-purple-600" />
-                  <span className="truncate">插件与扩展中心</span>
+              {/* 组 1: 个人与外观 */}
+              {personalItems.length > 0 && (
+                <div className="space-y-1">
+                  <div className="px-2.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                    个人与外观偏好
+                  </div>
+                  {personalItems.map((item) => {
+                    const Icon = item.icon;
+                    const isSelected = activeSubTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setActiveSubTab(item.id)}
+                        className={`w-full text-left px-2.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-white text-sky-700 shadow-2xs border border-slate-200/90 font-bold'
+                            : 'text-slate-700 hover:bg-slate-200/60 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 truncate">
+                          <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-sky-600' : 'text-slate-500'}`} />
+                          <span className="truncate">{item.name}</span>
+                        </div>
+                        {item.badge && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 font-mono shrink-0">
+                            {item.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
-                <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-mono font-semibold border border-purple-200 shrink-0">
-                  DSH
-                </span>
-              </button>
+              )}
 
-              <button
-                onClick={() => setActiveSubTab('skills')}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                  activeSubTab === 'skills'
-                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-                }`}
-              >
-                <Lightbulb className="w-4 h-4 shrink-0" />
-                <span>Skill 技能库 (Skills)</span>
-              </button>
+              {/* 组 2: AI 与扩展集成 */}
+              {integrationItems.length > 0 && (
+                <div className="space-y-1">
+                  <div className="px-2.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                    AI 与扩展集成
+                  </div>
+                  {integrationItems.map((item) => {
+                    const Icon = item.icon;
+                    const isSelected = activeSubTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setActiveSubTab(item.id)}
+                        className={`w-full text-left px-2.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-white text-sky-700 shadow-2xs border border-slate-200/90 font-bold'
+                            : 'text-slate-700 hover:bg-slate-200/60 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 truncate">
+                          <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-sky-600' : 'text-slate-500'}`} />
+                          <span className="truncate">{item.name}</span>
+                        </div>
+                        {item.badge && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-mono shrink-0">
+                            {item.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
 
-              <button
-                onClick={() => setActiveSubTab('agent')}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                  activeSubTab === 'agent'
-                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-                }`}
-              >
-                <Sparkles className="w-4 h-4 shrink-0" />
-                <span>智能体与对话引擎</span>
-              </button>
-
-              <button
-                onClick={() => setActiveSubTab('general')}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${
-                  activeSubTab === 'general'
-                    ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-                }`}
-              >
-                <Sliders className="w-4 h-4 shrink-0" />
-                <span>通用与工作台偏好</span>
-              </button>
-
-              <button
-                onClick={() => setActiveSubTab('feishu')}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2.5 transition-all cursor-pointer ${activeSubTab === 'feishu' ? 'bg-white text-sky-600 shadow-2xs border border-slate-200/80 font-bold' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'}`}
-              >
-                <MessageSquare className="w-4 h-4 shrink-0" />
-                <span>飞书推送</span>
-              </button>
+              {/* 组 3: 系统与诊断 */}
+              {systemItems.length > 0 && (
+                <div className="space-y-1">
+                  <div className="px-2.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                    系统与诊断
+                  </div>
+                  {systemItems.map((item) => {
+                    const Icon = item.icon;
+                    const isSelected = activeSubTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setActiveSubTab(item.id)}
+                        className={`w-full text-left px-2.5 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-white text-sky-700 shadow-2xs border border-slate-200/90 font-bold'
+                            : 'text-slate-700 hover:bg-slate-200/60 border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 truncate">
+                          <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-sky-600' : 'text-slate-500'}`} />
+                          <span className="truncate">{item.name}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* 底部信息 */}
             <div className="pt-2 border-t border-slate-200/60 px-2 text-[10px] text-slate-400 font-mono">
-              NeoCRM Desktop v1.4.0
+              NeoCRM Desktop {appVersion}
             </div>
           </div>
 
           {/* 右侧设置内容详情面板 */}
           <div className="flex-1 overflow-y-auto bg-white flex flex-col">
+            {activeSubTab === 'general' && (
+              <div className="p-6 max-w-4xl">
+                <GeneralSettings
+                  settings={settings}
+                  onSaveSettings={handleSaveSettings}
+                  onClearAiSessions={handleClearAiSessions}
+                  onCheckUpdate={onCheckUpdate}
+                  showToast={showToast}
+                />
+              </div>
+            )}
+
+            {activeSubTab === 'appearance' && (
+              <div className="p-6 max-w-4xl">
+                <ThemeSettingsCard showToast={showToast} />
+              </div>
+            )}
+
             {activeSubTab === 'models' && (
               <div className="p-6 max-w-4xl">
                 <ModelProviderSettings
@@ -305,19 +501,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </div>
             )}
 
-            {activeSubTab === 'general' && (
-              <div className="p-6 max-w-4xl">
-                <GeneralSettings
-                  settings={settings}
-                  onSaveSettings={handleSaveSettings}
-                  onClearAiSessions={handleClearAiSessions}
-                  onCheckUpdate={onCheckUpdate}
-                  showToast={showToast}
-                />
+            {activeSubTab === 'feishu' && (
+              <div className="p-6">
+                <FeishuWorkspaceSettings showToast={showToast} />
               </div>
             )}
-
-            {activeSubTab === 'feishu' && <div className="p-6"><FeishuWorkspaceSettings showToast={showToast} /></div>}
 
             {activeSubTab === 'logs' && (
               <div className="p-6 max-w-5xl">
@@ -328,13 +516,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         </div>
 
         {/* 底部关闭栏 */}
-        <div className="px-6 py-2.5 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between text-xs text-slate-500 shrink-0">
+        <div className="px-6 py-2.5 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between text-xs text-slate-500 shrink-0">
           <span className="text-[11px] text-slate-400 font-mono">
-            配置变更将自动实时保存至桌面存储
+            配置变更将自动实时保存至本地存储，按 Esc 或点击右上角关闭
           </span>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold cursor-pointer text-xs transition-colors"
+            className="px-4 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold cursor-pointer text-xs transition-colors shadow-2xs"
           >
             关闭
           </button>

@@ -355,8 +355,8 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
               className={`rounded-2xl border transition-all overflow-hidden ${
                 skill.enabled
                   ? isBuiltin
-                    ? 'border-sky-200 bg-sky-50/20'
-                    : 'border-indigo-200 bg-white'
+                    ? 'border-sky-200 dark:border-sky-800/60 bg-sky-50/20 dark:bg-slate-900/50'
+                    : 'border-indigo-200 dark:border-indigo-800/60 bg-white dark:bg-slate-900/50'
                   : 'border-slate-200 bg-slate-50/60 opacity-65'
               }`}
             >
@@ -380,8 +380,8 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-medium border flex items-center space-x-1 ${
                           isBuiltin
-                            ? 'bg-sky-100 text-sky-800 border-sky-200'
-                            : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            ? 'bg-sky-100 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800'
+                            : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
                         }`}
                       >
                         {isBuiltin && <ShieldCheck className="w-2.5 h-2.5" />}
@@ -396,7 +396,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                         <span className="text-[10px] text-slate-400">已停用</span>
                       )}
                     </div>
-                    <p className="text-xs text-slate-500 mt-1">{skill.description}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-300 mt-1">{skill.description}</p>
 
                     {/* 触发关键词 */}
                     {skill.triggerKeywords && skill.triggerKeywords.length > 0 && (
@@ -405,7 +405,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                         {skill.triggerKeywords.map((kw, ki) => (
                           <span
                             key={ki}
-                            className="text-[10px] px-2 py-0.5 rounded-md bg-white border border-slate-200 font-mono text-slate-600 shadow-2xs"
+                            className="text-[10px] px-2 py-0.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-slate-600 dark:text-slate-300 shadow-2xs"
                           >
                             #{kw}
                           </span>
