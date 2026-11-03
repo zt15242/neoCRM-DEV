@@ -120,7 +120,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
         enabled: true,
-        models: [],
+        models,
       };
       const res = await window.neoApi.aiFetchModels(tempConfig);
       if (res.success && res.models.length > 0) {
@@ -150,8 +150,6 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
         name: newModelName.trim() || newModelId.trim(),
         reasoning: newModelReasoning,
         tools: !newModelReasoning,
-        contextWindow: 65536,
-        maxOutputTokens: 8192,
       },
     ]);
     setNewModelId('');

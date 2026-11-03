@@ -3,6 +3,7 @@ import { isRestrictedRole, isRestrictedSkill } from '../../shared/restrictedFeat
 import { requiresFlowLicense } from '../../shared/licensePolicy';
 import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
+import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
 import { resolveSalesforceAlias } from './salesforceService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
@@ -495,237 +496,66 @@ export class AiService {
 
   // ================= 上下文长对话压缩 (Context Compaction) =================
 
-  public async compactSession(sessionId: string, signal?: AbortSignal): Promise<AiChatSession | null> {
-    const throwIfAborted = () => {
-      if (signal?.aborted) {
-        throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
-      }
+  public async compactSession(sessionId: string, signal?: AbortSignal, options: {
+    providerId?: string; modelId?: string; overheadTokens?: number; inputBudgetTokens?: number; contextWindow?: number;
+  } = {}): Promise<AiChatSession | null> {
+    const checkAbort = () => {
+      if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
     };
-    throwIfAborted();
-
-    const sessions = this.getSessions();
-    const session = sessions.find((s) => s.id === sessionId);
-    if (!session || session.messages.length <= 4) {
-      return session || null;
-    }
-
+    checkAbort();
+    const session = this.getSessions().find((item) => item.id === sessionId);
+    if (!session || session.messages.length < 2) return session || null;
     const config = this.getAiConfig();
-    const providerId = session.providerId || config.settings.defaultProviderId;
-    let provider = config.providers.find((p) => p.id === providerId && p.enabled && p.apiKey?.trim())
-      || config.providers.find((p) => p.enabled && p.apiKey?.trim());
-
-    if (!provider?.apiKey?.trim() && BUILTIN_SILICONFLOW_KEY) {
-      provider = {
-        id: "siliconflow_builtin",
-        name: "硅基流动 (内置)",
-        type: "siliconflow" as any,
-        protocol: "openai-completions",
-        baseUrl: "https://api.siliconflow.cn/v1",
-        apiKey: BUILTIN_SILICONFLOW_KEY,
-        enabled: true,
-        models: [{ id: "deepseek-ai/DeepSeek-V3", name: "DeepSeek-V3" }],
-      };
+    const providerId = options.providerId || session.providerId || config.settings.defaultProviderId;
+    const selectedProvider = config.providers.find((item) => item.id === providerId);
+    if (!selectedProvider) throw new Error('找不到当前模型供应商，无法生成上下文摘要');
+    const modelId = options.modelId || session.modelId || selectedProvider.models?.[0]?.id;
+    if (!modelId) throw new Error('请先配置用于上下文摘要的模型');
+    const selectedModel = selectedProvider.models.find((model) => model.id === modelId);
+    const provider = options.contextWindow ? { ...selectedProvider, models: [
+      ...selectedProvider.models.filter((model) => model.id !== modelId),
+      { ...selectedModel, id: modelId, name: selectedModel?.name || modelId, contextWindow: options.contextWindow },
+    ] } : selectedProvider;
+    const budget = getModelContextBudget(provider, modelId, config.settings.maxTokens);
+    const previousCount = session.compactionSummary?.originalMessageCount || 0;
+    const tailBudget = Math.max(1, Math.floor((options.inputBudgetTokens || budget.inputTokens) * 0.60)
+      - (options.overheadTokens || 0));
+    const cutoff = chooseCompactionCutoff(session.messages, previousCount, tailBudget);
+    if (cutoff <= previousCount) return session;
+    const messagesToCompact = session.messages.slice(previousCount, cutoff);
+    const instruction = `将新增历史和已有摘要合并为可继续工作的工程检查点。保留用户要求和纠正、已确认决定、对象/字段 API Key、文件路径、执行结果、未完成任务和下一步。不要把计划写成已完成，不要输出密钥或令牌，不调用工具。
+使用以下八节 Markdown，空节写 (none)：Primary Request and Intent；Key Technical Concepts & CRM Objects；Files, Code & Artifacts；Errors and Fixes；Pending Jobs；Current Work & Progress；Next Step；Critical Context & User Preferences。
+只输出合并后的摘要，保持简洁，当前用户的新请求不在本次摘要范围。`;
+    let remaining = (session.compactionSummary?.summary ? `已有检查点：\n${session.compactionSummary.summary}\n\n` : '') + messagesToCompact.map((message) => JSON.stringify({ role: message.role,
+      content: message.content, attachments: message.attachments?.map((file) => ({ name: file.name,
+        fullPath: file.fullPath, parsedContent: file.parsedContent })), toolCalls: message.toolCalls,
+    })).join('\n\n');
+    let summary = '';
+    const summaryBudget = getModelContextBudget(provider, modelId,
+      Math.max(256, Math.min(2000, Math.floor(budget.contextWindow * 0.10))));
+    // Each summary request itself fits the selected model, even for a very long prefix.
+    while (remaining) {
+      checkAbort();
+      const prefix = summary ? `已有检查点：\n${summary}\n\n新增历史：\n` : '历史：\n';
+      const summaryMessages = (text: string) => [{ role: 'system', content: instruction }, { role: 'user', content: prefix + text }];
+      const chunk = takeContextText(remaining, summaryBudget.inputTokens - 128,
+        (text) => ({ messages: summaryMessages(text), tools: [] }));
+      assertContextFits(summaryMessages(chunk.head), [], summaryBudget);
+      const next = await requestMeetingModelText(provider, modelId, instruction, prefix + chunk.head,
+        summaryBudget.maxOutputTokens, this.workbuddyService, signal, 45000);
+      checkAbort();
+      if (!next.trim()) throw new Error('模型未返回有效上下文摘要，历史内容已保留');
+      summary = next.trim();
+      remaining = chunk.tail;
     }
-
-    if (!provider) {
-      provider = config.providers[0];
-    }
-
-    const modelId = session.modelId || provider?.models?.[0]?.id || "deepseek-chat";
-
-    // 严格对齐到用户提问轮次边界 (User Turn Boundary)
-    // 默认保留最近 3-5 条作为活跃尾部 (Tail)，更早的消息全部纳入 Checkpoint 压缩范围
-    const targetTailLength = 4;
-    let cutoff = Math.max(0, session.messages.length - targetTailLength);
-    while (cutoff > 0 && session.messages[cutoff].role !== "user") {
-      cutoff--;
-    }
-    if (cutoff === 0 && session.messages.length > targetTailLength) {
-      cutoff = Math.max(0, session.messages.length - targetTailLength);
-      while (cutoff < session.messages.length - 2 && session.messages[cutoff].role !== "user") {
-        cutoff++;
-      }
-    }
-
-    const messagesToCompact = session.messages.slice(0, cutoff);
-    if (messagesToCompact.length < 2) {
-      return session;
-    }
-
-    const dialogHistoryText = messagesToCompact
-      .map((m) => {
-        const roleLabel = m.role === "user" ? "用户" : "AI助手";
-        let content = m.content || "";
-        let toolInfo = "";
-        if (m.toolCalls && m.toolCalls.length > 0) {
-          toolInfo = "\n" + m.toolCalls.map((t) => {
-            const summary = t.summary || "";
-            const argStr = JSON.stringify(t.arguments || {}).slice(0, 150);
-            const resSample = typeof t.data === "string"
-              ? t.data.slice(0, 300)
-              : JSON.stringify(t.data || (t as any).resultData || "").slice(0, 300);
-            return `[执行工具: ${t.name}(${argStr}) -> ${summary} | 结果摘要: ${resSample}]`;
-          }).join("\n");
-        }
-        return `${roleLabel}: ${content.slice(0, 800)}${toolInfo}`;
-      })
-      .join("\n\n");
-
-    const priorSummary = session.compactionSummary?.summary ? `Prior Checkpoint Summary:
-${session.compactionSummary.summary}
-
-` : "";
-    const prompt = `${priorSummary}You are acting as a compaction engine for this AI engineering workspace assistant (DeepSeek Harness standard). Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.
-
-Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section.
-
-## Primary Request and Intent
-- [the user's original and evolving goals; quote verbatim where the exact wording matters]
-
-## Key Technical Concepts & CRM Objects
-- [CRM platform (NeoCRM/Salesforce/Fxiaoke), business objects (e.g. AccountObj, order, contract), fields, API Keys, and architecture conventions in play]
-
-## Files, Code & Artifacts
-- [exact absolute/relative paths: why it matters, generated .docx templates, scripts, code snippets, or configurations]
-
-## Errors and Fixes
-- [errors encountered: root cause, how it was resolved, plus any user corrections/feedback]
-
-## Pending Jobs
-- [explicitly requested work not yet completed or pending confirmation]
-
-## Current Work & Progress
-- [precisely what was completed or in progress at this checkpoint]
-
-## Next Step
-- [the single next action, directly in line with the most recent request, or "(none)"]
-
-## Critical Context & User Preferences
-- [key decisions, constraints, user preferences, live credentials, data needed to continue]
-
-Rules:
-- Write concise engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.
-- Capture user feedback and explicit instructions faithfully, especially corrections.
-- Output ONLY the checkpoint text: do not call any tool or output fluff prose.
-
-Conversation to condense:
-${dialogHistoryText}`;
-
-    let summaryText = "";
-    const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
-    const apiEndpoint = cleanBaseUrl.endsWith("/v1") || cleanBaseUrl.includes("/v1/")
-      ? `${cleanBaseUrl}/chat/completions`
-      : `${cleanBaseUrl}/v1/chat/completions`;
-
-    if (provider.apiKey?.trim()) {
-      try {
-        throwIfAborted();
-        const res = await axios.post(
-          apiEndpoint,
-          {
-            model: modelId,
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.2,
-            max_tokens: 2000,
-          },
-          {
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${provider.apiKey.trim()}`,
-            },
-            timeout: 35000,
-            signal,
-          }
-        );
-        throwIfAborted();
-        summaryText = res.data?.choices?.[0]?.message?.content || "";
-      } catch (err: any) {
-        if (signal?.aborted || err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') throw err;
-        console.warn("[DSH Compaction] 主模型总结接口超时或异常:", err.message);
-      }
-    }
-
-    // 硅基流动 DeepSeek-V3 快速灾备
-    if (!summaryText.trim() && BUILTIN_SILICONFLOW_KEY && provider.apiKey !== BUILTIN_SILICONFLOW_KEY) {
-      try {
-        throwIfAborted();
-        console.log("[DSH Compaction] 启动硅基流动 DeepSeek-V3 兜底生成结构化 Checkpoint...");
-        const sfRes = await axios.post(
-          "https://api.siliconflow.cn/v1/chat/completions",
-          {
-            model: "deepseek-ai/DeepSeek-V3",
-            messages: [{ role: "user", content: prompt }],
-            temperature: 0.2,
-            max_tokens: 2000,
-          },
-          {
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${BUILTIN_SILICONFLOW_KEY}`,
-            },
-            timeout: 30000,
-            signal,
-          }
-        );
-        throwIfAborted();
-        summaryText = sfRes.data?.choices?.[0]?.message?.content || "";
-      } catch (sfErr: any) {
-        if (signal?.aborted || sfErr?.name === 'AbortError' || sfErr?.code === 'ERR_CANCELED') throw sfErr;
-        console.warn("[DSH Compaction] 硅基流动备用总结异常:", sfErr.message);
-      }
-    }
-
-    if (!summaryText.trim()) {
-      const userGoals = messagesToCompact
-        .filter((m) => m.role === "user")
-        .map((m) => m.content.slice(0, 120))
-        .filter(Boolean)
-        .slice(-4);
-
-      const allToolCalls = messagesToCompact.flatMap((m) => m.toolCalls || []);
-      const toolSummaries = allToolCalls
-        .map((t) => `${t.name}: ${t.summary || "已执行"}`)
-        .slice(-10);
-
-      const textCorpus = messagesToCompact.map((m) => m.content || "").join(" ");
-      const entityMatches = Array.from(new Set(textCorpus.match(/[a-zA-Z0-9_]+__(?:c|Obj)|[A-Z][a-zA-Z0-9]+Obj|(?:contract|account|opportunity|order|lead|contact)/gi) || [])).slice(0, 10);
-
-      summaryText = `## Primary Request and Intent\n- ${userGoals.join("\n- ") || "多轮工程排查与数据对接"}
-
-## Key Technical Concepts & CRM Objects
-- 涉及业务对象: ${entityMatches.join(", ") || "包含实体元数据探测、字段校准与代码落盘"}
-
-## Files, Code & Artifacts
-- 项目工作区代码文件、脚本与模板生成
-
-## Errors and Fixes
-- 历史排查与纠偏已在会话中确认与实施
-
-## Pending Jobs
-- (none)
-
-## Current Work & Progress
-- 共执行 ${allToolCalls.length} 次工具操作:
-  * ${toolSummaries.join("\n  * ") || "已完成历史工具链调用"}
-
-## Next Step
-- 根据用户最新指令继续推进
-
-## Critical Context & User Preferences
-- 遵循 DeepSeek Harness 自主工程落地与沙箱安全规范，严格核对真实字段`;
-    }
-
-    throwIfAborted();
-    session.compactionSummary = {
-      originalMessageCount: messagesToCompact.length,
-      summary: summaryText.trim(),
-      compactedAt: Date.now(),
-    };
-    // 关键设计：前端与数据库完整保留所有历史消息，绝不抹除用户可见的对话列表！
-    session.updatedAt = Date.now();
-
-    this.saveSession(session);
-    return session;
+    checkAbort();
+    // A delayed summary must not overwrite messages appended by another request.
+    const latest = this.getSessions().find((item) => item.id === sessionId);
+    if (!latest || !session.messages.slice(0, cutoff).every((message, index) => latest.messages[index]?.id === message.id)) return latest || null;
+    latest.compactionSummary = { originalMessageCount: cutoff, summary, compactedAt: Date.now() };
+    latest.updatedAt = Date.now();
+    this.saveSession(latest);
+    return latest;
   }
 
   public deleteProvider(providerId: string): AiProviderConfig[] {
@@ -878,7 +708,10 @@ ${dialogHistoryText}`;
 
   public async fetchAvailableModels(provider: AiProviderConfig): Promise<{ success: boolean; models: AiModelItem[]; error?: string }> {
     if (provider.id === 'workbuddy' && this.workbuddyService?.fetchLiveModels) {
-      return this.workbuddyService.fetchLiveModels();
+      const result = await this.workbuddyService.fetchLiveModels();
+      return { ...result, models: result.models.map((model: AiModelItem) => ({ ...model,
+        ...readModelTokenLimits(model, provider.models.find((configured) => configured.id === model.id)),
+      })) };
     }
 
     const baseUrl = provider.baseUrl?.trim().replace(/\/+$/, '') || '';
@@ -918,8 +751,7 @@ ${dialogHistoryText}`;
               name: displayName,
               reasoning: isReasoning,
               tools: !lowerId.includes('thinking'),
-              contextWindow: item.inputTokenLimit || 1048576,
-              maxOutputTokens: item.outputTokenLimit || 65536,
+              ...readModelTokenLimits(item, provider.models?.find((model) => model.id === id)),
             };
           });
 
@@ -956,8 +788,7 @@ ${dialogHistoryText}`;
           name,
           reasoning: isReasoning,
           tools: !lowerId.includes('reasoner') && !lowerId.includes('thinking'),
-          contextWindow: 65536,
-          maxOutputTokens: 8192,
+          ...readModelTokenLimits(item, provider.models?.find((model) => model.id === id)),
         };
       });
 
@@ -1026,20 +857,14 @@ ${dialogHistoryText}`;
     const controller = this.activeControllers.get(requestIdOrSessionId);
     if (controller) {
       if (!controller.signal.aborted) controller.abort();
-      this.activeControllers.delete(requestIdOrSessionId);
+      for (const [id, candidate] of this.activeControllers) {
+        if (candidate === controller) this.activeControllers.delete(id);
+      }
       return true;
     }
 
-    // 兜底：若传入的是非精确 ID，安全中止全部活跃流
-    let anyAborted = false;
-    for (const [id, ctrl] of this.activeControllers.entries()) {
-      if (!ctrl.signal.aborted) {
-        ctrl.abort();
-        anyAborted = true;
-      }
-    }
-    this.activeControllers.clear();
-    return anyAborted;
+    // 已完成或过期的请求不能取消其他会话。
+    return false;
   }
 
   public async startChatStream(
@@ -1130,60 +955,7 @@ ${dialogHistoryText}`;
 
     const config = this.getAiConfig();
 
-    // ================= DeepSeek Harness 官方自动上下文压缩引擎 (Auto-Compaction) =================
-    // 当会话累积消息达到阈值或字符量过大时，在后台自动浓缩为 8 节结构化工程 Checkpoint 并向前端派发事件
     let currentCompactionSummary = compactionSummary;
-    let effectiveMessages = messages;
-
-    try {
-      // 真实统计全量上下文开销（包含文本、工具执行参数与返回数据、文件附件）
-      let totalEffectiveChars = 0;
-      for (const m of messages) {
-        totalEffectiveChars += (m.content?.length || 0);
-        if (m.toolCalls && Array.isArray(m.toolCalls)) {
-          for (const tc of m.toolCalls) {
-            totalEffectiveChars += (JSON.stringify(tc.arguments || "").length + JSON.stringify((tc as any).resultData || tc.resultSummary || "").length);
-          }
-        }
-        if (m.attachments && Array.isArray(m.attachments)) {
-          for (const a of m.attachments) {
-            totalEffectiveChars += (a.parsedContent?.length || 0);
-          }
-        }
-      }
-
-      const lastCompactedAt = compactionSummary?.compactedAt || 0;
-      const cooldownOk = Date.now() - lastCompactedAt > 45000; // 45秒冷却
-      const lastCompactedCount = compactionSummary?.originalMessageCount || 0;
-      const uncompactedCount = messages.length - lastCompactedCount;
-
-      const shouldAutoCompact = (uncompactedCount >= 6 || totalEffectiveChars > 22000) && cooldownOk && messages.length >= 6;
-
-      if (shouldAutoCompact && sessionId) {
-        console.log(`[DSH Auto-Compaction] 会话 ${sessionId} 历史消息达到 ${messages.length} 条 (真实有效字符: ${totalEffectiveChars})，正在执行结构化记忆自动压缩...`);
-        // 后台静默提炼 DSH 8 节工程 Checkpoint，通过 compaction_done 事件安全通知前端卡片，绝不污染正文
-
-        const compacted = await this.compactSession(sessionId, controller.signal);
-        if (compacted?.compactionSummary) {
-          currentCompactionSummary = compacted.compactionSummary;
-          sendEvent({
-            requestId,
-            sessionId,
-            messageId,
-            type: "compaction_done" as any,
-            compactionSummary: currentCompactionSummary,
-          });
-          console.log(`[DSH Auto-Compaction] 自动压缩完成！成功浓缩前 ${currentCompactionSummary.originalMessageCount} 轮对话为 8 节 Checkpoint`);
-        }
-      }
-    } catch (compactErr: any) {
-      if (controller.signal.aborted || compactErr?.name === 'AbortError' || compactErr?.code === 'ERR_CANCELED') {
-        sendEvent({ requestId, sessionId, messageId, type: 'done' });
-        cleanupController();
-        return;
-      }
-      console.warn("[DSH Auto-Compaction] 自动压缩过程提示:", compactErr.message);
-    }
 
     const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
     if (!provider) {
@@ -1601,23 +1373,8 @@ ${mcpInfoText}
 
       // 注意：根据 DSH 官方规范，历史压缩记忆直接作为前序消息以 <compacted-summary> 标签在对话流首部注入，保持系统提示词干净纯粹，避免重复膨胀
 
-      // 2. 截取上下文消息：对齐到用户提问轮次边界 (User Turn Boundary)，确保尾部始终从 user 消息开始
-      let recentMessages = effectiveMessages;
-      if (currentCompactionSummary?.summary && effectiveMessages.length > 4) {
-        const targetTailCount = 6;
-        let startIdx = Math.max(0, effectiveMessages.length - targetTailCount);
-        while (startIdx < effectiveMessages.length - 1 && effectiveMessages[startIdx].role !== "user") {
-          startIdx++;
-        }
-        recentMessages = effectiveMessages.slice(startIdx);
-      } else {
-        const limit = config.settings.contextLimit || 20;
-        let startIdx = Math.max(0, effectiveMessages.length - limit);
-        while (startIdx < effectiveMessages.length - 1 && effectiveMessages[startIdx].role !== "user") {
-          startIdx++;
-        }
-        recentMessages = effectiveMessages.slice(startIdx);
-      }
+      // Checkpoint marks an exact prefix; new turns since that prefix remain intact.
+      let recentMessages = uncompactedMessages(messages, currentCompactionSummary);
 
       // 实时意图强引导：当已连接租户且用户请求查询对象、实体或字段时，注入最高优先级调具执行指令
       if (currentSession.isLoggedIn && currentSession.environment && config.settings.enableCrmTools !== false) {
@@ -1745,106 +1502,89 @@ ${mcpInfoText}
         ? `${cleanBaseUrl}/chat/completions`
         : `${cleanBaseUrl}/v1/chat/completions`;
 
-      // 判断是否走 Google Gemini 原生协议
-      if (provider.protocol === 'google-gemini' && !cleanBaseUrl.endsWith('/openai')) {
-        await this.runGeminiNativeStream({
-          requestId,
-          sessionId,
-          messageId,
-          provider,
-          modelId,
-          systemPromptText,
-          recentMessages,
-          enableTools: (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
-          activeToolsSpec,
-          activeCustomMcp,
-          settings: config.settings,
-          currentSession,
-          controller,
-          sendEvent,
-          projectPath,
-          sessionAllowedFiles,
-        });
-        return;
-      }
-
       // 3. 构建 OpenAI 兼容对话上下文列表 (完全对齐 DSH：完整保留前序历史的 tool_calls 与工具结果)
-      const conversationHistory: any[] = [];
-      if (systemMessage) {
-        conversationHistory.push(systemMessage);
-      }
+      const buildConversationHistory = () => {
+        const conversationHistory: any[] = [];
+        if (systemMessage) {
+          conversationHistory.push(systemMessage);
+        }
 
-      // 当存在历史压缩记忆时，在会话消息队列首部显式注入 DSH <compacted-summary> 结构块与确认，保持角色轮次严格交替合法
-      if (currentCompactionSummary?.summary) {
-        conversationHistory.push({
-          role: "user",
-          content: `<compacted-summary>\nThis is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.\n\n${currentCompactionSummary.summary}\n</compacted-summary>`,
-        });
-        conversationHistory.push({
-          role: "assistant",
-          content: "明白。前序历史工程 Checkpoint 与系统架构决策已完全掌握，我将直接基于后续消息继续为您推进。",
-        });
-      }
+        // 当存在历史压缩记忆时，在会话消息队列首部显式注入 DSH <compacted-summary> 结构块与确认，保持角色轮次严格交替合法
+        if (currentCompactionSummary?.summary) {
+          conversationHistory.push({
+            role: "user",
+            content: `<compacted-summary>\nThis is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.\n\n${currentCompactionSummary.summary}\n</compacted-summary>`,
+          });
+          conversationHistory.push({
+            role: "assistant",
+            content: "明白。前序历史工程 Checkpoint 与系统架构决策已完全掌握，我将直接基于后续消息继续为您推进。",
+          });
+        }
 
-      for (const msg of recentMessages) {
-        if (msg.role === 'user') {
-          let text = msg.content || '';
-          // 参照 DSH 规范结构化注入挂载/引用的文件信息，带绝对路径与相对路径，赋予大模型分析与精准编辑能力
-          if (msg.attachments && msg.attachments.length > 0) {
-            const fileDescriptions = msg.attachments.map((a) => {
-              const fullP = a.fullPath || (projectPath ? path.join(projectPath, a.name) : a.name);
-              const relP = a.relativePath || a.name;
-              return `[用户引用/挂载的工作区物理文件]:\n- 文件名: ${a.name}\n- 物理绝对路径: ${fullP}\n- 工作区相对路径: ${relP}\n- 文件大小: ${(a.size / 1024).toFixed(1)} KB\n- 初始内容/摘要:\n${a.parsedContent || '(可直接调用 read 工具读取该文件完整内容)'}\n[编辑操作指引]: 若需修改该文件，请直接调用 edit 或 str_replace_editor 工具传入上述物理绝对路径进行高保真替换！`;
-            }).join('\n\n');
-            text = `${fileDescriptions}\n\n${text}`;
-          }
-
-          if (msg.entityRefs && msg.entityRefs.length > 0) {
-            const refDesc = msg.entityRefs
-              .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
-              .join(', ');
-            text = `${refDesc}\n\n${text}`;
-          }
-
-          conversationHistory.push({ role: 'user', content: text });
-        } else if (msg.role === 'assistant') {
-          // 关键修复：如果前序轮次调用过工具，严格按照标准时序复原：assistant(tool_calls) -> tool(result) -> assistant(content)！
-          // 若缺少 tool 之后的最终 assistant 回答，大模型在下一轮看到历史在 tool 结果处截止，会误以为前序工具调用尚未作答，导致在新提问时重复回答上一轮的问题！
-          if (msg.toolCalls && msg.toolCalls.length > 0) {
-            conversationHistory.push({
-              role: 'assistant',
-              content: null,
-              tool_calls: msg.toolCalls.map((tc, idx) => ({
-                id: tc.id || `call_${idx}`,
-                type: 'function',
-                function: {
-                  name: tc.name,
-                  arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments || {}),
-                },
-              })),
-            });
-
-            for (const tc of msg.toolCalls) {
-              conversationHistory.push({
-                role: 'tool',
-                tool_call_id: tc.id || `call_0`,
-                content: this.formatSafeToolResultString(tc.resultData || tc.resultSummary || '{}', 3500),
-              });
+        for (const msg of recentMessages) {
+          if (msg.role === 'user') {
+            let text = msg.content || '';
+            // 参照 DSH 规范结构化注入挂载/引用的文件信息，带绝对路径与相对路径，赋予大模型分析与精准编辑能力
+            if (msg.attachments && msg.attachments.length > 0) {
+              const fileDescriptions = msg.attachments.map((a) => {
+                const fullP = a.fullPath || (projectPath ? path.join(projectPath, a.name) : a.name);
+                const relP = a.relativePath || a.name;
+                return `[用户引用/挂载的工作区物理文件]:\n- 文件名: ${a.name}\n- 物理绝对路径: ${fullP}\n- 工作区相对路径: ${relP}\n- 文件大小: ${(a.size / 1024).toFixed(1)} KB\n- 初始内容/摘要:\n${a.parsedContent || '(可直接调用 read 工具读取该文件完整内容)'}\n[编辑操作指引]: 若需修改该文件，请直接调用 edit 或 str_replace_editor 工具传入上述物理绝对路径进行高保真替换！`;
+              }).join('\n\n');
+              text = `${fileDescriptions}\n\n${text}`;
             }
 
-            if (msg.content && msg.content.trim()) {
+            if (msg.entityRefs && msg.entityRefs.length > 0) {
+              const refDesc = msg.entityRefs
+                .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
+                .join(', ');
+              text = `${refDesc}\n\n${text}`;
+            }
+
+            conversationHistory.push({ role: 'user', content: text });
+          } else if (msg.role === 'assistant') {
+            // 关键修复：如果前序轮次调用过工具，严格按照标准时序复原：assistant(tool_calls) -> tool(result) -> assistant(content)！
+            // 若缺少 tool 之后的最终 assistant 回答，大模型在下一轮看到历史在 tool 结果处截止，会误以为前序工具调用尚未作答，导致在新提问时重复回答上一轮的问题！
+            if (msg.toolCalls && msg.toolCalls.length > 0) {
               conversationHistory.push({
                 role: 'assistant',
-                content: msg.content,
+                content: null,
+                tool_calls: msg.toolCalls.map((tc, idx) => ({
+                  id: tc.id || `call_${idx}`,
+                  type: 'function',
+                  function: {
+                    name: tc.name,
+                    arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments || {}),
+                  },
+                })),
               });
-            }
-          } else {
-            if (msg.content && msg.content.trim()) {
-              conversationHistory.push({ role: 'assistant', content: msg.content });
+
+              for (const tc of msg.toolCalls) {
+                conversationHistory.push({
+                  role: 'tool',
+                  tool_call_id: tc.id || `call_0`,
+                  content: this.formatSafeToolResultString(tc.resultData || tc.resultSummary || '{}', Number.MAX_SAFE_INTEGER),
+                });
+              }
+
+              if (msg.content && msg.content.trim()) {
+                conversationHistory.push({
+                  role: 'assistant',
+                  content: msg.content,
+                });
+              }
+            } else {
+              if (msg.content && msg.content.trim()) {
+                conversationHistory.push({ role: 'assistant', content: msg.content });
+              }
             }
           }
         }
-      }
+
+        return conversationHistory;
+      };
+      let conversationHistory = buildConversationHistory();
+      let storedHistoryLength = conversationHistory.length;
 
       // 4. 判断是否开启工具调用
       const modelObj = provider.models?.find((m) => m.id === modelId);
@@ -1868,6 +1608,61 @@ ${mcpInfoText}
         effectiveActiveToolsSpec = DSH_PTC_TOOL_SPEC;
       }
 
+      const contextBudget = getModelContextBudget(provider, modelId, config.settings.maxTokens);
+      const contextTools = canUseTools ? effectiveActiveToolsSpec : [];
+      const compactForBudget = async (inputBudgetTokens = contextBudget.inputTokens) => {
+        if (!sessionId) return;
+        // Tool exchanges produced by this running turn are not in the saved session yet.
+        const liveExchanges = conversationHistory.slice(storedHistoryLength);
+        const estimatedTokens = estimateContextTokens({ messages: conversationHistory, tools: contextTools });
+        try {
+          console.log(`[Context] ${modelId}: estimated input ${estimatedTokens}/${contextBudget.inputTokens}; creating checkpoint`);
+          const compacted = await this.compactSession(sessionId, controller.signal, {
+            providerId: provider.id, modelId, inputBudgetTokens, contextWindow: contextBudget.contextWindow,
+            overheadTokens: estimateContextTokens({ system: systemPromptText, tools: contextTools, liveExchanges }),
+          });
+          if (compacted?.compactionSummary && compacted.compactionSummary.originalMessageCount > (currentCompactionSummary?.originalMessageCount || 0)) {
+            currentCompactionSummary = compacted.compactionSummary;
+            recentMessages = uncompactedMessages(messages, currentCompactionSummary);
+            conversationHistory = buildConversationHistory();
+            storedHistoryLength = conversationHistory.length;
+            conversationHistory.push(...liveExchanges);
+            sendEvent({ requestId, sessionId, messageId, type: 'compaction_done', compactionSummary: currentCompactionSummary });
+          }
+        } catch (error: any) {
+          throwIfAborted();
+          console.warn('[Context] Checkpoint unavailable; retaining conversation history:', error.message);
+        }
+      };
+      if (estimateContextTokens({ messages: conversationHistory, tools: contextTools }) >= contextBudget.triggerTokens) {
+        await compactForBudget();
+      }
+
+      // 判断是否走 Google Gemini 原生协议
+      if (provider.protocol === 'google-gemini' && !cleanBaseUrl.endsWith('/openai')) {
+        await this.runGeminiNativeStream({
+          requestId,
+          sessionId,
+          messageId,
+          provider,
+          modelId,
+          systemPromptText,
+          recentMessages,
+          enableTools: (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
+          activeToolsSpec,
+          activeCustomMcp,
+          settings: config.settings,
+          currentSession,
+          controller,
+          sendEvent,
+          projectPath,
+          sessionAllowedFiles,
+          compactionSummary: currentCompactionSummary,
+          contextBudget,
+        });
+        return;
+      }
+
       // 5. 执行 DeepSeek Harness 官方原版自主智能体推进循环 (DSH Autonomous Agent Loop)
       // 彻底废除 3 轮 / 8 轮的死板硬编码限制！完全对齐 DSH：只要大模型在发出 tool_calls，就自主无限循环执行到底，直到模型自主认为任务完成 (toolCalls.length === 0)！
       let stepCount = 0;
@@ -1882,12 +1677,15 @@ ${mcpInfoText}
         throwIfAborted();
         stepCount++;
         const isSafetyFuseTurn = stepCount >= maxSafetySteps; // 仅在达到60步安全熔断时强制收敛
+        if (stepCount > 1 && estimateContextTokens({ messages: conversationHistory, tools: contextTools }) >= contextBudget.triggerTokens) {
+          await compactForBudget();
+        }
 
         const requestBody: any = {
           model: modelId,
           messages: conversationHistory,
           temperature: config.settings.temperature ?? 0.3,
-          max_tokens: config.settings.maxTokens || 4096,
+          max_tokens: contextBudget.maxOutputTokens,
           stream: true,
         };
 
@@ -1900,6 +1698,8 @@ ${mcpInfoText}
 
         let response: Response | null = null;
         let lastErrorMsg = '';
+        let lastFailureStatus: number | undefined;
+        let contextRecovery = false;
         const maxRetries = 2;
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -1907,20 +1707,16 @@ ${mcpInfoText}
 
           const isRetry = attempt > 0;
           if (isRetry) {
-            console.warn(`[AI Agent Loop] 上游网关超时或抖动 (HTTP 524/504)，正在自动深度精简上下文并重试 (第 ${attempt}/${maxRetries} 次)...`);
-            sendEvent({
-              requestId,
-              sessionId,
-              messageId,
-              type: 'content_delta',
-              delta: `\n> ⚡ *[网关提示]* 检测到上游连接超时 (HTTP 524)，已自动压缩历史上下文并重试连接 (第 ${attempt}/${maxRetries} 次)...\n\n`,
-            });
-            await new Promise((r) => setTimeout(r, attempt === 1 ? 2000 : 4000));
-            if (controller.signal.aborted) break;
+            const reason = contextRecovery ? '上游报告上下文超限，正在按模型容量整理并重试'
+              : `上游${lastFailureStatus ? `返回 HTTP ${lastFailureStatus}` : '连接失败'}，正在重试`;
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta',
+              delta: `\n> 连接提示：${reason}（${attempt}/${maxRetries}）。\n\n` });
+            await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 2000 : 4000));
+            throwIfAborted();
           }
-
-          // 动态修剪上下文 (重试时启用激进深度压缩，大幅缩减 prefill 耗时，防止踩到 Cloudflare 100 秒超时硬限制)
-          requestBody.messages = this.pruneConversationHistory(conversationHistory, isRetry);
+          requestBody.max_tokens = contextBudget.maxOutputTokens;
+          requestBody.messages = pruneToolMessages(conversationHistory, requestBody.tools || [], contextBudget, contextRecovery);
+          assertContextFits(requestBody.messages, requestBody.tools || [], contextBudget);
 
           try {
             if (provider.id === 'workbuddy' && this.workbuddyService) {
@@ -1953,23 +1749,26 @@ ${mcpInfoText}
             }
 
             const errText = await resp.text();
+            lastFailureStatus = resp.status;
             lastErrorMsg = this.cleanHttpError(resp.status, errText);
-
-            // 若为 524, 504, 502, 503 等网关超时/抖动错误，继续自动重试
-            const isGatewayError = resp.status === 524 || resp.status === 504 || resp.status === 502 || resp.status === 503 || resp.status === 429;
-            if (isGatewayError && attempt < maxRetries) {
+            contextRecovery = isContextLimitError(resp.status, errText);
+            if (contextRecovery && attempt < maxRetries) {
+              const reported = reportedContextWindow(errText);
+              if (reported && reported < contextBudget.contextWindow) {
+                const corrected = { ...provider, models: [{ ...modelObj, id: modelId, name: modelObj?.name || modelId, contextWindow: reported }] };
+                Object.assign(contextBudget, getModelContextBudget(corrected, modelId, config.settings.maxTokens));
+              }
+              await compactForBudget(contextBudget.targetTokens);
               continue;
             }
-
-            throw new Error(`模型接口响应异常 (HTTP ${resp.status}): ${lastErrorMsg}`);
+            if ([429, 502, 503, 504, 524].includes(resp.status) && attempt < maxRetries) continue;
+            throw Object.assign(new Error(`模型接口响应异常 (HTTP ${resp.status}): ${lastErrorMsg}`), { nonRetryable: true });
           } catch (fetchErr: any) {
-            if (fetchErr.name === 'AbortError' || controller.signal.aborted) {
-              throw fetchErr;
-            }
+            if (fetchErr.name === 'AbortError' || controller.signal.aborted || fetchErr.nonRetryable) throw fetchErr;
             lastErrorMsg = fetchErr.message;
-            if (attempt >= maxRetries) {
-              throw fetchErr;
-            }
+            lastFailureStatus = undefined;
+            contextRecovery = false;
+            if (attempt >= maxRetries) throw fetchErr;
           }
         }
 
@@ -2244,7 +2043,7 @@ ${mcpInfoText}
             conversationHistory.push({
               role: 'tool',
               tool_call_id: tc.id,
-              content: this.formatSafeToolResultString(toolResult),
+              content: this.formatSafeToolResultString(toolResult, Number.MAX_SAFE_INTEGER),
             });
           }
 
@@ -2306,33 +2105,15 @@ ${currentCompactionSummary.summary}
           }
         }
 
-        const realLastUserMsg = [...recentMessages].reverse().find((m) => m.role === 'user');
-        const toolDataContext = executedToolsLog
-          .map(
-            (t, idx) =>
-              `【本地工具调用 #${idx + 1}: ${t.name}(${JSON.stringify(t.args)}) -> ${t.summary}】
-返回真实数据:
----
-${this.formatSafeToolResultString(t.data, 2000)}
----`
-          )
-          .join("\n\n");
-
-        const safeToolDataContext = toolDataContext.length > 25000
-          ? toolDataContext.slice(0, 25000) + "\n... [前序工具数据已精简截断]"
-          : toolDataContext;
-
-        cleanSynthesisHistory.push({
-          role: 'user',
-          content: `${realLastUserMsg?.content || '请分析以上数据'}
-
----
-系统已为您自动调取到当前租户的以下真实元数据/业务数据：
-
-${safeToolDataContext}
-
-请直接基于以上真实数据，用专业、清晰的中文 Markdown 格式（包含合理的分类、结构化表格与深入解读）给出完整详尽的最终回答：`,
+        const realLastUserMsg = [...recentMessages].reverse().find((message) => message.role === 'user');
+        cleanSynthesisHistory.push({ role: 'user', content: realLastUserMsg?.content || '请分析以上数据' });
+        cleanSynthesisHistory.push({ role: 'assistant', content: null,
+          tool_calls: executedToolsLog.map((tool, index) => ({ id: `synthesis_${index}`, type: 'function',
+            function: { name: tool.name, arguments: JSON.stringify(tool.args || {}) } })),
         });
+        executedToolsLog.forEach((tool, index) => cleanSynthesisHistory.push({ role: 'tool', tool_call_id: `synthesis_${index}`,
+          content: this.formatSafeToolResultString(tool.data, Number.MAX_SAFE_INTEGER) }));
+        cleanSynthesisHistory.push({ role: 'user', content: '请基于已获取的真实数据，直接给出当前任务的完整回答，保留关键事实与未完成事项。' });
 
         let synthesisResponse: Response | null = null;
         for (let attempt = 0; attempt <= 1; attempt++) {
@@ -2340,11 +2121,13 @@ ${safeToolDataContext}
           try {
             const synthBody = {
               model: modelId,
-              messages: cleanSynthesisHistory,
+              messages: pruneToolMessages(cleanSynthesisHistory, [], contextBudget),
               temperature: config.settings.temperature ?? 0.3,
-              max_tokens: config.settings.maxTokens || 4096,
+              max_tokens: contextBudget.maxOutputTokens,
               stream: true,
             };
+
+            assertContextFits(synthBody.messages, [], contextBudget);
 
             if (provider.id === 'workbuddy' && this.workbuddyService) {
               const streamNode = await this.workbuddyService.dispatchChat(synthBody, { signal: controller.signal });
@@ -2540,6 +2323,8 @@ ${safeToolDataContext}
     sendEvent: (event: AiStreamEvent) => void;
     projectPath?: string;
     sessionAllowedFiles?: string[];
+    compactionSummary?: AiChatSession['compactionSummary'];
+    contextBudget: ModelContextBudget;
   }): Promise<void> {
     const {
       requestId,
@@ -2558,6 +2343,8 @@ ${safeToolDataContext}
       sendEvent,
       projectPath,
       sessionAllowedFiles,
+      compactionSummary,
+      contextBudget,
     } = opts;
 
     const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
@@ -2566,6 +2353,10 @@ ${safeToolDataContext}
 
     // 1. 组装 Gemini contents (role: 'user' | 'model')
     const geminiContents: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
+    if (compactionSummary?.summary) {
+      geminiContents.push({ role: 'user', parts: [{ text: `<compacted-summary>\n${compactionSummary.summary}\n</compacted-summary>` }] },
+        { role: 'model', parts: [{ text: '已读取前序检查点，继续处理后续请求。' }] });
+    }
 
     for (const msg of recentMessages) {
       if (msg.role === 'user') {
@@ -2609,7 +2400,7 @@ ${safeToolDataContext}
               functionResponse: {
                 name: tc.name,
                 response: {
-                  result: this.formatSafeToolResultObject(tc.resultData || tc.resultSummary || {}),
+                  result: tc.resultData || tc.resultSummary || {},
                 },
               },
             });
@@ -2664,7 +2455,7 @@ ${safeToolDataContext}
         contents: geminiContents,
         generationConfig: {
           temperature: settings.temperature ?? 0.3,
-          maxOutputTokens: settings.maxTokens || 8192,
+          maxOutputTokens: contextBudget.maxOutputTokens,
         },
       };
 
@@ -2677,6 +2468,8 @@ ${safeToolDataContext}
       if (canUseTools && !isFinalSummaryTurn) {
         requestBody.tools = [{ functionDeclarations: geminiFunctionDeclarations }];
       }
+      requestBody.contents = pruneGeminiContents(geminiContents, requestBody.systemInstruction, requestBody.tools || [], contextBudget);
+      assertContextFits({ contents: requestBody.contents, systemInstruction: requestBody.systemInstruction }, requestBody.tools || [], contextBudget);
 
       const endpoint = `${cleanBaseUrl}/models/${cleanModelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
 
@@ -2847,7 +2640,7 @@ ${safeToolDataContext}
             functionResponse: {
               name: fc.name,
               response: {
-                result: this.formatSafeToolResultObject(toolResult),
+                result: toolResult,
               },
             },
           });
@@ -3018,7 +2811,7 @@ ${safeToolDataContext}
     // 检测是否为 HTML 网页报错
     if (errText.includes('<!DOCTYPE html>') || errText.includes('<html') || errText.includes('<head>')) {
       if (status === 524 || errText.includes('524: A timeout occurred') || errText.includes('Error code 524')) {
-        return '上游中转网关响应超时 (Cloudflare 524: A timeout occurred)。原因：大任务单轮上下文过长或上游大模型生成思考时间超过网关 100 秒超时限制。系统已自动为您精简历史工具上下文并恢复连接。';
+        return '上游中转网关等待模型响应超时 (HTTP 524)。这不代表上下文超限；请稍后重试或检查上游服务。';
       }
       if (status === 504 || errText.includes('504 Gateway Time-out')) {
         return '上游网关超时 (HTTP 504 Gateway Timeout)，上游推理集群未在规定时间内返回数据。';
@@ -3040,95 +2833,6 @@ ${safeToolDataContext}
     }
 
     return errText.slice(0, 300);
-  }
-
-  /**
-   * 动态滑动窗口与工具上下文修剪 (遵循 DSH @deepseek-ai/dsh-compaction-tool-result-pruner 规范)：
-   * 在多轮大任务执行中，保留最近 2 项工具调用的完整细节，
-   * 对更早的前序工具输出进行语法结构安全剪枝（避免破坏合法 JSON 或拆分字符串），彻底杜绝单次请求膨胀导致 HTTP 524 超时！
-   */
-  private pruneConversationHistory(messages: any[], aggressive = false): any[] {
-    if (!Array.isArray(messages) || messages.length === 0) return [];
-
-    let totalChars = 0;
-    for (const m of messages) {
-      if (typeof m.content === "string") totalChars += m.content.length;
-    }
-
-    // 若总字符数在 35,000 以内 (约 8k-10k tokens)，且非 524 触发的重试，无需裁剪
-    if (totalChars < 35000 && !aggressive) {
-      return messages;
-    }
-
-    const toolIndices: number[] = [];
-    messages.forEach((m, idx) => {
-      if (m.role === "tool") toolIndices.push(idx);
-    });
-
-    const hotCount = aggressive ? 1 : 2;
-    const hotCutoff = toolIndices.length > hotCount ? toolIndices[toolIndices.length - hotCount] : 0;
-
-    const coldCap = aggressive ? 600 : 1200;
-    const hotCap = aggressive ? 4000 : 10000;
-
-    return messages.map((m, idx) => {
-      if (m.role !== "tool" || typeof m.content !== "string") {
-        return m;
-      }
-
-      const isHot = idx >= hotCutoff;
-      const cap = isHot ? hotCap : coldCap;
-
-      if (m.content.length <= cap) {
-        return m;
-      }
-
-      let prunedContent = m.content;
-      try {
-        const parsed = JSON.parse(m.content);
-        if (parsed && typeof parsed === "object") {
-          if (Array.isArray(parsed)) {
-            const keepCount = isHot ? 10 : 3;
-            const slice = parsed.slice(0, keepCount);
-            prunedContent = JSON.stringify({
-              _dshPruned: true,
-              totalCount: parsed.length,
-              preview: slice,
-              hint: `[DSH Pruner] 已安全精简前序工具列表（共 ${parsed.length} 项，保留前 ${slice.length} 项）`,
-            });
-          } else {
-            const prunedObj: any = { ...parsed };
-            for (const k of Object.keys(prunedObj)) {
-              if (Array.isArray(prunedObj[k]) && prunedObj[k].length > 5) {
-                prunedObj[k] = prunedObj[k].slice(0, isHot ? 8 : 3);
-                prunedObj[`_${k}_truncated`] = `已截取前 ${prunedObj[k].length} 项，前序结果已自动精简`;
-              } else if (typeof prunedObj[k] === "string" && prunedObj[k].length > (isHot ? 2500 : 500)) {
-                prunedObj[k] = prunedObj[k].slice(0, isHot ? 2500 : 500) + "... [已剪枝]";
-              }
-            }
-            let resStr = JSON.stringify(prunedObj);
-            if (resStr.length > cap) {
-              resStr = JSON.stringify({
-                _dshPruned: true,
-                summary: prunedObj.summary || prunedObj.message || "前序工具执行数据",
-                preview: resStr.slice(0, cap - 180),
-              });
-            }
-            prunedContent = resStr;
-          }
-        }
-      } catch {
-        // Plain text (stdout / stderr / logs)
-        const headChars = Math.floor(cap * 0.7);
-        const tailChars = Math.floor(cap * 0.2);
-        prunedContent = `${m.content.slice(0, headChars)}\n\n[... tool result middle pruned by DSH (${m.content.length - headChars - tailChars} chars omitted) ...]\n\n${m.content.slice(-tailChars)}`;
-      }
-
-      return {
-        ...m,
-        content: prunedContent,
-      };
-    });
   }
 
   /**
@@ -3184,6 +2888,8 @@ ${safeToolDataContext}
       }
 
       if (typeof toolResult === "object" && toolResult !== null) {
+        const original = JSON.stringify(toolResult);
+        if (original.length <= maxChars) return original;
         const copy = { ...toolResult };
         if (typeof copy.stdout === "string" && copy.stdout.length > 6000) {
           const head = 4000;

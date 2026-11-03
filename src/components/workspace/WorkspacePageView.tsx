@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Activity, AlignLeft, ArrowDown, ArrowLeft, ArrowUp, BarChart3, Check, CheckCircle2, CircleAlert, ClipboardList, Clock3, Code2, Download, FileCode2, GripVertical, Info, LayoutDashboard, Mail, Pencil, Play, Plus, RefreshCw, Save, Send, Settings2, Trash2, Upload, X } from 'lucide-react';
+import { Activity, AlignLeft, ArrowDown, ArrowLeft, ArrowUp, BarChart3, Check, CheckCircle2, CircleAlert, ClipboardList, Clock3, Code2, Download, FileCode2, GripVertical, Info, LayoutDashboard, Mail, Maximize2, Minimize2, Pencil, Play, Plus, RefreshCw, Save, Send, Settings2, Trash2, Upload, X } from 'lucide-react';
 import type { FeishuWorkspaceSettings } from '../../../shared/feishuTypes';
 import type { WorkspaceProject } from '../../../shared/types';
 import type { WorkspaceDataSources, WorkspaceExecutionLog, WorkspacePage, WorkspaceWidget, WorkspaceWidgetColumnSpan, WorkspaceWidgetHeight, WorkspaceWidgetResult, WorkspaceWidgetType } from '../../../shared/workspaceTypes';
@@ -43,6 +43,24 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
   const [logWidgetId, setLogWidgetId] = useState<string | null>(null);
   const [draggingWidgetId, setDraggingWidgetId] = useState<string | null>(null);
   const [dropTargetWidgetId, setDropTargetWidgetId] = useState<string | null>(null);
+  const [fullscreenWidgetId, setFullscreenWidgetId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const syncFullscreen = () => setFullscreenWidgetId(document.fullscreenElement?.getAttribute('data-workspace-widget-id') || null);
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    syncFullscreen();
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+  }, []);
+
+  const toggleWidgetFullscreen = async (element: HTMLElement | null) => {
+    if (!element) return;
+    try {
+      if (document.fullscreenElement === element) await document.exitFullscreen();
+      else await element.requestFullscreen();
+    } catch {
+      showToast('error', '切换组件全屏失败，请重试');
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -216,7 +234,7 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
     }
   };
 
-  const renderWidgetResult = (widget: WorkspaceWidget, height: number) => {
+  const renderWidgetResult = (widget: WorkspaceWidget, height: number | string) => {
     if (widget.type === 'text') return <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{widget.text || '尚未填写说明内容'}</p>;
     const result = results[widget.id];
     if (widget.type === 'custom-html' || widget.type === 'custom-tsx') {
@@ -287,9 +305,10 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
         {page.widgets.map((widget, widgetIndex) => {
           const Icon = widgetIcon(widget.type);
           const subscription = widget.subscription || defaultSubscription();
-          const height = getWidgetHeight(widget);
-          return <article key={widget.id} onDragOver={(event) => { if (editing && draggingWidgetId && draggingWidgetId !== widget.id) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTargetWidgetId(widget.id); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetWidgetId(null); }} onDrop={(event) => handleWidgetDrop(event, widget.id)} className={`min-w-0 overflow-hidden rounded border bg-white transition-colors ${widgetColumnClasses[getWidgetColumnSpan(widget)]} ${dropTargetWidgetId === widget.id ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200'}`}>
-            <div className="flex min-h-11 items-center gap-2 border-b border-slate-100 px-3">
+          const isFullscreen = fullscreenWidgetId === widget.id;
+          const height = isFullscreen ? '100%' : getWidgetHeight(widget);
+          return <article key={widget.id} data-workspace-widget-id={widget.id} onDragOver={(event) => { if (editing && draggingWidgetId && draggingWidgetId !== widget.id) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTargetWidgetId(widget.id); } }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetWidgetId(null); }} onDrop={(event) => handleWidgetDrop(event, widget.id)} className={`min-w-0 overflow-hidden bg-white transition-colors ${isFullscreen ? 'flex h-full w-full flex-col' : `rounded border ${widgetColumnClasses[getWidgetColumnSpan(widget)]} ${dropTargetWidgetId === widget.id ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200'}`}`}>
+            <div className="flex min-h-11 shrink-0 items-center gap-2 border-b border-slate-100 px-3">
               {editing && <>
                 <button draggable={page.widgets.length > 1} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', widget.id); setDraggingWidgetId(widget.id); }} onDragEnd={() => { setDraggingWidgetId(null); setDropTargetWidgetId(null); }} title="拖动调整位置" aria-label={`拖动${widget.title}调整位置`} className={`rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 ${draggingWidgetId === widget.id ? 'cursor-grabbing opacity-50' : 'cursor-grab'}`}><GripVertical size={16}/></button>
                 <button disabled={widgetIndex === 0} onClick={() => moveWidgetBy(widget.id, -1)} title="上移组件" aria-label="上移组件" className="rounded p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-30"><ArrowUp size={14}/></button>
@@ -298,33 +317,36 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
               <Icon size={15} className="shrink-0 text-slate-500"/><h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{widget.title}</h2>
               {subscription.enabled && <span title={`订阅：${intervalLabel(subscription.intervalMinutes)}`} className="inline-flex items-center gap-1 text-[10px] text-slate-500"><Clock3 size={12}/>{intervalLabel(subscription.intervalMinutes)}</span>}
               {subscription.feishuEnabled && <span title="启用飞书推送" className="text-sky-700"><Send size={13}/></span>}
+              <button onClick={(event) => void toggleWidgetFullscreen(event.currentTarget.closest<HTMLElement>('[data-workspace-widget-id]'))} title={isFullscreen ? '退出全屏（Esc）' : '全屏展示组件'} aria-label={isFullscreen ? '退出组件全屏' : `全屏展示${widget.title}`} aria-pressed={isFullscreen} className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-sky-700">{isFullscreen ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
               <button onClick={() => setLogWidgetId(widget.id)} title="查看组件执行日志" className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-sky-700"><ClipboardList size={16}/></button>
               <button onClick={() => setSettingWidgetId(widget.id)} title="组件设置：数据源、订阅与飞书" className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"><Settings2 size={16}/></button>
               {editing && <button onClick={() => setPage({ ...page, widgets: page.widgets.filter((item) => item.id !== widget.id) })} title="移除组件" className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"><X size={15}/></button>}
             </div>
-            {widget.type === 'async-apex-dashboard' ? widget.accountId ? <div style={{ height }} className="min-h-0"><AsyncApexJobBIDashboard accountId={widget.accountId}/></div> : <div style={{ height }} className="flex items-center justify-center p-6 text-center text-sm text-slate-500">请在组件设置中绑定 Salesforce 账号。</div> : widget.type === 'text' ? <div style={{ height }} className="overflow-auto p-5">{renderWidgetResult(widget, height)}</div> : widget.type === 'custom-html' || widget.type === 'custom-tsx' ? renderWidgetResult(widget, height) : <div style={{ height }} className="min-h-0 overflow-auto">{renderWidgetResult(widget, height)}</div>}
+            <div className={isFullscreen ? 'min-h-0 flex-1 overflow-auto' : undefined}>
+              {widget.type === 'async-apex-dashboard' ? widget.accountId ? <div style={{ height }} className="min-h-0"><AsyncApexJobBIDashboard accountId={widget.accountId}/></div> : <div style={{ height }} className="flex items-center justify-center p-6 text-center text-sm text-slate-500">请在组件设置中绑定 Salesforce 账号。</div> : widget.type === 'text' ? <div style={{ height }} className="overflow-auto p-5">{renderWidgetResult(widget, height)}</div> : widget.type === 'custom-html' || widget.type === 'custom-tsx' ? renderWidgetResult(widget, height) : <div style={{ height }} className="min-h-0 overflow-auto">{renderWidgetResult(widget, height)}</div>}
+            </div>
+            {settingWidgetId === widget.id && <WidgetSettingsModal
+              key={settingWidgetId}
+              widget={widget}
+              sources={sources}
+              projectPath={activeProject?.localPath}
+              busy={busy}
+              onClose={() => setSettingWidgetId(null)}
+              onSave={(nextWidget) => void saveWidgetSettings(nextWidget)}
+              showToast={showToast}
+            />}
+            {logWidgetId === widget.id && <ExecutionLogsModal
+              pageId={page.id}
+              widget={widget}
+              onClose={() => setLogWidgetId(null)}
+              showToast={showToast}
+            />}
           </article>;
         })}
         {page.widgets.length === 0 && <div className="flex min-h-56 flex-col items-center justify-center rounded border border-dashed border-slate-300 bg-white text-sm text-slate-500 sm:col-span-2 xl:col-span-4"><Plus size={20} className="mb-2"/>{editing ? '使用上方工具栏添加组件' : '此页面暂无组件'}{!editing && <button onClick={() => setEditing(true)} className="mt-3 text-xs font-medium text-sky-700 hover:underline">编辑页面</button>}</div>}
       </div>
     </main>
 
-    {settingWidgetId && page.widgets.find((widget) => widget.id === settingWidgetId) && <WidgetSettingsModal
-      key={settingWidgetId}
-      widget={page.widgets.find((widget) => widget.id === settingWidgetId)!}
-      sources={sources}
-      projectPath={activeProject?.localPath}
-      busy={busy}
-      onClose={() => setSettingWidgetId(null)}
-      onSave={(widget) => void saveWidgetSettings(widget)}
-      showToast={showToast}
-    />}
-    {logWidgetId && page.widgets.find((widget) => widget.id === logWidgetId) && <ExecutionLogsModal
-      pageId={page.id}
-      widget={page.widgets.find((widget) => widget.id === logWidgetId)!}
-      onClose={() => setLogWidgetId(null)}
-      showToast={showToast}
-    />}
   </div>;
 };
 
@@ -339,7 +361,7 @@ const PageThumbnail: React.FC<{ page: WorkspacePage }> = ({ page }) => {
   </div>;
 };
 
-const CustomWidgetFrame: React.FC<{ title: string; content: string; pageId: string; widgetId: string; executionId: string; accountId?: string; height: number }> = ({ title, content, pageId, widgetId, executionId, accountId, height }) => {
+const CustomWidgetFrame: React.FC<{ title: string; content: string; pageId: string; widgetId: string; executionId: string; accountId?: string; height: number | string }> = ({ title, content, pageId, widgetId, executionId, accountId, height }) => {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const frameStartedAt = useRef(Date.now());
   const frameLoadLogged = useRef(false);

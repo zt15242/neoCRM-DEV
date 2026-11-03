@@ -282,12 +282,12 @@ export class WorkBuddyService {
           typeof item === 'object' ? item.maxInputTokens : undefined,
           typeof item === 'object' ? item.inputTokenLimit : undefined,
           typeof item === 'object' ? item.contextLength : undefined,
-        ) || 65536,
+        ),
         maxOutputTokens: this.numberValue(
           typeof item === 'object' ? item.maxOutputTokens : undefined,
           typeof item === 'object' ? item.max_output_tokens : undefined,
           typeof item === 'object' ? item.outputTokenLimit : undefined,
-        ) || 8192,
+        ),
       });
     }
     return models;

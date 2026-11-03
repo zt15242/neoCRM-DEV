@@ -223,16 +223,9 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
 
           <div>
             <label className="block text-slate-600 font-medium mb-1">
-              携带历史消息轮数上限
+              历史上下文管理
             </label>
-            <input
-              type="number"
-              min={2}
-              max={100}
-              value={form.contextLimit}
-              onChange={(e) => setForm({ ...form, contextLimit: Number(e.target.value) || 20 })}
-              className="w-full px-3 py-1.5 rounded-xl border border-slate-200 font-mono"
-            />
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500">按当前模型上下文容量自动管理，预留输出后在输入预算达到 85% 时整理历史。容量可在模型供应商设置中调整。</div>
           </div>
         </div>
       </div>

@@ -1,12 +1,13 @@
 import { restrictedFeatureService } from './security/restrictedFeatureService';
 import { parseAccessCommand, type AccessCommand } from '../shared/restrictedFeatures';
 import { requiresFlowLicense } from '../shared/licensePolicy';
+import { configureAppPermissions } from './security/appPermissions';
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, desktopCapturer } from 'electron';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EnvService } from './services/envService';
 import { SessionStore } from './services/sessionStore';
 import { AuthService } from './services/authService';
@@ -168,14 +169,9 @@ function createWindow() {
     { useSystemPicker: process.platform === 'darwin' },
   );
 
-  // 仅放行本应用所需的麦克风和屏幕/系统声音采集权限，不放行其他权限。
-  const mediaPermissions = new Set(['media', 'display-capture']);
-  win.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
-    return mediaPermissions.has(permission);
-  });
-  win.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(mediaPermissions.has(permission));
-  });
+  // Fullscreen belongs to the app's main document; sandboxed components keep their existing permissions.
+  configureAppPermissions(win.webContents, process.env.VITE_DEV_SERVER_URL
+    || pathToFileURL(path.join(currentDir, '../dist/index.html')).href);
 
   win.once('ready-to-show', () => {
     win?.show();

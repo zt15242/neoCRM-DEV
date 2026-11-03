@@ -243,7 +243,7 @@ export interface AiModelItem {
   name: string;
   reasoning?: boolean; // 是否具备深度推理/思考模式（如 DeepSeek-R1 / o1 / o3）
   tools?: boolean; // 是否支持 Function / Tool Calling
-  contextWindow?: number;
+  contextWindow?: number; // 模型上下文容量（tokens）；未提供时使用明确标示的保守预算
   maxOutputTokens?: number;
 }
 
@@ -267,7 +267,7 @@ export interface AiHarnessSettings {
   defaultModelId: string;
   temperature: number;
   maxTokens: number;
-  contextLimit: number; // 携带的历史轮数
+  contextLimit: number; // 兼容旧设置；上下文携带与压缩现按当前模型 token 预算决定
   stream: boolean;
   enableCrmTools: boolean; // 是否允许 AI 自动调用销售易本地工具 (Agent Loop)
   enableSqlTool: boolean; // 是否允许 AI 执行只读 SQL

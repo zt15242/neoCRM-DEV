@@ -132,7 +132,7 @@ try {
 
   const ai = new AiService(store, {}, {});
   const fixtureConfig = { providers: [{ id: 'fixture', name: 'Fixture', baseUrl: 'http://127.0.0.1:1', apiKey: 'fixture-key',
-    protocol: 'openai', models: [{ id: 'fixture', tools: true }] }],
+    protocol: 'openai', models: [{ id: 'fixture', tools: true, contextWindow: 128000, maxOutputTokens: 8192 }] }],
     settings: { enableCrmTools: true, injectTenantContext: false, maxTokens: 512, contextMessageLimit: 10 }, mcpServers: [], skills: [] };
   ai.getAiConfig = () => fixtureConfig;
   const requests = [];

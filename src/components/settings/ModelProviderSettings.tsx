@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AiProviderConfig, AiModelItem } from '../../../shared/types';
 import { CustomProviderModal } from './CustomProviderModal';
+import { ModelContextSettings } from './ModelContextSettings';
 import { WorkBuddyAuthModal } from './WorkBuddyAuthModal';
 import { 
   Bot, 
@@ -26,6 +27,14 @@ import {
   RefreshCw,
   Coins
 } from 'lucide-react';
+
+function preserveConfiguredModelLimits(models: AiModelItem[], configured: AiModelItem[] = []): AiModelItem[] {
+  return models.map((model) => {
+    const previous = configured.find((item) => item.id === model.id);
+    return { ...model, contextWindow: model.contextWindow ?? previous?.contextWindow,
+      maxOutputTokens: model.maxOutputTokens ?? previous?.maxOutputTokens };
+  });
+}
 
 interface ModelProviderSettingsProps {
   providers: AiProviderConfig[];
@@ -78,9 +87,9 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         }
         if (Array.isArray(res.models) && res.models.length > 0) {
           const currentProvider = providers.find((provider) => provider.id === 'workbuddy');
-          const currentIds = (currentProvider?.models || []).map((model) => model.id).join('|');
-          const liveIds = res.models.map((model: AiModelItem) => model.id).join('|');
-          if (currentProvider && currentIds !== liveIds) {
+          res.models = preserveConfiguredModelLimits(res.models, currentProvider?.models);
+          const limits = (models: AiModelItem[]) => JSON.stringify(models.map(({ id, contextWindow, maxOutputTokens }) => ({ id, contextWindow, maxOutputTokens })));
+          if (currentProvider && limits(currentProvider.models) !== limits(res.models)) {
             await onSaveProvider({ ...currentProvider, models: res.models });
           }
         }
@@ -187,6 +196,8 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
           <span>添加自定义模型 API</span>
         </button>
       </div>
+
+      <ModelContextSettings providers={providers} onSave={onSaveProvider} showToast={showToast} />
 
       {/* 1. DeepSeek 官方卡片 (推荐) */}
       <div className="rounded-2xl border-2 border-sky-300 dark:border-sky-500/40 bg-gradient-to-br from-sky-50/60 via-white to-blue-50/40 dark:from-slate-900/90 dark:via-slate-900/80 dark:to-slate-900/90 p-5 shadow-xs relative overflow-hidden">

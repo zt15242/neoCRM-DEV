@@ -20,6 +20,7 @@ import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI
 import { AiSidebar } from './AiSidebar';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
+import { mergeSavedChatSessions } from './chatSessionState';
 import { MessageTurnNavigator } from './MessageTurnNavigator';
 import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
@@ -194,15 +195,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   }, [propSessions]);
 
   const setSessions = (updater: AiChatSession[] | ((prev: AiChatSession[]) => AiChatSession[])) => {
-    setSessionsState((prev) => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      sessionsRef.current = next;
-      propOnSessionsChange?.(next);
-      return next;
-    });
+    const next = typeof updater === 'function' ? updater(sessionsRef.current) : updater;
+    sessionsRef.current = next;
+    setSessionsState(next);
+    propOnSessionsChange?.(next);
   };
 
   const [activeSessionId, setActiveSessionIdState] = useState<string | null>(propActiveSessionId || null);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = propActiveSessionId !== undefined ? propActiveSessionId : activeSessionId;
 
   useEffect(() => {
     if (propActiveSessionId !== undefined && propActiveSessionId !== activeSessionId) {
@@ -211,6 +212,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   }, [propActiveSessionId]);
 
   const setActiveSessionId = (id: string | null) => {
+    activeSessionIdRef.current = id;
     setActiveSessionIdState(id);
     propOnSelectSession?.(id);
   };
@@ -290,14 +292,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [quickApiKey, setQuickApiKey] = useState<string>('');
   const [savingQuickKey, setSavingQuickKey] = useState<boolean>(false);
 
-  // 全局单任务流式状态：按 sessionId 记录当前运行任务及停止状态
+  // 每个会话独立维护流式状态和启动锁，后台任务不占用其他会话的输入框。
   const [activeStreams, setActiveStreams] = useState<Record<string, { requestId: string; messageId: string; stopping?: boolean }>>({});
   const activeStreamsRef = useRef<Record<string, { requestId: string; messageId: string; stopping?: boolean }>>({});
-  const startingStreamRef = useRef(false);
+  const startingStreamsRef = useRef(new Set<string>());
   activeStreamsRef.current = activeStreams;
   const currentSessionStream = activeSessionId ? activeStreams[activeSessionId] : null;
   const isCurrentSessionStreaming = Boolean(currentSessionStream);
-  const anyActiveStream = Object.values(activeStreams)[0] || null;
   const streamingMessageId = currentSessionStream?.messageId || null;
   const reasoningStartTimesRef = useRef<Record<string, number>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -460,7 +461,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             };
           });
         });
-        showToast('info', `🗜️ 历史上下文已自动提炼 Checkpoint (浓缩前 ${compactionSummary.originalMessageCount} 轮对话)`);
+        showToast('info', `🗜️ 历史上下文已自动提炼 Checkpoint (浓缩前 ${compactionSummary.originalMessageCount} 条历史消息)`);
         return;
       }
 
@@ -570,9 +571,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     try {
       if (window.neoApi?.aiCompactSession) {
         const compacted = await window.neoApi.aiCompactSession(activeSession.id);
-        if (compacted) {
-          setSessions((prev) => prev.map((s) => (s.id === compacted.id ? compacted : s)));
-          showToast('success', `上下文压缩成功！已浓缩前 ${compacted.compactionSummary?.originalMessageCount} 轮对话，释放大量 Token。`);
+        const summary = compacted?.compactionSummary;
+        if (summary && summary.originalMessageCount > (activeSession.compactionSummary?.originalMessageCount || 0)) {
+          setSessions((prev) => prev.map((session) => session.id === compacted.id
+            ? { ...session, compactionSummary: summary, updatedAt: compacted.updatedAt } : session));
+          showToast('success', `上下文摘要已更新，覆盖前 ${summary.originalMessageCount} 条历史消息。`);
+        } else {
+          showToast('info', '没有需要进一步压缩的历史消息，当前内容已保留。');
         }
       }
     } catch (e: any) {
@@ -643,11 +648,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   ) => {
     if (await consumeAccessCommand(text)) return;
     if (!isRoleVisible(selectedPresetId)) return;
-    if (startingStreamRef.current || Object.keys(activeStreamsRef.current).length > 0) {
-      showToast('info', '已有对话正在运行，请等待完成或先停止当前回复。');
+    const sendKey = activeSessionId || 'draft';
+    if (startingStreamsRef.current.has(sendKey) || (activeSessionId && activeStreamsRef.current[activeSessionId])) {
+      showToast('info', '当前对话仍在运行，请先停止当前回复，或切换到其他对话继续。');
       return;
     }
-    startingStreamRef.current = true;
+    startingStreamsRef.current.add(sendKey);
 
     let targetSession = activeSessionId ? sessionsRef.current.find((s) => s.id === activeSessionId) || null : null;
     const preset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
@@ -661,13 +667,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           ? await window.neoApi.workflowGetLicenseStatus()
           : workflowLicenseStatus;
       } catch (e: any) {
-        startingStreamRef.current = false;
+        startingStreamsRef.current.delete(sendKey);
         showToast('error', `读取功能授权状态失败: ${e?.message || '未知错误'}`);
         return;
       }
       if (latestLic) setWorkflowLicenseStatus(latestLic);
       if (!latestLic?.isAuthorized) {
-        startingStreamRef.current = false;
+        startingStreamsRef.current.delete(sendKey);
         setIsLicenseModalOpen(true);
         const pId = preset.id as string;
         const featureName = pId === "neobi-architect" ? "BI分析部署大师" : "流程引擎";
@@ -741,12 +747,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     try {
       savedList = await window.neoApi.aiSaveSession(updatedSession);
     } catch (e: any) {
-      startingStreamRef.current = false;
+      startingStreamsRef.current.delete(sendKey);
       showToast('error', `保存对话失败: ${e?.message || '未知错误'}`);
       return;
     }
-    setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
-    setActiveSessionId(updatedSession.id);
+    setSessions((prev) => mergeSavedChatSessions(
+      savedList.filter((s) => s.messages && s.messages.length > 0), prev, activeStreamsRef.current, updatedSession.id
+    ));
+    if (activeSessionIdRef.current === activeSessionId) setActiveSessionId(updatedSession.id);
 
     const requestId = `req_${Date.now()}_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10)}`;
     setActiveStreams((prev) => ({
@@ -757,7 +765,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       ...activeStreamsRef.current,
       [updatedSession.id]: { requestId, messageId: assistantMsgId },
     };
-    startingStreamRef.current = false;
+    startingStreamsRef.current.delete(sendKey);
     delete reasoningStartTimesRef.current[updatedSession.id];
 
     const effectiveMcpIds = mcpIds !== undefined ? mcpIds : activeMcpServerIds;
@@ -800,42 +808,31 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     }
   };
 
-  // 停止生成 (即时强制响应，杜绝挂起)
+  // 立即释放当前会话，再取消对应后台请求；其他会话继续运行。
   const handleStopStream = async (targetSessionId?: unknown) => {
-    // 关键防坑：处理 React onClick 传入的 SyntheticEvent，严禁将事件对象误认作 sessionId！
     const safeSessionId = typeof targetSessionId === "string" && targetSessionId.trim()
       ? targetSessionId.trim()
-      : (activeSessionId || Object.keys(activeStreamsRef.current)[0] || "");
+      : activeSessionId;
 
     const stream = safeSessionId ? activeStreamsRef.current[safeSessionId] : null;
-    const reqId = stream?.requestId || "";
+    if (!safeSessionId || !stream) return;
 
-    // 1. 立即下发后台中止指令 (向后台传递 requestId 与 sessionId，无参数时全杀)
-    try {
-      if (window.neoApi?.aiAbortChatStream) {
-        await window.neoApi.aiAbortChatStream(reqId || safeSessionId);
-      }
-    } catch {}
-
-    // 2. 彻底释放前端所有活动流状态与计时器，让按钮和输入框在 0 毫秒内回到待命状态
+    const remaining = { ...activeStreamsRef.current };
+    delete remaining[safeSessionId];
+    activeStreamsRef.current = remaining;
     setActiveStreams((prev) => {
-      if (!safeSessionId) {
-        activeStreamsRef.current = {};
-        return {};
-      }
+      if (prev[safeSessionId]?.requestId !== stream.requestId) return prev;
       const next = { ...prev };
       delete next[safeSessionId];
-      activeStreamsRef.current = next;
       return next;
     });
-    if (safeSessionId) delete reasoningStartTimesRef.current[safeSessionId];
+    delete reasoningStartTimesRef.current[safeSessionId];
 
-    // 3. 立即重置所有 running 状态的工具调用，消除“智能体正在自主调用工具...”与“正在继续生成回答...”转圈状态
     setSessions((prevSessions) => {
       const updated = prevSessions.map((sess) => {
-        if (safeSessionId && sess.id !== safeSessionId) return sess;
+        if (sess.id !== safeSessionId) return sess;
         const updatedMsgs = (sess.messages || []).map((msg) => {
-          if (msg.role !== "assistant") return msg;
+          if (msg.id !== stream.messageId) return msg;
           const hasRunning = msg.toolCalls?.some((t) => t.status === "running");
           if (!hasRunning) return msg;
           return {
@@ -859,6 +856,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     });
 
     showToast("info", "已停止生成");
+    try {
+      await window.neoApi?.aiAbortChatStream(stream.requestId);
+    } catch {}
   };
 
   // 导出当前会话为 Markdown
@@ -1220,7 +1220,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     <div className="flex items-center space-x-2">
                       <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
                       <span>
-                        🗜️ 历史上下文已智能压缩 (已浓缩前 {activeSession.compactionSummary.originalMessageCount} 轮对话)
+                        🗜️ 历史上下文已智能压缩 (已浓缩前 {activeSession.compactionSummary.originalMessageCount} 条历史消息)
                       </span>
                     </div>
                     <span className="text-[11px] text-indigo-500 font-normal">
@@ -1276,8 +1276,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             <AiInputComposer
               isCrmLoggedIn={crmSession.isLoggedIn}
               crmSessionKey={`${crmSession.environment?.id || ''}:${crmSession.activeAccountId || ''}:${crmSession.tokenData?.tenant_id || ''}`}
-              isStreaming={Boolean(anyActiveStream)}
-              isStopping={Boolean(anyActiveStream?.stopping)}
+              isStreaming={isCurrentSessionStreaming}
+              isStopping={Boolean(currentSessionStream?.stopping)}
               onSend={handleSendMessage}
               onStop={handleStopStream}
               entityRefs={entityRefs}

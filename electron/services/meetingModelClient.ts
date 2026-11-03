@@ -91,8 +91,11 @@ export async function readMeetingModelStream(stream: AsyncIterable<Uint8Array | 
 export async function requestMeetingModelText(
   provider: AiProviderConfig, modelId: string, system: string, input: string, maxTokens: number,
   workbuddy?: { getAccount: () => any; dispatchChat: (body: any, options: { signal: AbortSignal }) => Promise<AsyncIterable<Uint8Array | string>> },
+  requestSignal?: AbortSignal,
+  timeoutMs = 180000,
 ): Promise<string> {
-  const signal = AbortSignal.timeout(180000);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = requestSignal ? AbortSignal.any([requestSignal, timeoutSignal]) : timeoutSignal;
   const model = provider.models?.find(m => m.id === modelId);
   const budget = Math.min(maxTokens, model?.maxOutputTokens || maxTokens);
   const messages = [{ role: 'system', content: system }, { role: 'user', content: input }];
@@ -125,7 +128,7 @@ export async function requestMeetingModelText(
   let data: any;
   for (const [index, endpoint] of endpoints.entries()) {
     try {
-      ({ data } = await axios.post(endpoint, body, { headers, timeout: 180000, signal }));
+      ({ data } = await axios.post(endpoint, body, { headers, timeout: timeoutMs, signal }));
       break;
     } catch (error: any) {
       // A missing model, auth error or server failure will not be fixed by changing the route.
