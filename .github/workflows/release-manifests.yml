@@ -1,0 +1,49 @@
+name: Verify and repair release update manifests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-manifests.yml
+      - scripts/normalize-release-manifests.mjs
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing release tag (empty uses package.json version)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-manifests
+  cancel-in-progress: false
+
+jobs:
+  verify-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Repair manifest filenames against published assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          tag="$REQUESTED_TAG"
+          if [ -z "$tag" ]; then
+            tag="v$(node -p "require('./package.json').version")"
+          fi
+          mkdir -p release-manifests
+          gh api "repos/$GH_REPO/releases/tags/$tag" > release-manifests/release.json
+          gh release download "$tag" --pattern 'latest*.yml' --dir release-manifests
+          node scripts/normalize-release-manifests.mjs release-manifests release-manifests/release.json
+          gh release upload "$tag" release-manifests/latest-mac.yml release-manifests/latest.yml --clobber
+          mkdir -p verified-manifests
+          gh release download "$tag" --pattern 'latest*.yml' --dir verified-manifests
+          cmp release-manifests/latest-mac.yml verified-manifests/latest-mac.yml
+          cmp release-manifests/latest.yml verified-manifests/latest.yml

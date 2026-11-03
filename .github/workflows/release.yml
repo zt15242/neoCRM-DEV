@@ -106,6 +106,7 @@ jobs:
         run: |
           mkdir -p release-assets
           find downloaded-artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "latest*.yml" \) -exec cp {} release-assets/ \;
+          node scripts/normalize-release-manifests.mjs release-assets
           ls -la release-assets
 
       - name: Prepare Release Notes
