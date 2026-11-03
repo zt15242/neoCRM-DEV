@@ -98,28 +98,101 @@ try {
 
   // Verify each configured protocol against a local HTTP fixture, without contacting any model provider.
   const requests = [];
+  let respond;
   const server = http.createServer(async (req, res) => {
     let body = ''; for await (const part of req) body += part;
     requests.push({ url: req.url, body: JSON.parse(body), headers: req.headers });
     res.setHeader('content-type', 'application/json');
-    const response = req.url.endsWith('/messages') ? { content: [{ type: 'text', text: '消息协议' }] }
-      : req.url.endsWith('/responses') ? { output: [{ content: [{ type: 'output_text', text: '响应协议' }] }] }
+    if (respond) return respond(req, res);
+    const pathname = new URL(req.url, 'http://localhost').pathname;
+    const response = pathname.endsWith('/messages') ? { content: [{ type: 'text', text: '消息协议' }] }
+      : pathname.endsWith('/responses') ? { output: [{ content: [{ type: 'output_text', text: '响应协议' }] }] }
       : req.url.includes('generateContent') ? { candidates: [{ content: { parts: [{ text: '原生协议' }] } }] }
       : { choices: [{ message: { content: '补全协议' } }] };
     res.end(JSON.stringify(response));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const custom = { ...provider, id: 'custom', name: '本地回归网关', apiKey: 'test-secret-key', baseUrl: origin };
+    const call = config => requestMeetingModelText({ ...custom, ...config }, 'model-a', '内部规则', '完整会议-private-transcript', 12000);
     for (const [protocol, expected, route] of [
       ['openai-completions', '补全协议', '/v1/chat/completions'],
       ['openai-responses', '响应协议', '/v1/responses'],
       ['anthropic-messages', '消息协议', '/v1/messages'],
-      ['google-gemini', '原生协议', '/v1/models/model-a:generateContent'],
+      ['google-gemini', '原生协议', '/v1beta/models/model-a:generateContent'],
     ]) {
-      const actual = await requestMeetingModelText({ ...provider, id: 'custom', apiKey: 'test-only', baseUrl: `http://127.0.0.1:${server.address().port}`, protocol }, 'model-a', '规则', '完整会议', 12000);
-      assert.equal(actual, expected);
-      assert.equal(requests.at(-1).url, route);
+      for (const [basePath, expectedRoute] of [
+        ['', route], [route, route], [`${route}/`, route],
+        [`/gateway${route}`, `/gateway${route}`],
+      ]) {
+        const before = requests.length;
+        assert.equal(await call({ baseUrl: origin + basePath, protocol }), expected);
+        assert.equal(requests.at(-1).url, expectedRoute);
+        assert.equal(requests.length - before, 1, 'complete endpoints must not be duplicated or probed');
+        if (protocol === 'google-gemini') {
+          assert.equal(requests.at(-1).headers['x-goog-api-key'], custom.apiKey);
+          assert.equal(requests.at(-1).body.contents[0].parts[0].text, '完整会议-private-transcript');
+        } else {
+          assert.equal(requests.at(-1).body.model, 'model-a');
+        }
+      }
     }
+    for (const [basePath, protocol, expectedRoute] of [
+      ['/chat/completions', 'openai-completions', '/chat/completions'],
+      ['/responses', 'openai-responses', '/responses'],
+      ['/messages', 'anthropic-messages', '/messages'],
+      ['/gateway', 'openai-completions', '/gateway/chat/completions'],
+      ['/api/paas/v4', 'openai-completions', '/api/paas/v4/chat/completions'],
+      ['/compatible-mode/v1', 'openai-completions', '/compatible-mode/v1/chat/completions'],
+      ['/v1beta/openai', 'google-gemini', '/v1beta/openai/chat/completions'],
+      ['/v1beta/openai/chat/completions', 'google-gemini', '/v1beta/openai/chat/completions'],
+      ['/v1beta/models/previous-model:generateContent', 'google-gemini', '/v1beta/models/model-a:generateContent'],
+    ]) {
+      await call({ baseUrl: origin + basePath, protocol });
+      assert.equal(requests.at(-1).url, expectedRoute);
+    }
+    await call({ baseUrl: `${origin}/v1/chat/completions?access_token=query-secret#ignored` });
+    assert.equal(requests.at(-1).url, '/v1/chat/completions?access_token=query-secret');
+
+    // Retry only the alternate route convention on the same gateway after a route 404.
+    for (const [prefix, routes] of [
+      ['', ['/v1/chat/completions', '/chat/completions']],
+      ['/gateway', ['/gateway/chat/completions', '/gateway/v1/chat/completions']],
+    ]) {
+      respond = (req, res) => {
+        if (req.url === routes[0]) { res.statusCode = 404; return res.end('<html>Cannot POST</html>'); }
+        res.end(JSON.stringify({ choices: [{ message: { content: '路由兼容成功' } }] }));
+      };
+      const before = requests.length;
+      assert.equal(await call({ baseUrl: origin + prefix }), '路由兼容成功');
+      assert.deepEqual(requests.slice(before).map(r => r.url), routes);
+      assert.ok(requests.slice(before).every(r => r.body.model === 'model-a'));
+    }
+    for (const status of [401, 403, 429, 500, 504]) {
+      respond = (req, res) => { res.statusCode = status; res.end(JSON.stringify({ error: { message: 'upstream failure' } })); };
+      const before = requests.length;
+      await assert.rejects(() => call({}), new RegExp(`HTTP ${status}`));
+      assert.equal(requests.length - before, 1, `${status} must not change routes`);
+    }
+    respond = (req, res) => { res.statusCode = 404; res.end(JSON.stringify({ error: { code: 'model_not_found', message: '模型不存在' } })); };
+    const beforeModel404 = requests.length;
+    await assert.rejects(() => call({}), error => {
+      for (const expected of ['HTTP 404', '模型不存在', custom.name, 'model-a', '/v1/chat/completions']) assert.ok(error.message.includes(expected));
+      return true;
+    });
+    assert.equal(requests.length - beforeModel404, 1, 'model 404 must not change routes');
+
+    respond = (req, res) => { res.statusCode = 404; res.end('<html>test-secret-key query-secret private-transcript</html>'); };
+    const beforeExplicit404 = requests.length;
+    await assert.rejects(() => call({ baseUrl: `${origin}/chat/completions?access_token=query-secret` }), error => {
+      assert.match(error.message, /HTTP 404/);
+      assert.ok(error.message.includes(`${origin}/chat/completions`));
+      for (const secret of ['test-secret-key', 'query-secret', 'access_token', 'private-transcript', '<html>']) assert.ok(!error.message.includes(secret));
+      return true;
+    });
+    assert.equal(requests.length - beforeExplicit404, 1, 'explicit endpoint 404 must not guess routes');
+    await assert.rejects(() => call({ baseUrl: 'file:///tmp/test' }), /HTTP/);
   } finally { await new Promise(resolve => server.close(resolve)); }
 
   // Exercise real persistence: failed reanalysis must not replace an existing summary or leave status stuck.
@@ -161,7 +234,7 @@ try {
   assert.equal(completed.summary.actionItems[0].completed, true);
   assert.deepEqual(completed.charts.sentimentTrajectory, []);
   assert.equal(completed.charts.milestoneGantt, undefined);
-  console.log('会议纪要测试通过：579 段全文覆盖、超长单段、失败保留、JSON 校验、完整复制文档、实际文件保存/取消/失败、WorkBuddy SSE 与四种模型协议。');
+  console.log('会议纪要测试通过：579 段全文覆盖、超长单段、失败保留、JSON 校验、完整复制文档、实际文件保存/取消/失败、WorkBuddy SSE、四种模型协议、网关路径兼容、404 分类和错误脱敏。');
 } finally {
   await fs.rm(temporary, { recursive: true, force: true });
 }
