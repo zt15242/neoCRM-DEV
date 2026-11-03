@@ -1,3 +1,4 @@
+import { useRestrictedFeatures } from '../../security/RestrictedFeatures';
 import React, { useState, useEffect } from 'react';
 import { 
   AiProviderConfig, 
@@ -128,6 +129,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   onCheckUpdate,
   showToast,
 }) => {
+  const { visible: privateFeaturesVisible } = useRestrictedFeatures();
   const [activeSubTab, setActiveSubTab] = useState<SettingsSubTab>(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [providers, setProviders] = useState<AiProviderConfig[]>(BUILTIN_AI_PROVIDERS);
@@ -185,7 +187,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     if (isOpen) {
       loadConfig();
     }
-  }, [isOpen]);
+  }, [isOpen, privateFeaturesVisible]);
 
   if (!isOpen) return null;
 

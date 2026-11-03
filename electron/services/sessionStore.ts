@@ -6,8 +6,111 @@ import { app } from 'electron';
 import { AccountRecord, CliSyncResult, NeoEnvironment, SalesforceCliSyncResult, SessionState, TokenData } from '../types';
 import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
 import { resolveSalesforceAlias } from './salesforceService';
+import { deleteNeoCliAuth, ensureNeoCliProject, getNeoCliAuthLocation, readNeoCliAuth, syncSessionToNeoCli, toDesktopSession, NeoCliAuth } from './neocrmCliSession';
 
 export class SessionStore {
+  private neoCliProjectRoot: string | null = null;
+  private neoCliAuthWatcher: fs.FSWatcher | null = null;
+  private sharedSessionListener: ((session: SessionState) => void) | null = null;
+
+  private getCliProjectPath(): string {
+    return path.join(app?.getPath ? app.getPath('userData') : process.cwd(), 'neocrm_cli_project.json');
+  }
+
+  public setNeoCliProjectRoot(rootPath: string): SessionState {
+    const current = this.readStorage().current || { isLoggedIn: false };
+    if (current.environment && (current.environment.productType || 'neocrm') !== 'neocrm') return current;
+    const previousRoot = this.getNeoCliProjectRoot();
+    const project = ensureNeoCliProject(rootPath, previousRoot === path.resolve(rootPath) ? current.cliProjectId : undefined);
+    this.neoCliProjectRoot = project.root;
+    this.persistCliProjectRoot(project.root);
+    this.watchNeoCliAuth(project.root);
+
+    const sharedAuth = readNeoCliAuth(project.root);
+    if (sharedAuth && (!current.isLoggedIn || (this.isSameCliAccount(current, sharedAuth) &&
+        sharedAuth.savedAt > (current.tokenData?.savedAt || 0)))) {
+      const session = this.mergeCliSession(current, sharedAuth, project.projectId);
+      this.persistCurrentSession(session);
+      return session;
+    }
+    if (current.isLoggedIn && current.environment && current.tokenData) {
+      this.syncCurrentSessionToCli(current, project.projectId);
+    }
+    return current;
+  }
+
+  public prepareNeoCliForConversation(rootPath?: string): CliSyncResult & { session: SessionState } {
+    // Read the connector first: a missing CLI manifest/auth must not discard its existing session.
+    const current = this.readStorage().current || { isLoggedIn: false };
+    if (!rootPath || !current.environment || (current.environment.productType || 'neocrm') !== 'neocrm') {
+      return { success: false, targetPath: rootPath || '', message: '当前对话没有绑定销售易工作区', session: current };
+    }
+    try {
+      const session = this.setNeoCliProjectRoot(rootPath);
+      const auth = readNeoCliAuth(rootPath);
+      const success = !!(session.isLoggedIn && auth && this.isSameCliAccount(session, auth));
+      return { success, targetPath: path.resolve(rootPath), session,
+        message: success ? '项目清单和 CLI 登录态已就绪，复用当前连接器授权' : '项目清单已创建，当前连接器没有可共享的登录态' };
+    } catch (error: any) {
+      return { success: false, targetPath: rootPath, session: current, message: `CLI 项目准备失败: ${error.message}` };
+    }
+  }
+
+  private isSameCliAccount(session: SessionState, auth: NeoCliAuth): boolean {
+    const token = session.tokenData;
+    return !!(token && String(token.tenant_id || '') === String(auth.tenantId || '') &&
+      (token.instance_uri || session.environment?.neoBaseURL || '').replace(/\/$/, '') === auth.instanceUrl.replace(/\/$/, '') &&
+      String(token.userInfo?.userId || '') === String(auth.userInfo?.id || ''));
+  }
+
+  private mergeCliSession(current: SessionState, auth: NeoCliAuth, projectId: string): SessionState {
+    const shared = toDesktopSession(auth);
+    return this.isSameCliAccount(current, auth) ? {
+      ...current,
+      tokenData: { ...current.tokenData, ...shared.tokenData },
+      cliProjectId: projectId,
+    } : { ...shared, cliProjectId: projectId };
+  }
+
+  public onSharedSessionChanged(listener: (session: SessionState) => void): void {
+    this.sharedSessionListener = listener;
+  }
+
+  private watchNeoCliAuth(root: string): void {
+    this.neoCliAuthWatcher?.close();
+    const location = getNeoCliAuthLocation(root);
+    if (!location) return;
+    try {
+      fs.mkdirSync(location.directory, { recursive: true, mode: 0o700 });
+      fs.chmodSync(path.dirname(location.directory), 0o700);
+      fs.chmodSync(location.directory, 0o700);
+      this.neoCliAuthWatcher = fs.watch(location.directory, (_event, filename) => {
+        if (filename && filename.toString() !== path.basename(location.file)) return;
+        setTimeout(() => {
+          if (this.neoCliProjectRoot !== root) return;
+          if (!fs.existsSync(location.file)) {
+            const current = this.readStorage().current;
+            if (current?.cliProjectId && getNeoCliAuthLocation(root)?.file === location.file) {
+              this.persistCurrentSession({ isLoggedIn: false });
+              this.sharedSessionListener?.({ isLoggedIn: false });
+              return;
+            }
+          }
+          const session = this.getCurrentSession();
+          this.sharedSessionListener?.(session);
+        }, 100);
+      });
+    } catch (error: any) {
+      console.warn(`[NeoCRM CLI] 无法监听共享登录状态: ${error.message}`);
+    }
+  }
+
+  private persistCliProjectRoot(root: string): void {
+    const file = this.getCliProjectPath();
+    fs.writeFileSync(file, JSON.stringify({ root }, null, 2), { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+  }
+
   private getStoragePath(): string {
     const userData = app?.getPath ? app.getPath('userData') : process.cwd();
     return path.join(userData, 'neocrm_sessions.json');
@@ -31,7 +134,74 @@ export class SessionStore {
 
   public getCurrentSession(): SessionState {
     const data = this.readStorage();
-    return data.current || { isLoggedIn: false };
+    const current = data.current || { isLoggedIn: false };
+    if (current.environment && (current.environment.productType || 'neocrm') !== 'neocrm') return current;
+    const projectRoot = this.getNeoCliProjectRoot();
+    if (!projectRoot) return current;
+
+    try {
+      const project = ensureNeoCliProject(projectRoot, current.cliProjectId);
+      const sharedAuth = readNeoCliAuth(project.root);
+      if (sharedAuth && (!current.isLoggedIn || (this.isSameCliAccount(current, sharedAuth) &&
+          sharedAuth.savedAt >= (current.tokenData?.savedAt || 0)))) {
+        const session = this.mergeCliSession(current, sharedAuth, project.projectId);
+        this.persistCurrentSession(session);
+        return session;
+      }
+      if (current.isLoggedIn && current.environment && current.tokenData) {
+        this.syncCurrentSessionToCli(current, project.projectId);
+      }
+    } catch (error: any) {
+      console.warn(`[NeoCRM CLI] 读取共享登录态失败: ${error.message}`);
+    }
+    return this.readStorage().current || { isLoggedIn: false };
+  }
+
+  public getNeoCliProjectRoot(): string | null {
+    if (this.neoCliProjectRoot) return this.neoCliProjectRoot;
+    try {
+      const file = this.getCliProjectPath();
+      if (fs.existsSync(file)) {
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (typeof saved.root === 'string' && fs.statSync(saved.root).isDirectory()) {
+          this.neoCliProjectRoot = path.resolve(saved.root);
+        }
+      }
+    } catch {}
+    return this.neoCliProjectRoot;
+  }
+
+  private persistCurrentSession(session: SessionState): void {
+    const data = this.readStorage();
+    data.current = session;
+    if (session.activeAccountId && session.tokenData) {
+      const existing = data.history.find((item) => item.id === session.activeAccountId);
+      const historyRecord: AccountRecord = {
+        id: session.activeAccountId,
+        environmentId: session.environment?.id || 'custom',
+        environmentName: session.environment?.name || '销售易',
+        tenantId: session.tokenData.tenant_id,
+        tenantName: session.tokenData.userInfo?.tenantName,
+        userName: session.tokenData.userInfo?.name,
+        instanceUri: session.tokenData.instance_uri,
+        lastLoginAt: existing?.lastLoginAt || Date.now(),
+        tokenData: session.tokenData,
+        environment: session.environment,
+      };
+      data.history = [historyRecord, ...data.history.filter((item) => item.id !== historyRecord.id)].slice(0, 20);
+    }
+    this.writeStorage(data);
+  }
+
+  private syncCurrentSessionToCli(session: SessionState, projectId?: string): void {
+    if (!this.neoCliProjectRoot || !session.environment || !session.tokenData) return;
+    const authPath = syncSessionToNeoCli(this.neoCliProjectRoot, session.environment, session.tokenData);
+    const project = ensureNeoCliProject(this.neoCliProjectRoot);
+    if (projectId && projectId !== project.projectId) throw new Error('CLI 项目标识在同步期间发生变化');
+    session.cliProjectId = project.projectId;
+    session.tokenData.savedAt = session.tokenData.savedAt || Date.now();
+    fs.chmodSync(authPath, 0o600);
+    this.persistCurrentSession(session);
   }
 
   public getAccountHistory(): AccountRecord[] {
@@ -53,7 +223,6 @@ export class SessionStore {
       tokenData,
       activeAccountId: accountId,
     };
-
     const historyRecord: AccountRecord = {
       id: accountId,
       environmentId: env.id,
@@ -83,11 +252,12 @@ export class SessionStore {
           console.warn('[Salesforce CLI 同步异常]:', error.message);
         });
       }
-    } else {
-      this.syncToNeoCli();
+    } else if ((env.productType || 'neocrm') === 'neocrm') {
+      const sync = this.syncToNeoCli();
+      if (!sync.success) console.warn(`[NeoCRM CLI] ${sync.message}`);
     }
 
-    return session;
+    return this.getCurrentSession();
   }
 
   public async saveSessionAndSyncSalesforceCli(env: NeoEnvironment, tokenData: TokenData): Promise<SessionState> {
@@ -114,6 +284,10 @@ export class SessionStore {
 
   public clearSession(): SessionState {
     const data = this.readStorage();
+    const root = this.getNeoCliProjectRoot();
+    if (root && data.current?.environment && (data.current.environment.productType || 'neocrm') === 'neocrm') {
+      try { deleteNeoCliAuth(root); } catch (error: any) { console.warn(`[NeoCRM CLI] 清除共享登录态失败: ${error.message}`); }
+    }
     data.current = { isLoggedIn: false };
     this.writeStorage(data);
     return data.current;
@@ -143,6 +317,8 @@ export class SessionStore {
     this.writeStorage(data);
     if (session.environment?.productType === 'salesforce' && session.tokenData) {
       session.salesforceCliSync = await this.syncToSalesforceCli(session.environment, session.tokenData);
+    } else if (session.environment?.productType === 'neocrm' && this.getNeoCliProjectRoot()) {
+      try { this.syncCurrentSessionToCli(session); } catch (error: any) { console.warn(`[NeoCRM CLI] ${error.message}`); }
     }
     return session;
   }
@@ -334,7 +510,7 @@ export class SessionStore {
    */
 
   public syncToNeoCli(targetDirPath?: string): CliSyncResult {
-    const current = this.getCurrentSession();
+    const current = this.readStorage().current || { isLoggedIn: false };
     if (!current.isLoggedIn || !current.tokenData || !current.environment) {
       return {
         success: false,
@@ -343,54 +519,24 @@ export class SessionStore {
       };
     }
 
+    if ((current.environment.productType || 'neocrm') !== 'neocrm') {
+      return { success: false, targetPath: '', message: '当前连接器不是销售易，无需同步到 neo CLI' };
+    }
+
     try {
-      const baseDir = targetDirPath?.trim() || (process.cwd() !== '/' ? process.cwd() : os.homedir());
-      const neoCliDir = path.join(baseDir, '.neo-cli');
-
-      if (!fs.existsSync(neoCliDir)) {
-        fs.mkdirSync(neoCliDir, { recursive: true });
-      }
-
-      // 1. 写入 token.json
-      const tokenJsonPath = path.join(neoCliDir, 'token.json');
-      const tokenPayload = {
-        ...current.tokenData,
-        savedAt: current.tokenData.savedAt || Date.now(),
-        expiresAt: current.tokenData.expiresAt || (Date.now() + (current.tokenData.expires_in || 7200) * 1000),
-      };
-      fs.writeFileSync(tokenJsonPath, JSON.stringify(tokenPayload, null, 2), "utf-8");
-
-      // 1b. 若存在 Web 会话 Cookie，同步写入 cookie.txt
-      if (current.tokenData.cookieString) {
-        fs.writeFileSync(path.join(neoCliDir, "cookie.txt"), current.tokenData.cookieString, "utf-8");
-      }
-
-      // 2. 写入 env.json
-      const envJsonPath = path.join(neoCliDir, 'env.json');
-      const envPayload = {
-        neoBaseURL: current.tokenData.instance_uri || current.environment.neoBaseURL,
-        loginURL: current.environment.loginURL,
-        tokenURL: current.environment.tokenURL,
-        updatedAt: Date.now(),
-      };
-      fs.writeFileSync(envJsonPath, JSON.stringify(envPayload, null, 2), 'utf-8');
-
-      // 3. 同时可选同步至主目录 ~/.neo-cli
-      const userHomeNeoCli = path.join(os.homedir(), '.neo-cli');
-      try {
-        if (!fs.existsSync(userHomeNeoCli)) {
-          fs.mkdirSync(userHomeNeoCli, { recursive: true });
-        }
-        fs.writeFileSync(path.join(userHomeNeoCli, 'token.json'), JSON.stringify(tokenPayload, null, 2), 'utf-8');
-        fs.writeFileSync(path.join(userHomeNeoCli, 'env.json'), JSON.stringify(envPayload, null, 2), 'utf-8');
-      } catch (homeErr) {
-        console.warn('同步至用户主目录 ~/.neo-cli 失败(非致命):', homeErr);
-      }
+      const root = targetDirPath?.trim() || this.getNeoCliProjectRoot() || process.cwd();
+      const project = ensureNeoCliProject(root);
+      const authPath = syncSessionToNeoCli(project.root, current.environment, current.tokenData);
+      current.cliProjectId = project.projectId;
+      fs.chmodSync(authPath, 0o600);
+      this.neoCliProjectRoot = project.root;
+      this.persistCliProjectRoot(project.root);
+      this.persistCurrentSession(current);
 
       return {
         success: true,
-        targetPath: neoCliDir,
-        message: `成功同步凭证至 ${neoCliDir}，终端可直接使用 neo 命令！`,
+        targetPath: authPath,
+        message: `桌面连接器与 neocrm-cli 已共享当前项目登录态 (${project.root})`,
       };
     } catch (err: any) {
       return {

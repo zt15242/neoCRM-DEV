@@ -1,3 +1,5 @@
+import { useRestrictedFeatures } from '../security/RestrictedFeatures';
+import { requiresRoleLicense } from '../../shared/licensePolicy';
 import React, { useState, useEffect } from 'react';
 import { CURRENT_APP_VERSION } from '../../shared/constants';
 import { 
@@ -135,6 +137,8 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   collapsed = false,
   onToggleCollapse,
 }) => {
+  const { isRoleVisible } = useRestrictedFeatures();
+  const visiblePresets = AI_AGENT_PRESETS.filter((preset) => isRoleVisible(preset.id));
   const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
 
   useEffect(() => {
@@ -199,13 +203,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     setEditingId(null);
   };
 
-  const validSessions = sessions.filter((s) => s.messages && s.messages.length > 0);
+  const validSessions = sessions.filter((s) => isRoleVisible(s.presetId) && s.messages && s.messages.length > 0);
   const filteredSessions = validSessions.filter((s) => {
     if (!keyword.trim()) return true;
     return s.title.toLowerCase().includes(keyword.toLowerCase());
   });
 
-  const currentPreset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
+  const currentPreset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
   const activeTenantName = session.tokenData?.userInfo?.tenantName || session.environment?.name || 'NeoCRM-DEV';
   const activeUserName = session.tokenData?.userInfo?.name || (session.isLoggedIn ? '已连接' : '未登录');
 
@@ -451,10 +455,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                 选择智能体角色
               </div>
-              {AI_AGENT_PRESETS.map((p: any) => {
+              {visiblePresets.map((p: any) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isLocked = p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect' || p.id === 'nex-architect';
+                const isLocked = requiresRoleLicense(p.id);
 
                 return (
                   <button

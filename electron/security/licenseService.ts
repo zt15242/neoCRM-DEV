@@ -650,6 +650,19 @@ export class LicenseService {
 
     const { randomId, issuedAt, remainingDays, expireDateStr } = decrypted.payload;
 
+    if (vault.activeLicenseCode && vault.boundDeviceHash === currentDeviceHash &&
+        vault.boundRandomId === randomId &&
+        crypto.timingSafeEqual(
+          crypto.createHash('sha256').update(vault.activeLicenseCode).digest(),
+          crypto.createHash('sha256').update(inputPassword.trim()).digest()
+        )) {
+      vault.failedAttempts = 0;
+      vault.lockUntil = 0;
+      this.saveVault(vault);
+      const status = this.getLicenseStatus();
+      return { success: status.isAuthorized, message: status.isAuthorized ? '验证通过' : status.message, status };
+    }
+
     if (vault.consumedRandomIds.includes(randomId)) {
       return recordFailure(
         '该密码已被激活使用过（一码仅限绑定激活一次），设备刷机、重置或更换后输入原密码均无法使用，请生成新的密码！'

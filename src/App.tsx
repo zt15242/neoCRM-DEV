@@ -1,3 +1,4 @@
+import { useRestrictedFeatures } from './security/RestrictedFeatures';
 import React, { useState, useEffect } from 'react';
 import { AppSidebar, AppNavTab } from './components/AppSidebar';
 import { EnvironmentSelector } from './components/EnvironmentSelector';
@@ -24,6 +25,7 @@ import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
 import { ShieldAlert, LogIn, PanelLeftOpen } from 'lucide-react';
 
 export const App: React.FC = () => {
+  const { visible: privateFeaturesVisible, isRoleVisible } = useRestrictedFeatures();
   const [platform, setPlatform] = useState<string>('darwin');
   const [environments, setEnvironments] = useState<NeoEnvironment[]>([]);
   const [selectedEnvId, setSelectedEnvId] = useState<string>('production');
@@ -216,6 +218,31 @@ export const App: React.FC = () => {
       return unsub;
     }
   }, []);
+
+  useEffect(() => {
+    const activeProject = projects.find((project) => project.id === activeProjectId);
+    if (!activeProject || !window.neoApi?.setNeoCliProjectRoot) return;
+    window.neoApi.setNeoCliProjectRoot(activeProject.localPath)
+      .then((sharedSession) => {
+        setSession(sharedSession);
+        if (sharedSession.environment?.id) setSelectedEnvId(sharedSession.environment.id);
+        window.neoApi.getAccountHistory().then(setAccountHistory);
+      })
+      .catch((error: any) => showToast('error', `连接 neocrm-cli 项目失败: ${error.message}`));
+  }, [activeProjectId, projects]);
+
+  useEffect(() => {
+    let active = true;
+    window.neoApi?.aiGetSessions?.().then((items) => { if (active) setSessions(items.filter((item) => item.messages?.length > 0)); }).catch(() => {});
+    window.neoApi?.aiGetConfig?.().then((config) => { if (active && config.skills) setSkills(config.skills); }).catch(() => {});
+    window.neoApi?.workflowGetLicenseStatus?.().then((next) => { if (active) setWorkflowLicenseStatus(next); }).catch(() => {});
+    if (!privateFeaturesVisible) {
+      if (!isRoleVisible(selectedPresetId)) setSelectedPresetId('harness-agent');
+      const selected = sessions.find((item) => item.id === activeSessionId);
+      if (selected && !isRoleVisible(selected.presetId)) setActiveSessionId(null);
+    }
+    return () => { active = false; };
+  }, [privateFeaturesVisible]);
 
   const currentSelectedEnv =
     environments.find((e) => e.id === selectedEnvId) || environments[0] || {

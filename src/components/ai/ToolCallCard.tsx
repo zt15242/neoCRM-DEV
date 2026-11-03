@@ -41,6 +41,8 @@ interface ToolCallCardProps {
 
 export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const [expanded, setExpanded] = useState(false);
+  const readSource = toolCall.resultData?.source;
+  const readBadge = readSource === 'cli' ? 'neo CLI' : toolCall.resultData?.fallbackReason ? '兼容回退' : readSource === 'mixed' ? 'CLI + 流程中心' : undefined;
 
   const getToolMeta = (name: string) => {
     switch (name) {
@@ -78,7 +80,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
         return {
           title: kw ? `检索租户${pt} (关键词: "${kw}")` : `检索租户流程资产 (${pt})`,
           icon: Workflow,
-          badge: "流程中心",
+          badge: readBadge || (toolCall.arguments?.procType === 2 ? "CLI 优先" : "流程中心"),
           color: "text-teal-600 bg-teal-50 border-teal-200",
         };
       }
@@ -86,7 +88,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
         return {
           title: `调阅流程详情 (${toolCall.arguments?.procdefId || '图模型'})`,
           icon: Workflow,
-          badge: '流程拓扑',
+          badge: readBadge || (toolCall.arguments?.procType === 2 ? 'CLI 优先' : '流程拓扑'),
           color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
         };
       case "list_autoflows":

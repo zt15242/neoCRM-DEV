@@ -1,3 +1,4 @@
+import { consumeAccessCommand } from '../../security/RestrictedFeatures';
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Terminal, 
@@ -8,15 +9,9 @@ import {
   Trash2, 
   Copy, 
   Check, 
-  ChevronRight,
-  ChevronDown,
-  Layers,
   Code2,
-  Database,
   FolderTree,
   Paperclip,
-  Folder,
-  FolderOpen,
   FileCode,
   FileSpreadsheet,
   FileText,
@@ -25,8 +20,6 @@ import {
   Eye,
   RefreshCw,
   Play,
-  Search,
-  Download,
   Image,
   Sparkles,
   GitBranch,
@@ -39,12 +32,13 @@ import {
 import { 
   AiToolCallRecord, 
   WorkspaceProject, 
-  ProjectDirNode, 
   WorkspaceArtifactItem, 
   AiFileAttachment,
   WorkspaceGitChangesSummary,
   WorkspaceGitChangeItem
 } from "../../../shared/types";
+
+import { ProjectFileTree } from "./ProjectFileTree";
 
 interface CodexTerminalPanelProps {
   isOpen: boolean;
@@ -138,12 +132,8 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   const [isMaximized, setIsMaximized] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // ================= 1. 树状项目文件 (File Tree) 状态 =================
-  const [dirTree, setDirTree] = useState<ProjectDirNode[]>([]);
-  const [loadingTree, setLoadingTree] = useState(false);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [treeSearch, setTreeSearch] = useState("");
-  const [folderLimits, setFolderLimits] = useState<Record<string, number>>({});
+  const [treeRefreshVersion, setTreeRefreshVersion] = useState(0);
+  const loadDirTree = () => setTreeRefreshVersion((value) => value + 1);
 
   // ================= 2. 上传与生成产物 (Artifacts) 状态 =================
   const [artifacts, setArtifacts] = useState<WorkspaceArtifactItem[]>([]);
@@ -225,30 +215,6 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     }
   };
 
-  // 加载项目目录树
-  const loadDirTree = async () => {
-    if (!window.neoApi?.projectGetDirTree) return;
-    setLoadingTree(true);
-    try {
-      const tree = await window.neoApi.projectGetDirTree(projectPath, 10);
-      if (Array.isArray(tree)) {
-        setDirTree(tree);
-        // 默认展开首层目录
-        const defaultExpanded = new Set<string>();
-        tree.forEach((node) => {
-          if (node.type === "directory") {
-            defaultExpanded.add(node.path);
-          }
-        });
-        setExpandedFolders(defaultExpanded);
-      }
-    } catch (e: any) {
-      showToast?.("error", `读取目录树失败: ${e.message}`);
-    } finally {
-      setLoadingTree(false);
-    }
-  };
-
   // 加载最近产物
   const loadRecentArtifacts = async () => {
     if (!window.neoApi?.projectGetRecentArtifacts) return;
@@ -274,7 +240,6 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     }
 
     refreshTimerRef.current = setTimeout(() => {
-      loadDirTree();
       loadRecentArtifacts();
       loadJobs();
     }, 1000);
@@ -294,19 +259,6 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   }, [terminalHistory.length, activeTab]);
 
   if (!isOpen) return null;
-
-  // 展开 / 折叠文件夹
-  const toggleFolder = (folderPath: string) => {
-    setExpandedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderPath)) {
-        next.delete(folderPath);
-      } else {
-        next.add(folderPath);
-      }
-      return next;
-    });
-  };
 
   // 获取文件专属图标
   const getFileIcon = (fileName: string) => {
@@ -404,6 +356,17 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     const rawCmd = (cmdText !== undefined ? cmdText : commandInput).trim();
     if (!rawCmd || isExecutingCmd) return;
 
+    try {
+      if (await consumeAccessCommand(rawCmd)) {
+        setCommandInput(''); setHistoryIndex(-1);
+        return;
+      }
+    } catch {
+      setCommandInput('');
+      showToast?.('error', '本地指令处理失败');
+      return;
+    }
+
     if (rawCmd === "clear") {
       setTerminalHistory([]);
       setCommandInput("");
@@ -491,134 +454,10 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     }
   };
 
-  // 递归渲染目录树节点
-  const renderTreeNode = (node: ProjectDirNode, depth = 0) => {
-    if (treeSearch.trim()) {
-      const q = treeSearch.toLowerCase();
-      const matchSelf = node.name.toLowerCase().includes(q) || node.relativePath.toLowerCase().includes(q);
-      const matchChildren = node.children && node.children.some((c) => c.name.toLowerCase().includes(q) || c.relativePath.toLowerCase().includes(q));
-      if (!matchSelf && !matchChildren) return null;
-    }
-
-    const isFolder = node.type === "directory";
-    const isExpanded = expandedFolders.has(node.path);
-
-    return (
-      <div key={node.path} className="space-y-0.5 select-none">
-        <div
-          onClick={() => {
-            if (isFolder) {
-              toggleFolder(node.path);
-            } else {
-              handlePreviewFile(node.name, node.path);
-            }
-          }}
-          className={`group flex items-center justify-between py-1 px-2 rounded-lg text-xs hover:bg-slate-100/90 transition-colors cursor-pointer ${
-            isFolder ? "text-slate-800 font-medium" : "text-slate-600"
-          }`}
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
-        >
-          <div className="flex items-center space-x-1.5 min-w-0 pr-1">
-            {isFolder ? (
-              <>
-                <ChevronRight className={`w-3 h-3 text-slate-400 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-                {isExpanded ? (
-                  <FolderOpen className="w-4 h-4 text-amber-600 shrink-0" />
-                ) : (
-                  <Folder className="w-4 h-4 text-amber-500 shrink-0" />
-                )}
-              </>
-            ) : (
-              getFileIcon(node.name)
-            )}
-            <span className="truncate">{node.name}</span>
-            {isFolder && node.children && node.children.length > 0 && (
-              <span className="text-[10px] text-slate-400 font-mono font-normal shrink-0">
-                ({node.children.length.toLocaleString()})
-              </span>
-            )}
-          </div>
-
-          {/* 悬停快捷操作 */}
-          <div className="hidden group-hover:flex items-center space-x-1 shrink-0">
-            {!isFolder && (
-              <>
-                {onAttachFileToComposer && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAttachFileToComposer({ name: node.name, fullPath: node.path });
-                      showToast?.("success", `已将 ${node.name} 引用至对话`);
-                    }}
-                    title="在对话中引用 (@)"
-                    className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleOpenFile(node.path);
-                  }}
-                  title="用系统默认应用打开"
-                  className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800"
-                >
-                  <Eye className="w-3 h-3" />
-                </button>
-              </>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRevealInFinder(node.path);
-              }}
-              title="在系统访达/资源管理器中显示"
-              className="p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-800"
-            >
-              <ExternalLink className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-
-        {/* 子节点递归 (带大文件夹分批保护，平滑渲染几千个 Apex 文件) */}
-        {isFolder && isExpanded && node.children && (
-          <div>
-            {(() => {
-              const limit = folderLimits[node.path] || 100;
-              const isFiltered = Boolean(treeSearch.trim());
-              const visibleChildren = isFiltered ? node.children : node.children.slice(0, limit);
-              const remaining = node.children.length - limit;
-
-              return (
-                <>
-                  {visibleChildren.map((child) => renderTreeNode(child, depth + 1))}
-                  {!isFiltered && remaining > 0 && (
-                    <div style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }} className="py-1">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setFolderLimits((prev) => ({ ...prev, [node.path]: limit + 150 }));
-                        }}
-                        className="text-[11px] text-amber-600 hover:text-amber-700 font-medium cursor-pointer transition-colors"
-                      >
-                        已展示前 ${limit} 个文件，点击加载更多 (+150 / 剩余 ${remaining} 个)...
-                      </button>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-          </div>
-        )}
-      </div>
-    );
-  };
 
   return (
     <div
-      className={`border-l border-slate-200/90 bg-white flex flex-col transition-all duration-200 shrink-0 select-text ${
+      className={`border-l border-slate-200/90 bg-white flex flex-col min-h-0 min-w-0 transition-all duration-200 shrink-0 select-text ${
         isMaximized ? "w-full md:w-[680px]" : "w-80 md:w-96 lg:w-[440px]"
       }`}
     >
@@ -735,72 +574,25 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
       </div>
 
       {/* 主体内容展示区 */}
-      <div className="flex-1 overflow-hidden flex flex-col bg-white">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-white">
         {/* ================= TAB 1: 树状项目文件 (File Tree) ================= */}
-        {activeTab === "files" && (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* 搜索与工具条 */}
-            <div className="p-2 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50/50">
-              <div className="relative flex-1">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
-                <input
-                  type="text"
-                  value={treeSearch}
-                  onChange={(e) => setTreeSearch(e.target.value)}
-                  placeholder="过滤项目文件..."
-                  className="w-full pl-7 pr-3 py-1 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:border-amber-400"
-                />
-              </div>
-              <button
-                onClick={handlePullProjectCode}
-                disabled={isPullingCode}
-                title="一键拉取当前已连接 CRM 环境的线上代码与元数据到本地"
-                className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 text-slate-500 hover:text-amber-600 cursor-pointer shrink-0 transition-colors"
-              >
-                <Download className={`w-3.5 h-3.5 ${isPullingCode ? "animate-bounce text-amber-600" : ""}`} />
-              </button>
-              <button
-                onClick={loadDirTree}
-                disabled={loadingTree}
-                title="重新扫描目录树"
-                className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-500 cursor-pointer shrink-0"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loadingTree ? "animate-spin text-amber-600" : ""}`} />
-              </button>
-            </div>
+        <div className={activeTab === 'files' ? 'flex-1 min-h-0 min-w-0 flex overflow-hidden' : 'hidden'}>
+          <ProjectFileTree
+            projectPath={projectPath}
+            projectName={projectName}
+            refreshVersion={`${treeRefreshVersion}:${toolCalls.filter((call) => call.status !== 'running').length}:${activeSessionAttachments.length}`}
+            isPullingCode={isPullingCode}
+            onPullProjectCode={handlePullProjectCode}
+            onPreviewFile={handlePreviewFile}
+            onOpenFile={handleOpenFile}
+            onRevealFile={handleRevealInFinder}
+            onAttachFile={onAttachFileToComposer ? (file) => {
+              onAttachFileToComposer(file);
+              showToast?.('success', `已将 ${file.name} 引用至对话`);
+            } : undefined}
+          />
+        </div>
 
-            {/* 项目目录树视图 */}
-            <div className="flex-1 overflow-y-auto p-2">
-              <div className="text-[10px] text-slate-400 font-mono px-2 py-1 truncate" title={projectPath}>
-                📁 {projectName} ({projectPath})
-              </div>
-              {loadingTree ? (
-                <div className="py-12 text-center text-xs text-slate-400 flex flex-col items-center space-y-2">
-                  <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
-                  <span>正在扫描项目文件树...</span>
-                </div>
-              ) : dirTree.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-400 flex flex-col items-center space-y-3">
-                  <span>目录为空或尚未拉取线上代码</span>
-                  <button
-                    onClick={handlePullProjectCode}
-                    disabled={isPullingCode}
-                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium shadow-xs flex items-center space-x-1.5 cursor-pointer transition-colors"
-                  >
-                    <Download className={`w-3.5 h-3.5 ${isPullingCode ? "animate-bounce" : ""}`} />
-                    <span>{isPullingCode ? "正在拉取代码与元数据..." : "一键拉取线上代码与元数据"}</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-0.5">
-                  {dirTree.map((node) => renderTreeNode(node, 0))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        
         {/* ================= TAB 1.5: 工作区代码变更与 Git Diff 概览 (DSH Workspace Changes) ================= */}
         {activeTab === "changes" && (
           <div className="flex-1 flex flex-col overflow-hidden bg-white">

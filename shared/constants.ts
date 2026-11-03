@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.31';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.32';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -497,7 +497,7 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
     id: "nex-architect",
     name: "Nex页面扩展大师 (Nex Architect)",
-    description: "销售易 Nex 2.0 页面扩展 (view(ctx, props)) 全生命周期专家：精通多端场景 (EntityForm/EntityDetail/EntityList/neoUIFramework)、作用域 scope 联动、DevTools 14 大逆向通信协议与代码自动编译部署",
+    description: "NeoCRM NEX 1.0/2.0 标准页面扩展代码开发专家 (neo-nex-dev)：基于 neo CLI，针对对象表单、列表、详情、首页通过 view(ctx, props) 覆盖属性/挂事件，实现字段联动、校验、自定义按钮与安全部署",
     iconName: "LayoutTemplate",
     badge: "Nex部署大师",
     enableCrmTools: true,
@@ -506,8 +506,8 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     quickPrompts: [
       "请为【商机】(newOpportunity) 的新建/编辑表单设计一套当阶段变更为赢单时必填赢单原因的 Nex 2.0 扩展代码",
       "为【客户】(account) 详情页设计一个调用自定义 REST 接口并弹出 Toast 确认的 Nex 按钮扩展",
-      "如何用代码配置包含组件定位 scope、字段联动与数据校验的销售易 Nex 2.0 完整 view(ctx, props) 架构？",
-      "查询当前租户已部署的 Nex 页面扩展资产列表，并在本地生成增量升级代码与部署方案",
+      "如何用 neo CLI 查询、生成、检索与发布表单及列表页的 NEX 扩展代码？",
+      "查询当前租户已部署的 NEX 扩展代码列表，并在本地生成增量升级代码与部署草案",
     ],
   },
   {
@@ -529,7 +529,7 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
   {
     id: "approval-architect",
     name: "审批流架构与部署专家 (Approval Flow)",
-    description: "销售易新版审批流 (procType=2) 全生命周期专家：精通业务对象与业务类型分析、审批人策略矩阵、编辑字段与按钮控制、代码级配置部署与运行验证",
+    description: "面向业务管理员的 NeoCRM 审批流设计助手 (neo-approval-flow-designer)：把业务需求或 ApprovalList/1.0 Excel 转成可审阅审批方案，支持查询既有流程、校验、经确认创建设计态流程与安全版本管理",
     iconName: "FileCheck",
     badge: "审批流专精",
     enableCrmTools: true,
@@ -537,9 +537,9 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
     systemPrompt: `[PROTECTED_PRESET::approval-architect]`,
     quickPrompts: [
       "请为【合同】(contract) 设计一套基于合同金额与折扣率分流的多级审批流方案",
-      "如何用代码配置一个包含直属上级逐级审批、财务会签及字段修改权限的审批流？",
-      "对比销售易新版审批流 (approvalflow) 与自动流程 (automaticflow) 的适用边界与防错准则",
-      "为【特价商机】(opportunity) 规划审批流：包含自选审批人、加签/转办限制与审批通过后自动回写状态",
+      "根据我提供的审批需求或 Excel 流程清单，进行合法性校验并生成设计态审批流草案",
+      "查询当前租户已存在的审批流定义列表，分析其审批人策略与流转分支",
+      "如何通过 neo CLI 管理审批流版本、执行 check 预检并安全创建设计态流程？",
     ],
   },
   {
@@ -707,47 +707,7 @@ export const AI_AGENT_PRESETS: AiAgentPreset[] = [
       '如何设计一个支持多业务类型的合同审批对象？',
     ],
   },
-  {
-    id: 'paas-coder',
-    name: 'PaaS 后端脚本与前端组件专家',
-    description: '销售易 Java/Groovy 触发器 (Trigger)、自定义 REST API、自定义 React 前端组件 (内测开发中)',
-    iconName: 'Code2',
-    badge: '暂未开放',
-    disabled: true,
-    disabledReason: '该预设角色正在进行深度适配与内测，暂未开放使用',
-    enableCrmTools: false,
-    recommendedModel: 'deepseek-chat',
-    systemPrompt: `你是一个精通销售易 NeoCRM PaaS 扩展开发的顶级全栈专家。
-你的专长包括：
-1. NeoCRM 后端 Trigger 触发器生命周期（beforeInsert, afterInsert, beforeUpdate, afterUpdate 等）。
-2. NeoCRM SDK 工具类与 API 规范（DML 批处理、XOQL 查询、FutureTask 异步任务、自定义 REST API 编写）。
-3. NeoCRM 前端自定义组件开发规范（React 16/18 + TypeScript，NeoEntityList，propsSchema 等）。
-4. 代码必须遵循安全防护准则，包含完整的异常处理与性能考量。`,
-    quickPrompts: [
-      '编写一个 Trigger：当客户级别变更为VIP时自动创建一条跟进任务',
-      '编写一个销售易自定义 REST API：批量接收外部订单并写入系统',
-      '提供一个销售易前端自定义组件的基本目录结构与 model.ts 模板',
-      '如何使用 NeoCRM SDK 进行跨对象的批量更新与防死锁事务处理？',
-    ],
-  },
-  {
-    id: 'deepseek-reasoner',
-    name: 'DeepSeek 深度推理与综合分析',
-    description: '使用 DeepSeek-R1 完整思考推理链，解决复杂业务逻辑、数学推导与架构设计难题',
-    iconName: 'BrainCircuit',
-    badge: 'R1 推理',
-    enableCrmTools: false,
-    recommendedModel: 'deepseek-reasoner',
-    systemPrompt: `你是一个具备强大逻辑推理能力的 AI 专家（由 DeepSeek-R1 驱动）。
-你会进行深入思考，步步推演，抽丝剥茧地分析复杂的技术架构、业务场景、算法或逻辑漏洞。
-请以严密逻辑展现你的推理思考与解决策略。`,
-    quickPrompts: [
-      '深入分析多租户 CRM 系统在高并发数据同步场景下的数据一致性与幂等设计',
-      '对比销售易触发器与工作流自动化的性能瓶颈与适用边界',
-      '帮我梳理一套复杂的销售提成多梯度计算公式与规则引擎推导',
-      '如何设计一个跨系统（ERP + CRM）主数据双向同步的状态机与补偿机制？',
-    ],
-  },
+
 ];
 
 import { McpServerConfig, AiSkillItem } from "./types";
@@ -773,51 +733,137 @@ export const BUILTIN_MCP_SERVERS: McpServerConfig[] = [
  */
 export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
   {
-    id: "skill-schema-design",
-    name: "销售易数据建模与字段规范",
-    description: "严格遵循销售易 PaaS 命名规范与字段类型代码，规划主子表、关联关系与自动编号规则。",
+    id: 'skill-neobi-architect', name: 'BI 分析部署规范',
+    description: 'BI 分析方案设计、配置验证与部署规范。',
+    category: 'builtin', iconName: 'BarChart3', triggerKeywords: [], enabled: true,
+  },
+  {
+    id: 'skill-autoflow-architect', name: '自动流程架构与部署规范',
+    description: '自动流程节点、变量和部署验证规范。',
+    category: 'builtin', iconName: 'Workflow', triggerKeywords: [], enabled: true,
+  },
+  // 1. 审批流与 NEX 核心替换技能 (官方 neo CLI 最新技能包)
+  {
+    id: "skill-neo-approval-flow-designer",
+    name: "销售易审批流设计助手 (neo-approval-flow-designer)",
+    description: "面向业务管理员的 NeoCRM 审批流设计助手。把一句业务需求或 ApprovalList/1.0 Excel 转成可审阅的审批方案，支持查询既有流程、校验、经确认创建设计态流程，以及安全地管理版本和启停。",
     category: "builtin",
-    iconName: "Box",
-    triggerKeywords: ["建模", "建表", "创建对象", "字段设计", "设计表"],
+    iconName: "FileCheck",
+    triggerKeywords: ["审批流", "审批流设计", "approvalprocess", "ApprovalList", "审批人策略", "退回驳回", "设计态流程"],
     enabled: true,
   },
   {
-    id: "skill-xoql-expert",
-    name: "销售易 XOQL 查询与语法构建",
-    description: "专精销售易 SQL 语法，指导多表关联查询、字段别名、聚合统计及时间函数。",
+    id: "skill-neo-nex-dev",
+    name: "销售易 NEX 页面扩展代码开发 (neo-nex-dev)",
+    description: "NeoCRM NEX 1.0/2.0 标准页面扩展代码开发技能（基于 neo CLI）。针对对象表单、列表、详情、首页通过 view(ctx, props) 覆盖属性/挂事件，运行时深合并生效，实现字段联动、条件显隐、保存校验、自定义按钮与安全部署。",
     category: "builtin",
-    iconName: "Database",
-    triggerKeywords: ["SQL", "XOQL", "查数据", "统计", "查询"],
-    enabled: true,
-  },
-  {
-    id: "skill-paas-trigger",
-    name: "销售易 Trigger 触发器开发规范",
-    description: "精通销售易 Java/Groovy 后端触发器生命周期、事务控制、防死锁与 SDK 工具类。",
-    category: "builtin",
-    iconName: "Code2",
-    triggerKeywords: ["Trigger", "触发器", "Groovy", "PaaS代码", "后端开发"],
-    enabled: true,
-  },
-  {
-    id: "skill-data-quality",
-    name: "CRM 业务数据质检与清洗",
-    description: "识别手机号、邮箱、信用代码等字段格式异常，排查重复数据与空值异常。",
-    category: "builtin",
-    iconName: "ShieldCheck",
-    triggerKeywords: ["质检", "清洗", "校验", "格式检查", "脏数据"],
-    enabled: true,
-  },
-  {
-    id: "skill-process-implementation-perspective",
-    name: "销售易流程实施与代码配置规范",
-    description: "植入销售易审批流与自动流程实施工程认知：事实边界优先、服务端默认模型基线、标识符语义隔离、回读对账与四层证据链验收。",
-    category: "builtin",
-    iconName: "ShieldCheck",
-    triggerKeywords: ["实施规范", "代码配置", "审批流规范", "自动流程规范", "四层模型", "回读对账"],
+    iconName: "LayoutTemplate",
+    triggerKeywords: ["NEX", "扩展代码", "表单扩展", "列表扩展", "详情扩展", "首页扩展", "beforeSave", "onChange", "字段联动", "view(ctx,props)"],
     enabled: true,
   },
 
+  // 2. 销售易 neocrm-cli 官方全套技能包 (全量内置)
+  {
+    id: "skill-neo-cli-usage",
+    name: "neocrm-cli 命令行工具链 (neo-cli-usage)",
+    description: "neocrm-cli（neo 命令）使用技能。NeoCRM（销售易）是同一款产品；neocrm-cli 是该产品面向开发者提供的命令行工具。执行或解释 neo 命令、查询/部署/检索 NeoCRM 元数据、排查 neo 环境，覆盖 CLI 完整工作流。",
+    category: "builtin",
+    iconName: "Terminal",
+    triggerKeywords: ["neo", "neocrm-cli", "neo命令", "CLI", "命令行", "元数据部署", "neo retrieve", "neo deploy"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-backend-dev",
+    name: "销售易后端 PaaS 开发与触发器 (neo-backend-dev)",
+    description: "Neo 后端 PaaS 开发技能（基于 neocrm CLI 的 codepackage 命令）。当需要查询数据（SQL/XOQL）或执行 DML 操作、开发 Trigger 触发器、自定义 REST API、计划作业、流程扩展脚本，使用 FutureTask、BatchJobPro 等 SDK 工具类时使用。",
+    category: "builtin",
+    iconName: "Code2",
+    triggerKeywords: ["后端开发", "Trigger", "触发器", "PaaS", "REST API", "codepackage", "FutureTask", "BatchJobPro"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-entity-management",
+    name: "销售易实体模型与字段字典 (neo-entity-management)",
+    description: "Neo 实体模型管理技能（基于 neo CLI + neocrm-mcp 工具）。查询实体定义、字段类型与选项值、实体间关联关系，用 SQL 验证数据，创建自定义实体与字段，设计数据模型。",
+    category: "builtin",
+    iconName: "Box",
+    triggerKeywords: ["实体管理", "业务对象", "字段定义", "自定义实体", "数据字典", "创建字段", "实体关系"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-layout-management",
+    name: "销售易后台页面布局管理 (neo-layout-management)",
+    description: "CRM 后台布局管理技能（表单布局 + 详情页布局 + 列表布局）。管理布局字段、组件池、视图分配、字段规则与影响分析。",
+    category: "builtin",
+    iconName: "Layers",
+    triggerKeywords: ["布局管理", "表单布局", "详情页布局", "列表布局", "视图分配", "布局规则"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-entity-rule-management",
+    name: "销售易字段默认值与校验查重 (neo-entity-rule-management)",
+    description: "设计并以 neocrm-cli 管理 NeoCRM 对象的字段默认值、校验规则和查重规则。覆盖业务语义澄清、source 元数据生成、现状拉取、部署与回读。",
+    category: "builtin",
+    iconName: "ShieldCheck",
+    triggerKeywords: ["字段默认值", "校验规则", "查重规则", "业务规则", "validateExpression"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-formula-dev",
+    name: "销售易公式字段与父子汇总 (neo-formula-dev)",
+    description: "用于 NeoCRM 公式字段、本地父子汇总字段 source 与校验规则表达式。校验规则使用 validateExpression 的 validateType=4，计算字段使用 validateType=2/3，汇总字段使用 aggregateFormula 直接创建更新。",
+    category: "builtin",
+    iconName: "Sparkles",
+    triggerKeywords: ["公式字段", "计算字段", "父子汇总", "aggregateFormula", "公式开发"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-frontend-dev",
+    name: "销售易前端自定义组件开发 (neo-frontend-dev)",
+    description: "Neo 前端自定义组件开发技能（React 16 + TypeScript，基于 neo CLI）。开发、改造或发布 NeoCRM 自定义组件，配置 model.ts/propsSchema，接入平台实体或自定义 API，编写事件动作与样式隔离。",
+    category: "builtin",
+    iconName: "Code2",
+    triggerKeywords: ["前端组件", "React", "自定义组件", "model.ts", "propsSchema", "NeoEntityGrid"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-global-pick-management",
+    name: "销售易通用选项集管理 (neo-global-pick-management)",
+    description: "使用 neo CLI 发现、创建、同步、预演和部署 NeoCRM 通用选项集（Global Pick）。当需要复用、新建、修改、停用或验证通用选项集时使用。",
+    category: "builtin",
+    iconName: "Database",
+    triggerKeywords: ["通用选项集", "Global Pick", "选项集", "枚举管理", "复用选项"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-platform-capabilities",
+    name: "销售易平台能力与知识检索 (neo-platform-capabilities)",
+    description: "NeoCRM 平台能力与开发知识检索技能。当询问 NeoCRM 是否支持某项功能、审批流/API/NEX/组件/数据模型能力、平台约束或实现方式时使用。通过 neo platform search 验证。",
+    category: "builtin",
+    iconName: "Sparkles",
+    triggerKeywords: ["平台能力", "开发知识", "能力检索", "平台约束", "实现方式"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-solution-design",
+    name: "销售易项目方案设计与架构 (neo-solution-design)",
+    description: "Neo 项目方案设计技能（基于 neo 工具链）。分析业务需求并拆解为技术任务，设计前后端组件架构、自定义 API 接口、数据模型和实体关系，输出技术方案文档。",
+    category: "builtin",
+    iconName: "Workflow",
+    triggerKeywords: ["方案设计", "技术架构", "PRD推导", "前后端架构", "技术方案文档"],
+    enabled: true,
+  },
+  {
+    id: "skill-neo-task-summary",
+    name: "销售易任务总结与交付回顾 (neo-task-summary)",
+    description: "Neo 任务总结技能，辅助生成结构化的任务回顾文档，总结开发任务与执行问题，沉淀交付资产。",
+    category: "builtin",
+    iconName: "FileText",
+    triggerKeywords: ["任务总结", "执行回顾", "任务文档", "开发回顾"],
+    enabled: true,
+  },
+
+  // 3. 打印模板、多平台 CRM 与基础建模技能
   {
     id: "skill-print-template-engineer-perspective",
     name: "销售易打印模板实测型工程师视角规范",
@@ -845,13 +891,5 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     triggerKeywords: ["纷享销客", "纷享", "sharecrm", "fxiaoke", "AccountObj", "ContractObj"],
     enabled: true,
   },
-  {
-    id: "skill-salesyi-nex-dev",
-    name: "销售易 Nex 2.0 页面扩展与部署规范",
-    description: "销售易 Nex 2.0 页面扩展 (view(ctx, props)) 开发标准：页面场景适配、字段联动控制、组件作用域通信与 getDeployCode_neoAgg 自动部署协议。",
-    category: "builtin",
-    iconName: "LayoutTemplate",
-    triggerKeywords: ["Nex", "页面扩展", "view(ctx, props)", "EntityForm", "EntityDetail", "EntityList", "getDeployCode_neoAgg", "DevTools"],
-    enabled: true,
-  },
+
 ];

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, shell } from 'electron';
-import { WorkspaceProject } from '../../shared/types';
+import { WorkspaceProject, ProjectDirectoryRequest, ProjectDirectoryResult, ProjectDirNode } from '../../shared/types';
+import { ProjectDirectoryReader, PROJECT_IGNORED_DIRECTORIES } from './projectDirectoryReader';
 
 export class ProjectService {
   private getStoragePath(): string {
@@ -106,15 +107,11 @@ export class ProjectService {
     return resolved;
   }
   // 快速缓存，防止大任务工具连环触发造成瞬时万次磁盘扫描把主进程卡死
-  private treeCache = new Map<string, { time: number; tree: any[] }>();
+  private directoryReader = new ProjectDirectoryReader();
   private artifactsCache = new Map<string, { time: number; list: any[] }>();
 
   // 强化过滤清单：彻底屏蔽现代工程常见海量噪音目录
-  private static readonly IGNORE_DIRS = new Set([
-    '.git', 'node_modules', 'dist', 'dist-electron', '.dsh', 'build', 
-    '.vscode', '.idea', 'coverage', '.next', '.nuxt', '.turbo', '.cache', 
-    'target', 'bin', 'obj', '.gradle', '.cargo', 'vendor', '__pycache__', '.pytest_cache'
-  ]);
+  private static readonly IGNORE_DIRS = PROJECT_IGNORED_DIRECTORIES;
 
   public listFiles(params?: { folderPath?: string; query?: string; maxFiles?: number }): Array<{
     name: string;
@@ -162,75 +159,19 @@ export class ProjectService {
     return results;
   }
 
-  public getDirTree(folderPath?: string, maxDepth = 6): Array<{
-    name: string;
-    path: string;
-    relativePath: string;
-    type: 'directory' | 'file';
-    ext?: string;
-    size?: number;
-    children?: any[];
-  }> {
-    const baseDir = this.validateProjectFolder(folderPath);
-
-    // 2.5 秒极速缓存守护：高频工具调用期间直接命中内存，消除万次同步 IO
-    const now = Date.now();
-    const cached = this.treeCache.get(baseDir);
-    if (cached && now - cached.time < 2500) {
-      return cached.tree;
+  public async readDirectory(params: ProjectDirectoryRequest): Promise<ProjectDirectoryResult> {
+    if (!params.folderPath?.trim()) throw new Error('请先选择项目目录');
+    const baseDir = this.validateProjectFolder(params.folderPath);
+    if (baseDir !== path.resolve(params.folderPath.trim())) {
+      throw new Error(`项目目录不存在: ${params.folderPath}`);
     }
+    return this.directoryReader.read({ ...params, folderPath: baseDir });
+  }
 
-    let totalNodes = 0;
-    const maxNodesCap = 1500; // 树节点安全熔断硬上限，防止海量文件打死前端渲染和主线程
-
-    const scan = (dir: string, depth: number): any[] => {
-      if (depth > maxDepth || totalNodes >= maxNodesCap) return [];
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        entries.sort((a, b) => {
-          if (a.isDirectory() && !b.isDirectory()) return -1;
-          if (!a.isDirectory() && b.isDirectory()) return 1;
-          return a.name.localeCompare(b.name, 'en', { numeric: true });
-        });
-
-        const items: any[] = [];
-        for (const entry of entries) {
-          if (entry.name.startsWith('.') || ProjectService.IGNORE_DIRS.has(entry.name)) continue;
-          const full = path.join(dir, entry.name);
-          const rel = path.relative(baseDir, full);
-          totalNodes++;
-
-          if (entry.isDirectory()) {
-            items.push({
-              name: entry.name,
-              path: full,
-              relativePath: rel,
-              type: 'directory',
-              children: scan(full, depth + 1),
-            });
-          } else if (entry.isFile()) {
-            let size = 0;
-            try { size = fs.statSync(full).size; } catch {}
-            items.push({
-              name: entry.name,
-              path: full,
-              relativePath: rel,
-              type: 'file',
-              ext: path.extname(entry.name).toLowerCase(),
-              size,
-            });
-          }
-          if (totalNodes >= maxNodesCap) break;
-        }
-        return items;
-      } catch {
-        return [];
-      }
-    };
-
-    const result = scan(baseDir, 1);
-    this.treeCache.set(baseDir, { time: now, tree: result });
-    return result;
+  public async getDirTree(folderPath?: string, maxDepth = 6): Promise<ProjectDirNode[]> {
+    const baseDir = this.validateProjectFolder(folderPath);
+    const result = await this.directoryReader.read({ folderPath: baseDir }, Math.max(1, maxDepth));
+    return result.nodes;
   }
 
   public getRecentArtifacts(folderPath?: string, limit = 30): Array<{

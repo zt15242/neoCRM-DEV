@@ -1,3 +1,5 @@
+import { useRestrictedFeatures, consumeAccessCommand } from '../../security/RestrictedFeatures';
+import { requiresRoleLicense } from '../../../shared/licensePolicy';
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ArrowUp,
@@ -115,6 +117,7 @@ interface AiInputComposerProps {
   currentProviderId?: string;
   currentModelId?: string;
   onSelectModel?: (providerId: string, modelId: string) => void;
+  currentPresetId?: string;
   currentPresetName?: string;
   tenantName?: string;
   productType?: 'neocrm' | 'salesforce' | 'fxiaoke' | 'custom';
@@ -158,6 +161,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   currentProviderId,
   currentModelId,
   onSelectModel,
+  currentPresetId,
   currentPresetName,
   tenantName = '沙盒环境',
   productType = 'neocrm',
@@ -590,7 +594,12 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   ];
 
   // 过滤后的指令列表
+  const { visible: privateFeaturesVisible, isRoleVisible } = useRestrictedFeatures();
+  useEffect(() => {
+    if (!privateFeaturesVisible && activeCommand?.id === 'flow') setActiveCommand(null);
+  }, [privateFeaturesVisible, activeCommand?.id]);
   const filteredCommands = ALL_SLASH_COMMANDS.filter((c) => {
+    if (!privateFeaturesVisible && c.id === 'flow') return false;
     if (!slashQuery.trim()) return true;
     const q = slashQuery.toLowerCase();
     return c.command.toLowerCase().includes(q) || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q);
@@ -803,7 +812,17 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     focusTextarea();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    try {
+      if (await consumeAccessCommand(text)) {
+        setText(''); setActiveCommand(null); setSlashMenuOpen(false);
+        return;
+      }
+    } catch {
+      setText(''); setActiveCommand(null); setSlashMenuOpen(false);
+      showToast?.('error', '本地指令处理失败');
+      return;
+    }
     if (isStreaming) {
       onStop();
       return;
@@ -1270,14 +1289,14 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           </div>
 
           {/* 角色标识徽标 */}
-          {currentPresetName && (
+          {currentPresetName && isRoleVisible(currentPresetId) && (
             <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-mono">
               {currentPresetName.split(' (')[0]}
             </span>
           )}
 
           {/* 自动流程与审批流角色设备锁状态胶囊 (直观可见剩余天数与锁状态) */}
-          {(currentPresetName?.includes('流程') || currentPresetName?.includes('审批') || currentPresetName?.includes('BI') || currentPresetName?.includes('Nex')) && (
+          {isRoleVisible(currentPresetId) && requiresRoleLicense(currentPresetId) && (
             <button
               type="button"
               onClick={onOpenLicenseModal}
@@ -1362,7 +1381,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           {isStreaming ? (
             <button
               type="button"
-              onClick={onStop}
+              onClick={() => onStop()}
               disabled={isStopping}
               className="w-8 h-8 rounded-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-400 text-white flex items-center justify-center transition-all shadow-xs cursor-pointer disabled:cursor-wait"
               title={isStopping ? '正在停止生成' : '停止生成'}

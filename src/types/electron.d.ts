@@ -1,3 +1,5 @@
+import type { RestrictedFeatureStatus, AccessCommand } from '../../shared/restrictedFeatures';
+import type { WorkflowListParams, WorkflowListResult, WorkflowDetailResult } from '../../shared/types';
 import { 
   EmailItem, 
   EmailAccount, 
@@ -82,6 +84,7 @@ declare global {
       deleteAccountRecord: (accountId: string) => Promise<boolean>;
 
       syncToNeoCli: (targetDirPath?: string) => Promise<CliSyncResult>;
+      setNeoCliProjectRoot: (rootPath: string) => Promise<SessionState>;
       selectFolder: () => Promise<string | null>;
       // 本地项目工作区 (Projects)
       projectGetProjects: () => Promise<WorkspaceProject[]>;
@@ -100,6 +103,7 @@ declare global {
       shellOpenPath: (targetPath: string) => Promise<string>;
       shellShowItemInFolder: (targetPath: string) => Promise<boolean>;
       projectGetDirTree: (folderPath?: string, maxDepth?: number) => Promise<ProjectDirNode[]>;
+      projectReadDirectory: (params: import('../../shared/types').ProjectDirectoryRequest) => Promise<import('../../shared/types').ProjectDirectoryResult>;
       projectGetRecentArtifacts: (folderPath?: string, limit?: number) => Promise<WorkspaceArtifactItem[]>;
       projectGetWorkspaceChanges?: (folderPath?: string) => Promise<WorkspaceGitChangesSummary>;
       projectGetFileDiff?: (filePath: string, folderPath?: string) => Promise<{ success: boolean; diff: string; error?: string }>;
@@ -170,7 +174,7 @@ declare global {
         projectPath?: string;
         mode?: "standard" | "ptc" | "minimal" | "plan" | "default";
       }) => Promise<boolean>;
-      aiAbortChatStream: (requestId: string) => Promise<boolean>;
+      aiAbortChatStream: (targetId?: string) => Promise<boolean>;
       aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;
       aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => Promise<AiFileAttachment>;
       aiSaveMcpServer: (server: McpServerConfig) => Promise<McpServerConfig[]>;
@@ -205,6 +209,11 @@ declare global {
       }>;
       onAiStreamEvent: (callback: (event: AiStreamEvent) => void) => () => void;
       // 自动流程 (Automatic Flow) & 本地设备安全锁
+      restrictedAccessStatus: () => Promise<RestrictedFeatureStatus>;
+      restrictedAccessCommand: (action: AccessCommand) => Promise<void>;
+      restrictedAccessUnlock: (key: string) => Promise<{ success: boolean; message: string; status: RestrictedFeatureStatus }>;
+      onRestrictedAccessChanged: (callback: (status: RestrictedFeatureStatus) => void) => () => void;
+      onRestrictedAccessPrompt: (callback: () => void) => () => void;
       workflowGetLicenseStatus: () => Promise<WorkflowLicenseStatus>;
       workflowActivateLicense: (password: string) => Promise<WorkflowLicenseActivateResult>;
       workflowDeployPlan: (plan: WorkflowDeployPlan, options?: { autoEnable?: boolean }) => Promise<WorkflowDeployResult>;
@@ -216,7 +225,7 @@ declare global {
         busiTypes: Array<{ id: number | string; apiKey: string; label: string }>;
         picklistFields: Array<{ apiKey: string; label: string; options: Array<{ code: number | string; label: string }> }>;
       }>;
-      workflowListTenantFlows: (params?: { procType?: 1 | 2; keyword?: string; pageNo?: number; pageSize?: number; status?: number }) => Promise<{ success: boolean; data?: TenantFlowItem[]; total?: number; totalInTenant?: number; matchedKeyword?: string; allFlowsSummary?: any[]; error?: string }>;
+      workflowListTenantFlows: (params?: WorkflowListParams) => Promise<WorkflowListResult>;
       workflowCopyFlow: (params: {
         procdefId: string | number;
         processName: string;
@@ -232,7 +241,7 @@ declare global {
       }) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
       workflowDeleteFlow: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; error?: string }>;
       workflowListFlows: (params?: { keyword?: string; pageNo?: number; pageSize?: number; status?: number }) => Promise<{ success: boolean; data?: any; error?: string }>;
-      workflowGetFlowDetail: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; definition?: any; property?: any; error?: string }>;
+      workflowGetFlowDetail: (procdefId: string | number, procType?: number) => Promise<WorkflowDetailResult>;
       workflowToggleStatus: (procdefId: string | number, enable: boolean, procType?: number) => Promise<{ success: boolean; status?: number; error?: string }>;
       workflowReviseVersion: (procdefId: string | number, procType?: number) => Promise<{ success: boolean; newProcdefId?: string | number; error?: string }>;
       workflowTriggerInstance: (payload: { processDefinitionApiKey: string; entityApiKey: string; dataId: string | number; beforeData?: Record<string, any> }) => Promise<{ success: boolean; message: string; error?: string }>;

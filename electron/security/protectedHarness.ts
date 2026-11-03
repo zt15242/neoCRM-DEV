@@ -1,3 +1,9 @@
+import restrictedSkillAssets from './restrictedSkillAssets.json';
+import { restrictedFeatureService } from './restrictedFeatureService';
+import { isRestrictedSkill } from '../../shared/restrictedFeatures';
+import { decryptBuiltinSkillAsset } from './protectedSkillAssets';
+import { NEO_CLI_SKILLS_INSTRUCTIONS } from './neoCliSkills';
+import { getNeoCliConversationSkill } from './neoCliConversation';
 /**
  * NeoCRM Desktop 内核受保护的私有资产与安全规范
  * 注意: 本文件包含深度封装的系统技能与内部 Harness 工具定义，受内核混淆保护，禁止导出与反向破解。
@@ -20,11 +26,11 @@ const OBFUSCATED_BUILTIN_SKILLS: Record<string, string> = {
   // CRM 业务数据质检与清洗
   'skill-data-quality': 'je7+LTwjToj73ojjwIbaxojN7k49BQcCAk6GyeqG4u2N7v9UZF9ATojn5Yjy1Ivh2YjOz4fE4orWw4v104vKyYf36E5fX06K0+NOXzVdQ1czChVXE06Iw82L5veB0vVkXEBOidXxitbuicrQitL0itHPifrGitXNic7viM7Ph8TiTl9WTorT44jO0ovS4YrW4IjOz4fE4onO74bJ6ovm94HS9WRdQE6Ize6I8cuL0euLz8WHz9eJ0tSLyt+N7u+H6eOLyuOI+96I48CK1uCI+c6I++aL692G7/qLyviH+sCB0vVkWkBOidX3i+nUiNbriPfeifTqh/nAh8z2itbLh+njicPnidTJi+boi9btiOTLi//kitbgiPveiOPAitHAi8rjTj0/Ik6L1dSGwMCN7uw=',
 
-  // 审批流架构与部署专家核心系统指令 (受硬件设备锁保护)
-  "preset-approval-architect": "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",
+  // 审批流架构与部署专家核心指令 (内置加密保护，无设备授权限制)
+  "preset-approval-architect": "neo-skill:v1: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",
 
   // 自动流程架构与部署专家核心系统指令 (受硬件设备锁保护)
-  "preset-autoflow-architect": "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",
+  "preset-autoflow-architect": "neo-skill:v1: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",
 };
 
 /**
@@ -32,6 +38,7 @@ const OBFUSCATED_BUILTIN_SKILLS: Record<string, string> = {
  */
 function deobfuscate(encoded: string, key = 0x6e): string {
   try {
+    if (encoded.startsWith('neo-skill:v1:')) return decryptBuiltinSkillAsset(encoded);
     const buf = Buffer.from(encoded, 'base64');
     for (let i = 0; i < buf.length; i++) {
       buf[i] = buf[i] ^ key;
@@ -107,44 +114,7 @@ export const FXIAOKE_SKILL_INSTRUCTION = `【系统全局首要植入规范：�
    - 绝对不向外部暴露任何密钥凭证。
 `;
 
-export const NEOBI_ARCHITECT_INSTRUCTION = `【系统全局首要植入规范：销售易智能分析代码实施与部署大师 (NeoBI Architect)】
-你是一个精通销售易新版智能分析（NeoBI / 配置服务根路径 \`/rest/neobi/v2.0/\`）全生命周期的顶尖代码级部署大师。
-你严格遵循《销售易智能分析代码实施指南》，面向开发人员与执行 Agent，不依赖前端手工拖拽，通过代码与标准 JSON 资产向平台提交持久化定义，实现数据源 (dataResource)、视图 (view)、看板 (board)、报告 (report) 的构建、配置部署与独立对账验收。
-
-【核心工程认知与十步依赖实施链（铁律）】：
-1. 【固定业务口径先行】：在写任何配置前，必须先确定统计对象、主键、去重规则、时间字段与粒度（日/月/年）、时间范围、币种换算、权限类型、零值与空值处理。
-2. 【空间与权限核查】：读取当前租户许可、空间（注意：个人空间负号合法，如 -4166689482228720，负号有明确业务语义，严禁擅自取绝对值）、实体字段与关联候选；先备份被修改资源。
-3. 【数据源建立与对账】：确定主表、从表、连接类型（leftJoin / innerJoin）与连接字段。左连接保留左主表全集，内连接只保留匹配行。关系图必须连通、无环、无孤立节点。必须先对账连接后的基数！
-4. 【独立资源准备】：历史快照、外部数据或共享计算字段先作为独立资源准备，再加入数据源。普通实时 CRM 分析不必经过数据集。
-5. 【视图双套配置严格同步 (web.dataConfig + server)】：
-   - web.dataConfig 负责编辑器字段槽（dimensionSetInfo, measureSetInfo, toolTipDimensionSetInfo 等）、字段属性、展示标签与本地引用标识 (fieldWebId)；
-   - server 负责后端实际查询定义（dimensions, measures, filters, orders, queryConfig）；
-   - 【双套一致铁律】：两套必须严格保持一致！只改一套会导致“能查询但重开编辑丢配置”或“编辑器显示已改但查询仍旧”的不一致！
-   - 保存时清理临时设计器属性（如 dataSetConfig, dataSourceNodeList, gettingData 等），补齐 web.viewBaseOnIndicator。
-6. 【保存后独立查询回读验收】：创建或更新 view 后，必须调用 query/query 执行真实查询回读验证，核对聚合值、分组、排序与筛选结果。预览 (queryView) 不能替代独立查询验收！
-7. 【建立看板并关联报告】：维护视图引用与桌面/移动布局，最后将真实看板 ID 按顺序关联到报告 (report)。
-8. 【配置五大高级交互】：看板全局筛选控件 (filterConfig)、图表联动 (linkage)、维度下钻 (drillInfo)、对象列表穿透 (penetrate)、带参跳转 (jump)。
-9. 【展示与权限配置】：配置展示、缓存周期 (cachePeriod: 缓存优先/12h/4h/1h/30m/10m/5m)、共享与订阅。
-10. 【迁移与部署防错】：跨租户时必须校验模型与字段 ID 映射，导入后独立读回运行。
-
-【统计粒度与基数防错铁律】：
-- 明确统计口径：“商机数”包含原始商机记录数、连接后行数、主键去重数三种完全不同的口径！
-- 当商机左连接一对多子表（如产品明细、跟进记录）后，主表记录数 count 与金额 sum 必然发生重复放大！必须先用可追溯查询获取主表行数、连接后行数与主键去重数对账；严禁通过图表显示格式去掩盖重复金额！
-- 维度使用稳定 ID 识别分组，同名客户或重命名阶段必须保持独立业务组。
-
-【21 类图表配置配方精粹】：
-- 一维图：一个分类维度 + 多个度量；
-- 多维图：轴维度 + 分组维度 + 一个度量；
-- 阶段漏斗 (biViewFunnel) vs 通用漏斗 (biViewCommonFunnel)：阶段漏斗保存 stageSet[].width/height、stageConfigSet 与阶段身份；通用漏斗使用普通维度与 funnelHeightDataSets/funnelWidthDataSets，两套序列化完全不同，严禁混淆；
-- 地图：地域维度必须是合法地理编码；
-- 双轴图：左/右轴范围与度量单位严格匹配。
-
-【API 编码与调用范式】：
-- 接口统一以 /rest/neobi/v2.0/ 为基准；
-- POST/PATCH 使用 application/x-www-form-urlencoded，每个对象/数组参数先 JSON.stringify 再编码到表单；
-- 严禁把 modelJson 双重字符串化；
-- 核心接口：dataResource/save, view/addView, view/updateView, view/getView, query/queryView, query/query, board/addBoard, board/updateBoard, report/addReport, report/getReport。
-`;
+// Role instructions are encrypted assets and decrypted after explicit access verification.
 
 export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范：Salesforce CLI (sf v2) 架构与安全操作规范】
 你是一个精通 Salesforce 全生态架构与官方 sf v2 工具链的顶尖专家。
@@ -175,43 +145,87 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 `;
 
 
-export const NEX_ARCHITECT_INSTRUCTION = `【系统全局首要植入规范：销售易 Nex 2.0 页面扩展开发专家与自动化部署大师 (Nex Architect)】
-你是一个精通销售易 Nex 2.0 前端页面扩展 (view(ctx, props)) 全生命周期开发、作用域联动与自动化部署的顶尖专家架构师。
-你遵循第一人称「我」的实测型研判，始终以真实对象元数据、真实代码架构规范与工作区物理代码文件为唯一事实标准。
 
-【核心执行铁律 - 绝不允许违背】：
-1. 【字段真实性先行 - 严禁凭空臆造字段 API Key】：
-   - 在为目标对象（如商机 newOpportunity、客户 account、合同 contract、自定义对象等）编写扩展或联动逻辑前，必须在第一步自动调用 \`get_entity_fields\` 工具核准该实体在当前租户真实存在的字段 API Key；
-   - 严格核实商机阶段 (stage__c)、赢单原因 (win_reason__c)、总金额 (amount) 等字段的真实性，绝对严禁主观凭空编造不存在的字段！
-2. 【Nex 2.0 核心代码架构铁律 (view(ctx, props))】：
-   - 每一个 Nex 2.0 扩展脚本必须导出全局 \`view(ctx, props)\` 入口函数，结构必须包含：
-     - \`type\`: 匹配页面场景，合法值仅为 \`"EntityForm"\` (表单新建/编辑页)、\`"EntityDetail"\` (详情页)、\`"EntityList"\` (列表页)、\`"neoUIFramework"\` (首页框架)；
-     - \`layoutExtension\`: 页面级布局与生命周期扩展（必须包含 \`onMounted\` 与 \`onDestroyed\`）；
-     - \`componentExtensions\`: 组件级行为与属性扩展。
-   - 【组件定位 scope 铁律】：
-     - 表单字段扩展路径必须为 \`componentExtensions.entityForm.entityFormMaster.formItem\`；
-     - 每一项字段配置必须显式指定 \`scope: { itemApiKey: "真实字段Key" }\`！
-     - 按钮扩展路径必须显式指定 \`scope: { buttonApiKey: "按钮Key" }\`！
-   - 【数据响应式更新铁律】：
-     - 字段联动取值使用 \`e.data.value\`；回写赋值必须调用 \`e.cmp.setFormData({...})\` 或 \`props.getComponent("entityFormMaster", null, true).setFormData({...})\`，严禁通过原生 DOM 操作表单！
-   - 【接口与交互规范】：
-     - 接口请求必须调用 \`ctx.api.request({ url, method, data, headers })\`，自动携带租户鉴权会话；
-     - 原生提示必须调用 \`ctx.ui.showToast("success"|"error"|"warning"|"info", message)\`。
-3. 【物理文件直通生成 - 严禁空谈 Markdown 与虚构假动作】：
-   - 面对用户的 Nex 扩展需求，绝对严禁仅在回复中输出 JavaScript 代码块就宣称“已部署”！
-   - 你必须直接调用 \`generate_nex_extension\` 专用工具，在当前本地项目工作区直接生成真实合规的 \`src/nex/{nexName}/index.js\`、\`manifest.json\` 与 \`README.md\` 文件！
-   - 扩展唯一命名规范严格遵循：\`{objectApiKey}_{clientType}_{pageType}\`（例如 \`newOpportunity_web_entityForm\`）。
-4. 【逆向官方通信指令与全自动发布部署 (getDeployCode_neoAgg)】：
-   - 掌握销售易官方 Nex DevTools 14 大逆向通信指令（getCurrentNeoInfo_neoAgg, getNeoExtList_neoAgg, getCode_neoAgg, getDeployCode_neoAgg 等）；
-   - 代码就绪后，直接调用 \`deploy_nex_extension\` 工具将代码转译、计算 SHA256 指纹并自动下发部署，实现全租户生效与版本自动递增！
-5. 【任务清单全部闭环推进 (Todo Completion)】：
-   - 若建立了 todo_write 任务清单，必须负责到底，每完成调研、生成或部署步骤，必须紧接着调用 todo_write 将任务更新为 completed；
-   - 严禁在仍有任务未完成时提前停止工具调用，必须所有任务项全为 completed 全部完成后才输出最终交付汇报！
-`;
 
 export function getProtectedSkillInstruction(skillId: string): string | null {
+  if (isRestrictedSkill(skillId)) {
+    if (!restrictedFeatureService.canUseSkill(skillId)) return null;
+    const canonical = skillId.replace(/^(?:preset-|skill-)/, '');
+    return decryptBuiltinSkillAsset(restrictedSkillAssets[canonical as keyof typeof restrictedSkillAssets]);
+  }
+  const cliSkill = getNeoCliConversationSkill(skillId);
+  if (cliSkill) return cliSkill;
   if (instructionCache.has(skillId)) {
     return instructionCache.get(skillId) || null;
+  }
+
+  // 1. 审批流架构师角色 & neo-approval-flow-designer 全面替换
+  if (
+    skillId === "preset-approval-architect" ||
+    skillId === "approval-architect" ||
+    skillId === "skill-neo-approval-flow-designer" ||
+    skillId === "neo-approval-flow-designer" ||
+    skillId === "skill-approval-architect" ||
+    skillId === "skill-process-implementation-perspective" ||
+    skillId === "salesyi-process-implementation-perspective"
+  ) {
+    const text = NEO_CLI_SKILLS_INSTRUCTIONS["neo-approval-flow-designer"];
+    if (text) {
+      instructionCache.set(skillId, text);
+      return text;
+    }
+  }
+
+  // 2. Nex 页面扩展角色 & neo-nex-dev 全面替换
+  if (
+    skillId === "preset-nex-architect" ||
+    skillId === "nex-architect" ||
+    skillId === "skill-neo-nex-dev" ||
+    skillId === "neo-nex-dev" ||
+    skillId === "skill-salesyi-nex-dev" ||
+    skillId === "salesyi-nex-dev"
+  ) {
+    const text = NEO_CLI_SKILLS_INSTRUCTIONS["neo-nex-dev"];
+    if (text) {
+      instructionCache.set(skillId, text);
+      return text;
+    }
+  }
+
+  // 3. 所有 neo CLI 系列官方内置技能动态解析
+  const normalizedNeoKey = skillId.replace(/^skill-/, "");
+  if (NEO_CLI_SKILLS_INSTRUCTIONS[normalizedNeoKey]) {
+    const text = NEO_CLI_SKILLS_INSTRUCTIONS[normalizedNeoKey];
+    instructionCache.set(skillId, text);
+    return text;
+  }
+
+  // 4. 数据建模、XOQL/SQL 查询、触发器开发历史技能全面映射至官方 neo CLI 标准
+  if (skillId === "skill-schema-design" || skillId === "schema-design") {
+    const text = NEO_CLI_SKILLS_INSTRUCTIONS["neo-entity-management"];
+    if (text) {
+      instructionCache.set(skillId, text);
+      return text;
+    }
+  }
+  if (
+    skillId === "skill-xoql-expert" ||
+    skillId === "xoql-expert" ||
+    skillId === "skill-paas-trigger" ||
+    skillId === "paas-trigger"
+  ) {
+    const text = NEO_CLI_SKILLS_INSTRUCTIONS["neo-backend-dev"];
+    if (text) {
+      instructionCache.set(skillId, text);
+      return text;
+    }
+  }
+  if (skillId === "skill-data-quality" || skillId === "data-quality") {
+    const text = NEO_CLI_SKILLS_INSTRUCTIONS["neo-entity-rule-management"];
+    if (text) {
+      instructionCache.set(skillId, text);
+      return text;
+    }
   }
   if (
     skillId === "preset-print-template-architect" ||
@@ -223,6 +237,10 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
   if (
     skillId === "preset-workflow-architect" ||
     skillId === "preset-approval-architect" ||
+    skillId === "approval-architect" ||
+    skillId === "skill-approval-architect" ||
+    skillId === "neo-approval-flow-designer" ||
+    skillId === "skill-neo-approval-flow-designer" ||
     skillId === "skill-process-implementation-perspective" ||
     skillId === "salesyi-process-implementation-perspective"
   ) {
@@ -249,21 +267,6 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
   ) {
     return SALESFORCE_SKILL_INSTRUCTION;
   }
-  if (
-    skillId === "preset-neobi-architect" ||
-    skillId === "skill-neobi-architect" ||
-    skillId === "neobi-architect"
-  ) {
-    return NEOBI_ARCHITECT_INSTRUCTION;
-  }
-  if (
-    skillId === "preset-nex-architect" ||
-    skillId === "skill-salesyi-nex-dev" ||
-    skillId === "salesyi-nex-dev" ||
-    skillId === "nex-architect"
-  ) {
-    return NEX_ARCHITECT_INSTRUCTION;
-  }
   const raw = OBFUSCATED_BUILTIN_SKILLS[skillId];
   if (!raw) return null;
   const decoded = deobfuscate(raw);
@@ -278,13 +281,22 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
  * 判断是否为受保护的系统级内置技能
  */
 export function isProtectedBuiltinSkill(skillId: string): boolean {
+  const norm = skillId.replace(/^skill-/, "");
+  if (NEO_CLI_SKILLS_INSTRUCTIONS[norm]) return true;
+
+  if (getNeoCliConversationSkill(skillId)) return true;
   return (
+    isRestrictedSkill(skillId) ||
     Boolean(OBFUSCATED_BUILTIN_SKILLS[skillId]) ||
     skillId === "preset-print-template-architect" ||
     skillId === "skill-print-template-engineer-perspective" ||
     skillId === "salesy-print-template-engineer-perspective" ||
     skillId === "preset-workflow-architect" ||
     skillId === "preset-approval-architect" ||
+    skillId === "approval-architect" ||
+    skillId === "skill-approval-architect" ||
+    skillId === "neo-approval-flow-designer" ||
+    skillId === "skill-neo-approval-flow-designer" ||
     skillId === "skill-process-implementation-perspective" ||
     skillId === "salesyi-process-implementation-perspective" ||
     skillId === "preset-fxiaoke-architect" ||
@@ -754,7 +766,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'list_flows',
-      description: '查询当前租户环境中已配置的自动流程 (procType=1) 与审批流 (procType=2) 资产列表。支持指定 procType (1: 自动流程, 2: 审批流, 缺省则查询全部两类流程)，支持关键字过滤，返回流程名称、主对象、状态(启用/设计态/禁用)及版本。当用户询问租户有哪些流程、或要求修改/优化/禁用现有流程时，必须先调用此工具查询租户现状！',
+      description: '查询当前租户环境中已配置的自动流程 (procType=1) 与审批流 (procType=2) 资产列表。销售易审批流由宿主先执行 neo CLI，只有失败时才回退原有方式；结果标明实际来源与回退原因。支持指定 procType (1: 自动流程, 2: 审批流, 缺省则查询全部两类流程)，支持关键字过滤，返回流程名称、主对象、状态(启用/设计态/禁用)及版本。当用户询问租户有哪些流程、或要求修改/优化/禁用现有流程时，必须先调用此工具查询租户现状！',
       parameters: {
         type: 'object',
         properties: {
@@ -774,7 +786,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'get_flow_detail',
-      description: '调阅当前租户指定流程版本 (procdefId) 的完整定义、图模型节点、连线与业务配置详情。支持 procType: 1 (自动流程) 或 2 (审批流)。可用于深入分析现有流程并指导用户修改、优化、增删节点或复制。',
+      description: '调阅当前租户指定流程版本 (procdefId) 的完整定义、图模型节点、连线与业务配置详情。销售易审批流优先执行 neo retrieve approvalprocess，失败才回退原有方式。支持 procType: 1 (自动流程) 或 2 (审批流)。可用于深入分析现有流程并指导用户修改、优化、增删节点或复制。',
       parameters: {
         type: 'object',
         properties: {

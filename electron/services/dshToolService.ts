@@ -3,6 +3,7 @@ import path from 'node:path';
 import { exec, execSync, spawn, ChildProcess } from 'node:child_process';
 import { WorkspaceGitChangesSummary, WorkspaceGitChangeItem } from '../../shared/types';
 import axios from 'axios';
+import { getNeoCliEnvironment } from './neoCliRuntime';
 
 export interface DshTodoItem {
   content: string;
@@ -229,7 +230,7 @@ export class DshToolService {
         cwd,
         shell: isWin ? 'cmd.exe' : '/bin/bash',
         env: {
-          ...process.env,
+          ...getNeoCliEnvironment(),
           CI: 'true',
           SF_USE_PROGRESS_BAR: 'false',
           FORCE_COLOR: '0',
@@ -313,7 +314,7 @@ export class DshToolService {
           timeout,
           maxBuffer: 25 * 1024 * 1024,
           env: {
-            ...process.env,
+            ...getNeoCliEnvironment(),
             CI: 'true',
             SF_USE_PROGRESS_BAR: 'false',
             FORCE_COLOR: '0',
@@ -331,6 +332,7 @@ export class DshToolService {
           job.exitCode = error ? error.code || 1 : 0;
           job.endTime = Date.now();
           job.outputBuffer = (rawStdout + (rawStderr ? `\n[Stderr]: ${rawStderr}` : '')).slice(-100000);
+          if (abortHandler) signal?.removeEventListener('abort', abortHandler);
 
           resolve({
             stdout: cleanStdout,
@@ -342,11 +344,19 @@ export class DshToolService {
       );
       job.process = child;
       const abortHandler = () => {
-        if (child.exitCode === null) child.kill();
+        if (child.exitCode === null && child.pid) {
+          try {
+            if (isWin) {
+              exec(`taskkill /pid ${child.pid} /T /F`, () => {});
+            } else {
+              child.kill('SIGKILL');
+            }
+          } catch {}
+        }
+        reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
       };
       if (signal?.aborted) {
         abortHandler();
-        reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' }));
         return;
       }
       signal?.addEventListener('abort', abortHandler, { once: true });
@@ -1109,11 +1119,15 @@ export class DshToolService {
       ptcJob.endTime = Date.now();
       ptcJob.outputBuffer = logs.join('\n') + `\n[${wasAborted ? 'Stopped' : 'Error'}]: ${err.message}`;
 
+      if (wasAborted) {
+        throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
+      }
+
       return {
         value: null,
         logs: logs.slice(-200),
         executionTimeMs: Date.now() - startTime,
-        error: wasAborted ? 'PTC 程序已停止' : `PTC 程序运行异常: ${err.message}`,
+        error: `PTC 程序运行异常: ${err.message}`,
       };
     }
   }

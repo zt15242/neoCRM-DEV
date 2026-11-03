@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { CreateEntityPayload, CreateFieldPayload } from '../shared/types';
+import { CreateEntityPayload, CreateFieldPayload, ProjectDirectoryRequest } from '../shared/types';
 
 export const neoApi = {
   // 环境
@@ -35,6 +35,7 @@ export const neoApi = {
 
   // 凭证同步与通用
   syncToNeoCli: (targetDirPath?: string) => ipcRenderer.invoke('cli:sync', targetDirPath),
+  setNeoCliProjectRoot: (rootPath: string) => ipcRenderer.invoke('cli:setProjectRoot', rootPath),
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   // 本地项目工作区 (Projects)
   projectGetProjects: () => ipcRenderer.invoke('project:getProjects'),
@@ -47,6 +48,7 @@ export const neoApi = {
   shellOpenPath: (targetPath: string) => ipcRenderer.invoke('shell:openPath', targetPath),
   shellShowItemInFolder: (targetPath: string) => ipcRenderer.invoke('shell:showItemInFolder', targetPath),
   projectGetDirTree: (folderPath?: string, maxDepth?: number) => ipcRenderer.invoke('project:getDirTree', folderPath, maxDepth),
+  projectReadDirectory: (params: ProjectDirectoryRequest) => ipcRenderer.invoke('project:readDirectory', params),
   projectGetRecentArtifacts: (folderPath?: string, limit?: number) => ipcRenderer.invoke('project:getRecentArtifacts', folderPath, limit),
   projectGetWorkspaceChanges: (folderPath?: string) => ipcRenderer.invoke('project:getWorkspaceChanges', folderPath),
   projectGetFileDiff: (filePath: string, folderPath?: string) => ipcRenderer.invoke('project:getFileDiff', filePath, folderPath),
@@ -112,7 +114,7 @@ export const neoApi = {
   aiDeleteSession: (sessionId: string) => ipcRenderer.invoke('ai:deleteSession', sessionId),
   aiClearSessions: () => ipcRenderer.invoke('ai:clearSessions'),
   aiStartChatStream: (params: any) => ipcRenderer.invoke('ai:startChatStream', params),
-  aiAbortChatStream: (requestId: string) => ipcRenderer.invoke('ai:abortChatStream', requestId),
+  aiAbortChatStream: (targetId?: string) => ipcRenderer.invoke('ai:abortChatStream', targetId),
   aiSelectAndParseFile: () => ipcRenderer.invoke('file:selectAndParse'),
   aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke('file:parseBuffer', fileName, buffer),
   aiSaveMcpServer: (server: any) => ipcRenderer.invoke('ai:saveMcpServer', server),
@@ -125,6 +127,19 @@ export const neoApi = {
   aiImportSkillZipBuffer: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke("ai:importSkillZipBuffer", fileName, buffer),
   aiExportSkillZip: (skillIds?: string[]) => ipcRenderer.invoke("ai:exportSkillZip", skillIds),
   // 自动流程 (Automatic Flow) & 设备安全锁
+  restrictedAccessStatus: () => ipcRenderer.invoke('access:status'),
+  restrictedAccessCommand: (action: string) => ipcRenderer.invoke('access:command', action),
+  restrictedAccessUnlock: (key: string) => ipcRenderer.invoke('access:unlock', key),
+  onRestrictedAccessChanged: (callback: (status: any) => void) => {
+    const listener = (_: any, status: any) => callback(status);
+    ipcRenderer.on('access:changed', listener);
+    return () => ipcRenderer.removeListener('access:changed', listener);
+  },
+  onRestrictedAccessPrompt: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('access:prompt', listener);
+    return () => ipcRenderer.removeListener('access:prompt', listener);
+  },
   workflowGetLicenseStatus: () => ipcRenderer.invoke("license:getStatus"),
   workflowActivateLicense: (password: string) => ipcRenderer.invoke("license:activate", password),
   workflowDeployPlan: (plan: any, options?: { autoEnable?: boolean }) => ipcRenderer.invoke("workflow:deployPlan", plan, options),

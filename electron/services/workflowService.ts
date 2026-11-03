@@ -1,10 +1,119 @@
+import { NeoApprovalCliReader, type WorkflowReadOptions } from './neoApprovalCli';
+import type { SessionStore } from './sessionStore';
+import type { WorkflowReadTrace, WorkflowListParams, WorkflowListResult, WorkflowDetailResult } from '../../shared/types';
 import axios from 'axios';
 import { NeoEnvironment, TokenData, WorkflowDeployPlan, WorkflowDeployResult, ApprovalDeployPlan, TenantFlowItem, WorkflowNodeItem } from '../../shared/types';
 import { MetadataService } from './metadataService';
 import { DataService } from './dataService';
 
 export class WorkflowService {
-  constructor(private metadataService: MetadataService, private dataService: DataService = new DataService()) {}
+  constructor(
+    private metadataService: MetadataService,
+    private dataService: DataService = new DataService(),
+    private cliSession?: Pick<SessionStore, 'getNeoCliProjectRoot' | 'prepareNeoCliForConversation'>,
+    private approvalCli = new NeoApprovalCliReader(),
+  ) {}
+
+  /** Every user-facing NeoCRM approval read tries the installed CLI before the legacy adapter. */
+  private async readApproval<T extends { success: boolean; error?: string }>(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    options: WorkflowReadOptions,
+    read: (root: string, onCommand: (command: string) => void) => Promise<T>,
+    legacy: () => Promise<T>,
+  ): Promise<T & WorkflowReadTrace> {
+    const cliCommands: string[] = [];
+    try {
+      options.signal?.throwIfAborted();
+      const root = options.projectPath || this.cliSession?.getNeoCliProjectRoot();
+      if (!root || !this.cliSession) throw new Error('当前没有可用的销售易 CLI 工作区');
+      const prepared = this.cliSession.prepareNeoCliForConversation(root);
+      if (!prepared.success) throw new Error(prepared.message);
+      const actual = prepared.session;
+      const instance = (value: string) => value.replace(/\/$/, '');
+      if (instance(actual.tokenData?.instance_uri || actual.environment?.neoBaseURL || '') !== instance(tokenData.instance_uri || env.neoBaseURL) ||
+          String(actual.tokenData?.tenant_id || '') !== String(tokenData.tenant_id || '') ||
+          String(actual.tokenData?.userInfo?.userId || '') !== String(tokenData.userInfo?.userId || '')) {
+        throw new Error('CLI 共享会话与当前连接器租户或用户不一致');
+      }
+      const result = await read(prepared.targetPath || root, (command) => cliCommands.push(command));
+      return { ...result, source: 'cli', cliCommands };
+    } catch (error: any) {
+      if (options.signal?.aborted || error?.name === 'AbortError') throw error;
+      let fallbackReason = String(error?.message || error).replace(/\s+/g, ' ');
+      for (const secret of [tokenData.access_token, tokenData.refresh_token, tokenData.cookieString]) {
+        if (secret) fallbackReason = fallbackReason.split(secret).join('[REDACTED]');
+      }
+      fallbackReason = fallbackReason.slice(0, 500);
+      options.signal?.throwIfAborted();
+      const result = await legacy();
+      return { ...result, source: 'legacy', cliCommands, fallbackReason,
+        ...(!result.success ? { error: `CLI 获取失败：${fallbackReason}；原有方式也失败：${result.error || '未知错误'}` } : {}),
+      };
+    }
+  }
+
+  public async listTenantFlows(
+    env: NeoEnvironment, tokenData: TokenData, params?: WorkflowListParams, options: WorkflowReadOptions = {},
+  ): Promise<WorkflowListResult> {
+    if ((env.productType || 'neocrm') !== 'neocrm' || params?.procType === 1) {
+      return this.listTenantFlowsLegacy(env, tokenData, params);
+    }
+    if (params?.procType === undefined) {
+      const [automatic, approval] = await Promise.all([
+        this.listTenantFlowsLegacy(env, tokenData, { ...params, procType: 1 }),
+        this.listTenantFlows(env, tokenData, { ...params, procType: 2 }, options),
+      ]);
+      if (!automatic.success || !approval.success) return { success: false, error: automatic.error || approval.error,
+        source: 'mixed', cliCommands: approval.cliCommands, fallbackReason: approval.fallbackReason };
+      const data = [...(automatic.data || []), ...(approval.data || [])];
+      return { success: true, data, total: data.length,
+        totalInTenant: (automatic.totalInTenant || 0) + (approval.totalInTenant || 0),
+        allFlowsSummary: [...(automatic.allFlowsSummary || []), ...(approval.allFlowsSummary || [])],
+        matchedKeyword: params?.keyword, source: 'mixed', cliCommands: approval.cliCommands, fallbackReason: approval.fallbackReason };
+    }
+    return this.readApproval<WorkflowListResult>(env, tokenData, options, async (root, onCommand) => {
+      const all = await this.approvalCli.list(root, { ...options, onCommand });
+      const keyword = params?.keyword?.trim().toLowerCase();
+      const searchTerms = keyword ? [keyword] : [];
+      if (keyword) {
+        // Keep the existing object-name search semantics without using legacy flow APIs.
+        try {
+          const entities = await this.metadataService.fetchEntityList(env, tokenData);
+          for (const entity of entities) {
+            if ([entity.apiKey, entity.label].some((value) => value?.toLowerCase().includes(keyword))) {
+              searchTerms.push(entity.apiKey.toLowerCase(), entity.label.toLowerCase());
+            }
+            for (const flow of all) if (flow.entityApiKey === entity.apiKey) flow.objectName = entity.label;
+          }
+        } catch {}
+      }
+      let filtered = all.filter((flow) => (params?.status === undefined || flow.status === params.status) &&
+        (!keyword || searchTerms.some((term) => [flow.name, flow.objectName, flow.entityApiKey, flow.description].some((value) => value?.toLowerCase().includes(term)))));
+      const total = filtered.length;
+      if (params?.pageNo !== undefined || params?.pageSize !== undefined) {
+        const size = Math.max(1, Math.floor(params?.pageSize || 200));
+        const start = (Math.max(1, Math.floor(params?.pageNo || 1)) - 1) * size;
+        filtered = filtered.slice(start, start + size);
+      }
+      return { success: true, data: filtered, total, totalInTenant: all.length, matchedKeyword: params?.keyword,
+        allFlowsSummary: all.map((flow) => ({ name: flow.name, objectName: flow.objectName, entityApiKey: flow.entityApiKey || '', status: flow.statusName, procType: 2 })) };
+    }, () => this.listTenantFlowsLegacy(env, tokenData, params));
+  }
+
+  public async getFlowDetail(
+    env: NeoEnvironment, tokenData: TokenData, procdefId: string | number, procType: 1 | 2 = 1, options: WorkflowReadOptions = {},
+  ): Promise<WorkflowDetailResult> {
+    if (procType !== 2 || (env.productType || 'neocrm') !== 'neocrm') return this.getFlowDetailLegacy(env, tokenData, procdefId, procType);
+    return this.readApproval<WorkflowDetailResult>(env, tokenData, options, async (root, onCommand) => {
+      const snapshot = await this.approvalCli.retrieve(root, procdefId, { ...options, onCommand });
+      // Display adapters keep the untouched semantic fragments; mutation code reads the legacy contract separately.
+      return { success: true, definition: { ...snapshot,
+        baseInfo: { ...snapshot.processModel, ...snapshot.definition, procdefId: snapshot.source.processDefinitionId },
+        nodeInfo: Object.fromEntries(snapshot.fragments.nodes.map((node: any) => [node.key, { ...node, taskDefName: node.name || node.label || node.key, nodeType: node.type }])),
+      }, property: snapshot.fragments.settings };
+    }, () => this.getFlowDetailLegacy(env, tokenData, procdefId, procType));
+  }
 
   /**
    * 解析基础实例 URL
@@ -54,7 +163,7 @@ export class WorkflowService {
   /**
    * 查询当前租户流程资产列表 (包含自动流程 procType=1 与新版审批流 procType=2)
    */
-    public async listTenantFlows(
+  private async listTenantFlowsLegacy(
     env: NeoEnvironment,
     tokenData: TokenData,
     params?: { procType?: 1 | 2; keyword?: string; pageNo?: number; pageSize?: number; status?: number }
@@ -373,7 +482,7 @@ export class WorkflowService {
   /**
    * 读取指定流程版本的完整定义与属性 (find-procdef.action & find-property.action)
    */
-  public async getFlowDetail(
+  private async getFlowDetailLegacy(
     env: NeoEnvironment,
     tokenData: TokenData,
     procdefId: string | number,
@@ -777,7 +886,7 @@ export class WorkflowService {
 
       if (isUpdateMode) {
         const targetId = String(plan.flow.targetProcdefId);
-        const existingDetail = await this.getFlowDetail(env, tokenData, targetId, 2);
+        const existingDetail = await this.getFlowDetailLegacy(env, tokenData, targetId, 2);
         if (!existingDetail.success || !existingDetail.definition?.baseInfo) {
           throw new Error(`未找到目标现有流程 (${targetId}): ${existingDetail.error || "流程不存在"}`);
         }
@@ -804,7 +913,7 @@ export class WorkflowService {
             throw new Error(`现有流程创建新修订版本失败: ${reviseRes.error}`);
           }
           procdefId = String(reviseRes.newProcdefId);
-          const newDef = await this.getFlowDetail(env, tokenData, procdefId, 2);
+          const newDef = await this.getFlowDetailLegacy(env, tokenData, procdefId, 2);
           procdefApiKey = String(newDef.definition?.baseInfo?.procdefApiKey || "");
           logStep(
             "步骤 2: 现有流程自动创建新修订版本 (Revise Version)",
@@ -1780,7 +1889,7 @@ export class WorkflowService {
 
       if (isUpdateMode) {
         const targetId = String(plan.flow.targetProcdefId);
-        const existingDetail = await this.getFlowDetail(env, tokenData, targetId, 1);
+        const existingDetail = await this.getFlowDetailLegacy(env, tokenData, targetId, 1);
         if (!existingDetail.success || !existingDetail.definition?.baseInfo) {
           throw new Error(`未找到目标现有自动流程 (${targetId}): ${existingDetail.error || '流程不存在'}`);
         }
@@ -1807,7 +1916,7 @@ export class WorkflowService {
             throw new Error(`现有流程创建新修订版本失败: ${reviseRes.error}`);
           }
           procdefId = String(reviseRes.newProcdefId);
-          const newDef = await this.getFlowDetail(env, tokenData, procdefId, 1);
+          const newDef = await this.getFlowDetailLegacy(env, tokenData, procdefId, 1);
           procdefApiKey = String(newDef.definition?.baseInfo?.procdefApiKey || '');
           logStep(
             '步骤 2: 现有流程自动创建新修订版本 (Revise Version)',

@@ -1,3 +1,5 @@
+import { useRestrictedFeatures, consumeAccessCommand } from '../../security/RestrictedFeatures';
+import { requiresRoleLicense } from '../../../shared/licensePolicy';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   AiChatSession, 
@@ -151,6 +153,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   onToggleSidebar,
   platform = 'darwin',
 }) => {
+  const { visible: privateFeaturesVisible, isRoleVisible } = useRestrictedFeatures();
+  const visiblePresets = AI_AGENT_PRESETS.filter((preset) => isRoleVisible(preset.id));
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
 
@@ -211,18 +215,35 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     propOnSelectSession?.(id);
   };
 
-  const [selectedPresetId, setSelectedPresetIdState] = useState<string>(propSelectedPresetId || 'harness-agent');
+  const [selectedPresetId, setSelectedPresetIdState] = useState<string>(
+    () => visiblePresets.find((preset) => preset.id === propSelectedPresetId)?.id || 'harness-agent'
+  );
 
   useEffect(() => {
-    if (propSelectedPresetId !== undefined && propSelectedPresetId !== selectedPresetId) {
-      setSelectedPresetIdState(propSelectedPresetId);
-    }
-  }, [propSelectedPresetId]);
+    if (propSelectedPresetId === undefined) return;
+    const presetId = visiblePresets.find((preset) => preset.id === propSelectedPresetId)?.id || 'harness-agent';
+    if (presetId !== selectedPresetId) setSelectedPresetIdState(presetId);
+    if (presetId !== propSelectedPresetId) propOnSelectPreset?.(presetId);
+  }, [propSelectedPresetId, privateFeaturesVisible]);
 
   const setSelectedPresetId = (pid: string) => {
-    setSelectedPresetIdState(pid);
-    propOnSelectPreset?.(pid);
+    const presetId = visiblePresets.find((preset) => preset.id === pid)?.id || 'harness-agent';
+    setSelectedPresetIdState(presetId);
+    propOnSelectPreset?.(presetId);
   };
+
+  useEffect(() => {
+    let active = true;
+    window.neoApi?.aiGetConfig?.().then((config) => { if (active && config.skills) setSkills(config.skills); }).catch(() => {});
+    window.neoApi?.aiGetSessions?.().then((items) => {
+      if (active) setSessions(items.filter((item) => item.messages?.length > 0));
+    }).catch(() => {});
+    if (!privateFeaturesVisible) {
+      const current = sessionsRef.current.find((item) => item.id === activeSessionId);
+      if (current && !isRoleVisible(current.presetId)) setActiveSessionId(null);
+    }
+    return () => { active = false; };
+  }, [privateFeaturesVisible]);
 
   // 个人专属技能（系统内置技能受安全保护，仅由专属智能体角色驱动，禁止在其他对话随意挂载选择）
   const personalSkills = useMemo(
@@ -258,12 +279,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     | { type: "session"; sessionId: string }
     | { type: "skill"; skillId: string }
     | { type: "deploy"; plan: WorkflowDeployPlan }
-    | { type: "deployApproval"; plan: ApprovalDeployPlan }
     | null
   >(null);
-
-  const isFlowEnginePreset = (id?: string) =>
-    id === "autoflow-architect" || id === "approval-architect" || id === "neobi-architect" || id === "nex-architect";
 
   // 上下文压缩状态
   const [isCompacting, setIsCompacting] = useState(false);
@@ -348,7 +365,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         setSessions(validList);
         if (validList.length > 0 && !activeSessionId) {
           const first = validList[0];
-          if (isFlowEnginePreset(first.presetId) && !licStatus?.isAuthorized) {
+          if (requiresRoleLicense(first.presetId) && !licStatus?.isAuthorized) {
             setSelectedPresetId("harness-agent");
           } else {
             setActiveSessionId(first.id);
@@ -375,7 +392,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     loadData();
   }, []);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
+  const activeSession = sessions.find((s) => s.id === activeSessionId && isRoleVisible(s.presetId)) || null;
 
   const handleJumpToTop = () => {
     if (messagesContainerRef.current) {
@@ -425,12 +442,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     const unsubscribe = window.neoApi.onAiStreamEvent((event) => {
       const { sessionId, messageId, type, delta, toolCall, error, compactionSummary } = event;
       const streamState = activeStreamsRef.current[sessionId];
-      if (
-        streamState?.requestId === event.requestId &&
-        streamState.stopping &&
-        type !== 'done' &&
-        type !== 'error'
-      ) {
+
+      // 如果当前会话已经被停止或不属于当前活跃请求，直接丢弃所有后续增量事件，彻底阻断幽灵输出
+      if (!streamState || streamState.requestId !== event.requestId) {
         return;
       }
 
@@ -540,7 +554,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   // 新建对话草稿
   const handleNewChatDraft = () => {
     setActiveSessionId(null);
-    const p = AI_AGENT_PRESETS.find((item) => item.id === selectedPresetId);
+    const p = visiblePresets.find((item) => item.id === selectedPresetId);
     if (p) {
       setEnableTools(p.enableCrmTools);
       if (p.recommendedModel && currentProviderId === 'deepseek') {
@@ -627,6 +641,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     skillIds?: string[],
     mcpIds?: string[]
   ) => {
+    if (await consumeAccessCommand(text)) return;
+    if (!isRoleVisible(selectedPresetId)) return;
     if (startingStreamRef.current || Object.keys(activeStreamsRef.current).length > 0) {
       showToast('info', '已有对话正在运行，请等待完成或先停止当前回复。');
       return;
@@ -634,11 +650,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     startingStreamRef.current = true;
 
     let targetSession = activeSessionId ? sessionsRef.current.find((s) => s.id === activeSessionId) || null : null;
-    const preset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
+    const preset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
 
     // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
     const effectiveSkills = (skillIds || activeSkillIds).filter((sid) => personalSkillIds.has(sid));
-    if (isFlowEnginePreset(preset.id)) {
+    if (requiresRoleLicense(preset.id)) {
       let latestLic: WorkflowLicenseStatus | null | undefined;
       try {
         latestLic = window.neoApi?.workflowGetLicenseStatus
@@ -654,7 +670,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         startingStreamRef.current = false;
         setIsLicenseModalOpen(true);
         const pId = preset.id as string;
-        const featureName = pId === "neobi-architect" ? "BI分析部署大师" : pId === "nex-architect" ? "Nex页面扩展大师" : "流程引擎";
+        const featureName = pId === "neobi-architect" ? "BI分析部署大师" : "流程引擎";
         showToast("info", `🔒 ${featureName}高级功能已上锁，请先输入绑定本机的加密密码完成设备激活`);
         return;
       }
@@ -784,41 +800,65 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     }
   };
 
-  // 停止生成
-  const handleStopStream = async (targetSessionId?: string) => {
-    const currentStream = activeSessionId ? activeStreamsRef.current[activeSessionId] : null;
-    const sId = targetSessionId || (currentStream ? activeSessionId : Object.keys(activeStreamsRef.current)[0]);
-    const stream = sId ? activeStreamsRef.current[sId] : null;
-    if (!sId || !stream || stream.stopping) return;
+  // 停止生成 (即时强制响应，杜绝挂起)
+  const handleStopStream = async (targetSessionId?: unknown) => {
+    // 关键防坑：处理 React onClick 传入的 SyntheticEvent，严禁将事件对象误认作 sessionId！
+    const safeSessionId = typeof targetSessionId === "string" && targetSessionId.trim()
+      ? targetSessionId.trim()
+      : (activeSessionId || Object.keys(activeStreamsRef.current)[0] || "");
 
-    const stoppingStreams = {
-      ...activeStreamsRef.current,
-      [sId]: { ...stream, stopping: true },
-    };
-    activeStreamsRef.current = stoppingStreams;
-    setActiveStreams(stoppingStreams);
+    const stream = safeSessionId ? activeStreamsRef.current[safeSessionId] : null;
+    const reqId = stream?.requestId || "";
 
+    // 1. 立即下发后台中止指令 (向后台传递 requestId 与 sessionId，无参数时全杀)
     try {
-      const accepted = await window.neoApi.aiAbortChatStream(stream.requestId);
-      if (!accepted) {
-        setActiveStreams((prev) => {
-          if (prev[sId]?.requestId !== stream.requestId) return prev;
-          const next = { ...prev };
-          delete next[sId];
-          activeStreamsRef.current = next;
-          return next;
-        });
-        delete reasoningStartTimesRef.current[sId];
+      if (window.neoApi?.aiAbortChatStream) {
+        await window.neoApi.aiAbortChatStream(reqId || safeSessionId);
       }
-    } catch (e: any) {
-      setActiveStreams((prev) => {
-        if (prev[sId]?.requestId !== stream.requestId) return prev;
-        const next = { ...prev, [sId]: { ...stream, stopping: false } };
-        activeStreamsRef.current = next;
-        return next;
+    } catch {}
+
+    // 2. 彻底释放前端所有活动流状态与计时器，让按钮和输入框在 0 毫秒内回到待命状态
+    setActiveStreams((prev) => {
+      if (!safeSessionId) {
+        activeStreamsRef.current = {};
+        return {};
+      }
+      const next = { ...prev };
+      delete next[safeSessionId];
+      activeStreamsRef.current = next;
+      return next;
+    });
+    if (safeSessionId) delete reasoningStartTimesRef.current[safeSessionId];
+
+    // 3. 立即重置所有 running 状态的工具调用，消除“智能体正在自主调用工具...”与“正在继续生成回答...”转圈状态
+    setSessions((prevSessions) => {
+      const updated = prevSessions.map((sess) => {
+        if (safeSessionId && sess.id !== safeSessionId) return sess;
+        const updatedMsgs = (sess.messages || []).map((msg) => {
+          if (msg.role !== "assistant") return msg;
+          const hasRunning = msg.toolCalls?.some((t) => t.status === "running");
+          if (!hasRunning) return msg;
+          return {
+            ...msg,
+            toolCalls: (msg.toolCalls || []).map((t) =>
+              t.status === "running"
+                ? { ...t, status: "error" as const, resultSummary: "已手动停止生成" }
+                : t
+            ),
+          };
+        });
+        const stoppedSess = {
+          ...sess,
+          messages: updatedMsgs,
+          updatedAt: Date.now(),
+        };
+        window.neoApi?.aiSaveSession(stoppedSess).catch(() => {});
+        return stoppedSess;
       });
-      showToast('error', `停止生成失败: ${e?.message || '无法联系后台任务'}`);
-    }
+      return updated;
+    });
+
+    showToast("info", "已停止生成");
   };
 
   // 导出当前会话为 Markdown
@@ -859,7 +899,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     configuredProviders[0] ||
     providers.find((p) => p.id === currentProviderId) ||
     providers[0];
-  const currentPreset = AI_AGENT_PRESETS.find((p) => p.id === selectedPresetId) || AI_AGENT_PRESETS[0];
+  const currentPreset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
   const isCurrentProviderConfigured = isProviderConfigured(currentProvider);
 
   const activeToolCalls = activeSession?.messages?.flatMap((m) => m.toolCalls || []) || [];
@@ -893,8 +933,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               {currentPreset.name.split(" (")[0]}
             </span>
 
-            {/* 自动流程与审批流角色专属设备安全锁与剩余天数状态 (点击可查看或更换密码) */}
-            {isFlowEnginePreset(currentPreset.id) && (
+            {/* 自动流程与 BI 角色设备授权与剩余天数状态 (点击可查看或更换密码) */}
+            {requiresRoleLicense(currentPreset.id) && (
               <button
                 type="button"
                 onClick={() => onOpenLicenseModal ? onOpenLicenseModal() : setIsLicenseModalOpen(true)}
@@ -1216,18 +1256,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     }
                     setPendingWorkflowPlan(plan);
                   }}
-                  onOpenDeployApproval={async (plan) => {
-                    const latestLic = window.neoApi?.workflowGetLicenseStatus
-                      ? await window.neoApi.workflowGetLicenseStatus()
-                      : workflowLicenseStatus;
-                    if (latestLic) setWorkflowLicenseStatus(latestLic);
-                    if (!latestLic?.isAuthorized) {
-                      setPendingAfterUnlock({ type: "deployApproval", plan });
-                      setIsLicenseModalOpen(true);
-                      return;
-                    }
-                    setPendingApprovalPlan(plan);
-                  }}
+                  onOpenDeployApproval={(plan) => setPendingApprovalPlan(plan)}
                   onOpenArtifactsPanel={() => setIsTerminalOpen(true)}
                   onSendMessage={(txt) => handleSendMessage(txt)}
                   showToast={showToast}
@@ -1286,6 +1315,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                 setCurrentProviderId(pId);
                 setCurrentModelId(mId);
               }}
+              currentPresetId={currentPreset.id}
               currentPresetName={currentPreset.name}
               tenantName={crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || "沙盒环境"}
               productType={crmSession?.environment?.productType || "neocrm"}
@@ -1396,8 +1426,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         <ConfirmDeployApprovalModal
           plan={pendingApprovalPlan}
           crmSession={crmSession}
-          licenseStatus={workflowLicenseStatus}
-          onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
           onClose={() => setPendingApprovalPlan(null)}
           onRefreshSession={loadData}
           onSendDiagnosticToAi={(msg) => {
@@ -1421,7 +1449,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           setIsLicenseModalOpen(false);
           if (pendingAfterUnlock) {
             if (pendingAfterUnlock.type === "preset") {
-              const p = AI_AGENT_PRESETS.find((item) => item.id === pendingAfterUnlock.presetId);
+              const p = visiblePresets.find((item) => item.id === pendingAfterUnlock.presetId);
               if (p) {
                 setSelectedPresetId(p.id);
                 setEnableTools(p.enableCrmTools);
@@ -1449,8 +1477,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               );
             } else if (pendingAfterUnlock.type === "deploy") {
               setPendingWorkflowPlan(pendingAfterUnlock.plan);
-            } else if (pendingAfterUnlock.type === "deployApproval") {
-              setPendingApprovalPlan(pendingAfterUnlock.plan);
             }
             setPendingAfterUnlock(null);
           }

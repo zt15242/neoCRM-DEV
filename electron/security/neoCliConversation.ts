@@ -1,0 +1,51 @@
+import { decryptBuiltinSkillAsset } from './protectedSkillAssets';
+import skills from './neoNexCliSkills.json';
+
+const nexSkillAliases = new Set([
+  'neo-nex-dev', 'skill-neo-nex-dev', 'salesyi-nex-dev', 'skill-salesyi-nex-dev',
+  'preset-nex-architect', 'nex-architect',
+]);
+
+export function getNeoCliConversationSkill(name: string): string | null {
+  if (nexSkillAliases.has(name)) return decryptBuiltinSkillAsset(skills['neo-nex-dev']);
+  if (name === 'neo-cli-usage' || name === 'skill-neo-cli-usage') return decryptBuiltinSkillAsset(skills['neo-cli-usage']);
+  return null;
+}
+
+export const LEGACY_NEX_TOOLS = new Set([
+  'list_nex_extensions', 'get_nex_extension_code', 'generate_nex_extension', 'deploy_nex_extension',
+]);
+
+export function isNexConversation(content: string): boolean {
+  return /\bnex\b|页面扩展|扩展代码/i.test(content);
+}
+
+export function filterNeoCliTools<T extends { function?: { name?: string } }>(tools: T[]): T[] {
+  return tools.filter((tool) => !LEGACY_NEX_TOOLS.has(tool.function?.name || ''));
+}
+
+export function getNeoCliSessionInstruction(preparation: { success: boolean; message: string }): string {
+  return `【销售易连接器共享授权】
+当前工作区准备结果：${preparation.message}。
+${preparation.success ? '项目清单和 CLI 共享授权已验证就绪。' : 'CLI 尚未就绪；不得声称初始化或同步成功。'}
+缺少 neo-project.json 时由宿主自动补齐并复用当前连接器会话，不调用 neo init，不调用 neo login，不要求用户重新鉴权。
+若 CLI 仍报错，报告原始错误与准备结果；可使用连接器已授权的数据工具继续适用的查询。不得把本地文件或失败的接口探测当作租户查询结果。
+只有连接器自身明确未登录或授权失效时，才通过连接器界面处理登录。`;
+}
+
+export const NEO_NEX_CLI_ROUTING = `【NEX 查询与源码获取执行通道】
+NEX 必须按已加载的 neo-cli-usage 和 neo-nex-dev 技能使用当前工作区的 neo CLI。禁止调用旧 list_nex_extensions / get_nex_extension_code / generate_nex_extension / deploy_nex_extension，也不能探测旧 BFF 接口或用本地 src/nex 扫描冒充租户结果。
+通过 bash（PTC 用 tools.bash）先执行 neo list nex --help 与 neo retrieve nex --help 核实参数，再执行 neo list nex 查询真实 codeName、终端和版本。CLI 1.0.8 的这两个命令不支持 --json。
+用户只要求“列出/有哪些”时，报告真实远端列表即可；用户说“获取/拉取/下载 NEX”时，必须进一步执行 neo retrieve nex -n <真实 codeName> --nex-version <列表中的 v1.0 或 v2.0>，或用 --object <真实对象 apiKey> 拉取该对象下所有 NEX，并核实命令返回的本地源码路径。单段命令默认 v2.0，列表标记 v1.0 时必须显式指定。泛指“获取 NEX”时，先 list，再按返回的真实范围拉取；不能只列目录就声称源码已获取。
+若 API 返回资源不存在（1010003）、权限不足或认证错误，如实说明 CLI 返回与未完成范围；禁止静默改成展示本地草稿并声称查询成功。没有返回任何扩展时，说明远端返回为空，不能编造代码。
+本地源码目录以 neo-project.json 的 sourceDir 和 CLI 实际输出为准。上传草稿、发布、停用仍须用户明确授权；查询与源码拉取无需重新登录。`;
+
+export function isApprovalConversation(content: string): boolean {
+  return /审批流|审批流程|approvalprocess|approval[\s_-]*flow/i.test(content);
+}
+
+export const NEO_APPROVAL_CLI_ROUTING = `【审批流读取：CLI 优先，失败才回退】
+查询销售易审批流时先加载 neo-cli-usage 与 neo-approval-flow-designer。目录使用 neo list approvalprocess --json；定义使用 neo retrieve approvalprocess --definition-id <真实定义 ID> --json。
+宿主的 list_flows(procType=2) 和 get_flow_detail(procType=2) 已封装同一 CLI 优先策略，可直接调用；宿主自动准备 neo-project.json 并复用连接器会话。
+CLI 成功返回空目录也算成功，不能据此回退。只有 CLI 无法执行、超时、退出非零、响应或快照无效时，宿主才调用原有适配器；结果会标明 source、cliCommands 和 fallbackReason。不得声称使用了未实际执行的通道。
+不要在 CLI 失败后反复登录，也不要重复执行相同失败的查询。读取失败时应保留失败原因；两种方式均失败时报告失败，不得说成零条审批流。`;

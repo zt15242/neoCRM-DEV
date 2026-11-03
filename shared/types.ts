@@ -63,6 +63,7 @@ export interface SessionState {
   tokenData?: TokenData;
   activeAccountId?: string;
   salesforceCliSync?: SalesforceCliSyncResult;
+  cliProjectId?: string;
 }
 
 export interface AccountRecord {
@@ -551,6 +552,37 @@ export interface TenantFlowItem {
   procType: 1 | 2; // 1: 自动流程, 2: 审批流
 }
 
+export interface WorkflowReadTrace {
+  source?: 'cli' | 'legacy' | 'mixed';
+  cliCommands?: string[];
+  fallbackReason?: string;
+}
+
+export interface WorkflowListParams {
+  procType?: 1 | 2;
+  keyword?: string;
+  pageNo?: number;
+  pageSize?: number;
+  status?: number;
+}
+
+export interface WorkflowListResult extends WorkflowReadTrace {
+  success: boolean;
+  data?: TenantFlowItem[];
+  total?: number;
+  totalInTenant?: number;
+  matchedKeyword?: string;
+  allFlowsSummary?: Array<{ name: string; objectName: string; entityApiKey: string; status: string; procType: number }>;
+  error?: string;
+}
+
+export interface WorkflowDetailResult extends WorkflowReadTrace {
+  success: boolean;
+  definition?: any;
+  property?: any;
+  error?: string;
+}
+
 export interface WorkflowDeployResult {
   success: boolean;
   hasWarning?: boolean;
@@ -751,6 +783,18 @@ export interface ProjectDirNode {
   ext?: string;
   size?: number;
   children?: ProjectDirNode[];
+}
+
+export interface ProjectDirectoryRequest {
+  folderPath: string;
+  directoryPath?: string;
+  query?: string;
+  force?: boolean;
+}
+
+export interface ProjectDirectoryResult {
+  nodes: ProjectDirNode[];
+  errors: Array<{ path: string; message: string }>;
 }
 
 export interface WorkspaceArtifactItem {

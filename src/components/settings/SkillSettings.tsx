@@ -1,3 +1,4 @@
+import { useRestrictedFeatures } from '../../security/RestrictedFeatures';
 import React, { useState } from 'react';
 import { AiSkillItem } from '../../../shared/types';
 import { 
@@ -34,6 +35,8 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
   onSkillsChange,
   showToast,
 }) => {
+  const { isSkillVisible } = useRestrictedFeatures();
+  skills = skills.filter((skill) => isSkillVisible(skill.id));
   const [activeTab, setActiveTab] = useState<'all' | 'builtin' | 'personal'>('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSkill, setEditingSkill] = useState<AiSkillItem | null>(null);

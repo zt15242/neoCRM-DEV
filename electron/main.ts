@@ -1,3 +1,6 @@
+import { restrictedFeatureService } from './security/restrictedFeatureService';
+import { parseAccessCommand, type AccessCommand } from '../shared/restrictedFeatures';
+import { requiresFlowLicense } from '../shared/licensePolicy';
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
@@ -50,6 +53,10 @@ loggerService.interceptConsole();
 const updateService = new UpdateService();
 const imageService = new ImageService();
 
+sessionStore.onSharedSessionChanged((session) => {
+  if (win && !win.isDestroyed()) win.webContents.send('session:updated', session);
+});
+
 // 当底层服务检测到 Token 失效 (401) 并通过本地 CLI 或端点自动完成静默换新时，统一自动持久化并通知前端
 const handleTokenRefresh = (env: any, newToken: any) => {
   try {
@@ -65,7 +72,7 @@ dataService.setTokenRefreshCallback(handleTokenRefresh);
 
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
 const fileService = new FileService();
-const workflowService = new WorkflowService(metadataService);
+const workflowService = new WorkflowService(metadataService, undefined, sessionStore);
 const printTemplateService = new PrintTemplateService(metadataService);
 const nexService = new NexService(metadataService);
 const workbuddyService = new WorkBuddyService();
@@ -81,6 +88,28 @@ aiService.setWorkspaceService(workspaceService);
 const feishuService = new FeishuService(workspaceService);
 const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
+
+// Renderer catalogs exclude undisclosed assets; internal configuration remains intact.
+const visibleSkills = (skills: any[]) => skills.filter((skill) => restrictedFeatureService.canUseSkill(skill.id));
+const visibleSessions = (sessions: any[]) => sessions.filter((item) => restrictedFeatureService.canUseRole(item.presetId));
+const visibleConfig = (config: any) => ({ ...config, skills: visibleSkills(config.skills || []) });
+const visibleSkillImport = (result: any) => ({ ...result, ...(result.skills ? { skills: visibleSkills(result.skills) } : {}) });
+restrictedFeatureService.onChange((status) => {
+  if (win && !win.isDestroyed()) win.webContents.send('access:changed', status);
+});
+function runAccessCommand(action: AccessCommand): void {
+  if (action === 'lock') { restrictedFeatureService.lock(); return; }
+  if (action === 'unlock' || action === 'invalid') {
+    if (win && !win.isDestroyed()) win.webContents.send('access:prompt');
+  }
+}
+ipcMain.handle('access:status', () => restrictedFeatureService.getStatus());
+ipcMain.handle('access:command', (_, action: AccessCommand) => {
+  if (!['unlock', 'lock', 'status', 'invalid'].includes(action)) throw new Error('无效指令');
+  runAccessCommand(action);
+});
+ipcMain.handle('access:unlock', (_, key: string) => restrictedFeatureService.unlock(key));
+
 
 function createWindow() {
   // 移除 Windows / Linux 下默认的原生 File Edit View 菜单栏
@@ -374,6 +403,7 @@ ipcMain.handle('code:pullProjectCode', async (_, options: { targetDir: string; p
 });
 
 ipcMain.handle('cli:sync', async (_, targetDirPath?: string) => sessionStore.syncToNeoCli(targetDirPath));
+ipcMain.handle('cli:setProjectRoot', async (_, rootPath: string) => sessionStore.setNeoCliProjectRoot(rootPath));
 ipcMain.handle('dialog:selectFolder', async () => {
   if (!win) return null;
   const res = await dialog.showOpenDialog(win, {
@@ -586,19 +616,25 @@ ipcMain.handle('data:deleteRecord', async (_, entityApiKey: string, id: string |
 
 // ================= AI 对话平台与模型设置 =================
 
-ipcMain.handle('ai:getConfig', async () => aiService.getAiConfig());
+ipcMain.handle('ai:getConfig', async () => visibleConfig(aiService.getAiConfig()));
 ipcMain.handle('ai:saveSettings', async (_, settings) => aiService.saveAiSettings(settings));
 ipcMain.handle('ai:saveProvider', async (_, provider) => aiService.saveProvider(provider));
 ipcMain.handle('ai:deleteProvider', async (_, providerId: string) => aiService.deleteProvider(providerId));
 ipcMain.handle('ai:testProvider', async (_, provider) => aiService.testProvider(provider));
 ipcMain.handle('ai:fetchModels', async (_, provider) => aiService.fetchAvailableModels(provider));
 
-ipcMain.handle('ai:getSessions', async () => aiService.getSessions());
-ipcMain.handle('ai:saveSession', async (_, session) => aiService.saveSession(session));
-ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => aiService.deleteSession(sessionId));
+ipcMain.handle('ai:getSessions', async () => visibleSessions(aiService.getSessions()));
+ipcMain.handle('ai:saveSession', async (_, session) => visibleSessions(aiService.saveSession(session)));
+ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => visibleSessions(aiService.deleteSession(sessionId)));
 ipcMain.handle('ai:clearSessions', async () => aiService.clearSessions());
 
 ipcMain.handle('ai:startChatStream', async (_, params) => {
+  const latestInput = [...(params.messages || [])].reverse().find((item: any) => item.role === 'user')?.content || '';
+  const action = parseAccessCommand(latestInput);
+  if (action !== null) {
+    runAccessCommand(action);
+    return true;
+  }
   void aiService.startChatStream(params, (event) => {
     if (win && !win.isDestroyed()) {
       win.webContents.send('ai:streamEvent', event);
@@ -617,8 +653,8 @@ ipcMain.handle('ai:startChatStream', async (_, params) => {
   return true;
 });
 
-ipcMain.handle('ai:abortChatStream', async (_, requestId: string) => {
-  return aiService.abortChatStream(requestId);
+ipcMain.handle('ai:abortChatStream', async (_, targetId?: string) => {
+  return aiService.abortChatStream(targetId);
 });
 
 // ================= 文件解析与分析 =================
@@ -631,12 +667,16 @@ ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: Array
 ipcMain.handle('ai:saveMcpServer', async (_, server) => aiService.saveMcpServer(server));
 ipcMain.handle('ai:deleteMcpServer', async (_, id: string) => aiService.deleteMcpServer(id));
 ipcMain.handle('ai:syncMcpTools', async (_, id: string) => aiService.syncMcpTools(id));
-ipcMain.handle('ai:saveSkill', async (_, skill) => aiService.saveSkill(skill));
-ipcMain.handle('ai:deleteSkill', async (_, id: string) => aiService.deleteSkill(id));
-ipcMain.handle("ai:compactSession", async (_, sessionId: string) => aiService.compactSession(sessionId));
-ipcMain.handle("ai:importSkillZip", async () => aiService.importSkillZipFromDialog());
+ipcMain.handle('ai:saveSkill', async (_, skill) => visibleSkills(aiService.saveSkill(skill)));
+ipcMain.handle('ai:deleteSkill', async (_, id: string) => visibleSkills(aiService.deleteSkill(id)));
+ipcMain.handle("ai:compactSession", async (_, sessionId: string) => {
+  const target = aiService.getSessions().find((item) => item.id === sessionId);
+  if (!restrictedFeatureService.canUseRole(target?.presetId)) return null;
+  return aiService.compactSession(sessionId);
+});
+ipcMain.handle("ai:importSkillZip", async () => visibleSkillImport(await aiService.importSkillZipFromDialog()));
 ipcMain.handle("ai:importSkillZipBuffer", async (_, fileName: string, bufferData: ArrayBuffer) => {
-  return aiService.importSkillZipFromBuffer(fileName, Buffer.from(bufferData));
+  return visibleSkillImport(await aiService.importSkillZipFromBuffer(fileName, Buffer.from(bufferData)));
 });
 ipcMain.handle("ai:exportSkillZip", async (_, skillIds?: string[]) => aiService.exportSkillZip(skillIds));
 
@@ -667,7 +707,6 @@ ipcMain.handle("workflow:getApprovalResources", async (_, entityApiKey?: string)
 });
 
 ipcMain.handle("workflow:deployApprovalPlan", async (_, plan: any, options?: { autoEnable?: boolean }) => {
-  licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
@@ -677,7 +716,7 @@ ipcMain.handle("workflow:deployApprovalPlan", async (_, plan: any, options?: { a
 
 ipcMain.handle("workflow:listTenantFlows", async (_, params) => {
   const current = sessionStore.getCurrentSession();
-  if (current.environment?.productType === 'neocrm' || !current.environment?.productType) {
+  if (requiresFlowLicense(params?.procType) && (current.environment?.productType === 'neocrm' || !current.environment?.productType)) {
     licenseService.assertAuthorized();
   }
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
@@ -687,7 +726,7 @@ ipcMain.handle("workflow:listTenantFlows", async (_, params) => {
 });
 
 ipcMain.handle("workflow:copyFlow", async (_, params) => {
-  licenseService.assertAuthorized();
+  if (requiresFlowLicense(params?.procType)) licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
@@ -696,7 +735,7 @@ ipcMain.handle("workflow:copyFlow", async (_, params) => {
 });
 
 ipcMain.handle("workflow:deleteFlow", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
-  licenseService.assertAuthorized();
+  if (requiresFlowLicense(procType)) licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
@@ -717,7 +756,7 @@ ipcMain.handle("workflow:listFlows" , async (_, params) => {
 
 ipcMain.handle("workflow:getFlowDetail", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
   const current = sessionStore.getCurrentSession();
-  if (current.environment?.productType === 'neocrm' || !current.environment?.productType) {
+  if (requiresFlowLicense(procType) && (current.environment?.productType === 'neocrm' || !current.environment?.productType)) {
     licenseService.assertAuthorized();
   }
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
@@ -727,7 +766,7 @@ ipcMain.handle("workflow:getFlowDetail", async (_, procdefId: string | number, p
 });
 
 ipcMain.handle("workflow:toggleStatus", async (_, procdefId: string | number, enable: boolean, procType: 1 | 2 = 1) => {
-  licenseService.assertAuthorized();
+  if (requiresFlowLicense(procType)) licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
@@ -736,7 +775,7 @@ ipcMain.handle("workflow:toggleStatus", async (_, procdefId: string | number, en
 });
 
 ipcMain.handle("workflow:reviseVersion", async (_, procdefId: string | number, procType: 1 | 2 = 1) => {
-  licenseService.assertAuthorized();
+  if (requiresFlowLicense(procType)) licenseService.assertAuthorized();
   const current = sessionStore.getCurrentSession();
   if (!current.isLoggedIn || !current.environment || !current.tokenData) {
     throw new Error("请先登录租户");
@@ -882,6 +921,7 @@ ipcMain.handle("shell:showItemInFolder", async (_, targetPath: string) => {
 ipcMain.handle("project:getDirTree", async (_, folderPath?: string, maxDepth?: number) => {
   return projectService.getDirTree(folderPath, maxDepth);
 });
+ipcMain.handle("project:readDirectory", async (_, params) => projectService.readDirectory(params));
 ipcMain.handle("project:getRecentArtifacts", async (_, folderPath?: string, limit?: number) => {
   return projectService.getRecentArtifacts(folderPath, limit);
 });
@@ -904,6 +944,11 @@ ipcMain.handle("jobs:kill", async (_, params: { job_id: string; reason?: string 
   return dshToolService.killJob(params);
 });
 ipcMain.handle("terminal:execute", async (_, params: { command: string; workdir?: string; timeoutMs?: number }) => {
+  const action = parseAccessCommand(params.command);
+  if (action !== null) {
+    runAccessCommand(action);
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
   return dshToolService.executeBash(params);
 });
 

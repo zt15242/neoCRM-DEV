@@ -1,3 +1,6 @@
+import { restrictedFeatureService } from '../security/restrictedFeatureService';
+import { isRestrictedRole, isRestrictedSkill } from '../../shared/restrictedFeatures';
+import { requiresFlowLicense } from '../../shared/licensePolicy';
 import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
 import { resolveSalesforceAlias } from './salesforceService';
@@ -66,13 +69,14 @@ import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
+import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, LEGACY_NEX_TOOLS, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
 
   private skillPackageService = new SkillPackageService();
   private mcpClientService = new McpClientService();
-  private workflowService = new WorkflowService(this.metadataService);
+  private workflowService = new WorkflowService(this.metadataService, undefined, this.sessionStore);
   private printTemplateService = new PrintTemplateService(this.metadataService);
   private nexService = new NexService(this.metadataService);
   private dshToolService = new DshToolService();
@@ -1006,13 +1010,36 @@ ${dialogHistoryText}`;
 
   // ================= 对话流与 Agent Harness 核心 =================
 
-  public abortChatStream(requestId: string): boolean {
-    const controller = this.activeControllers.get(requestId);
+  public abortChatStream(requestIdOrSessionId?: string): boolean {
+    if (!requestIdOrSessionId) {
+      let anyAborted = false;
+      for (const [id, ctrl] of this.activeControllers.entries()) {
+        if (!ctrl.signal.aborted) {
+          ctrl.abort();
+          anyAborted = true;
+        }
+      }
+      this.activeControllers.clear();
+      return anyAborted;
+    }
+
+    const controller = this.activeControllers.get(requestIdOrSessionId);
     if (controller) {
       if (!controller.signal.aborted) controller.abort();
+      this.activeControllers.delete(requestIdOrSessionId);
       return true;
     }
-    return false;
+
+    // 兜底：若传入的是非精确 ID，安全中止全部活跃流
+    let anyAborted = false;
+    for (const [id, ctrl] of this.activeControllers.entries()) {
+      if (!ctrl.signal.aborted) {
+        ctrl.abort();
+        anyAborted = true;
+      }
+    }
+    this.activeControllers.clear();
+    return anyAborted;
   }
 
   public async startChatStream(
@@ -1035,14 +1062,49 @@ ${dialogHistoryText}`;
   ): Promise<void> {
     const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
 
+    // Check before workspace preparation, compaction, tool discovery or provider requests.
+    const storedPreset = this.getSessions().find((item) => item.id === sessionId)?.presetId;
+    const hasPrivatePreset = ['neobi-architect', 'autoflow-architect'].some(
+      (id) => presetPrompt?.includes(`[PROTECTED_PRESET::${id}]`)
+    );
+    if (!restrictedFeatureService.getStatus().visible &&
+        (hasPrivatePreset || isRestrictedRole(storedPreset) || activeSkillIds?.some(isRestrictedSkill))) {
+      sendEvent({ requestId, sessionId, messageId, type: 'error', error: '当前功能已上锁' });
+      return;
+    }
+
+    // Keep protected skill bodies in model context, out of renderer traces and saved UI records.
+    const emitToRenderer = sendEvent;
+    sendEvent = (event) => {
+      const call = event.toolCall;
+      const skillName = call?.arguments?.name;
+      if (call?.name === 'skill' && typeof skillName === 'string' && isProtectedBuiltinSkill(skillName)) {
+        emitToRenderer({
+          ...event,
+          toolCall: {
+            ...call,
+            resultData: call.resultData ? { name: skillName, protectedBuiltin: true } : undefined,
+          },
+        });
+        return;
+      }
+      emitToRenderer(event);
+    };
+
     // 必须在任何压缩、MCP 探测或模型校验前注册控制器，否则用户在准备阶段点击停止时没有可取消句柄。
     const controller = new AbortController();
-    const previousController = this.activeControllers.get(requestId);
+    const previousController = this.activeControllers.get(requestId) || (sessionId ? this.activeControllers.get(sessionId) : undefined);
     previousController?.abort();
     this.activeControllers.set(requestId, controller);
+    if (sessionId) {
+      this.activeControllers.set(sessionId, controller);
+    }
     const cleanupController = () => {
       if (this.activeControllers.get(requestId) === controller) {
         this.activeControllers.delete(requestId);
+      }
+      if (sessionId && this.activeControllers.get(sessionId) === controller) {
+        this.activeControllers.delete(sessionId);
       }
     };
     const throwIfAborted = () => {
@@ -1054,6 +1116,11 @@ ${dialogHistoryText}`;
     };
 
     throwIfAborted();
+
+    // Prepare the actual conversation workspace before compaction, model setup or tool discovery.
+    const cliPreparation = this.sessionStore.prepareNeoCliForConversation(projectPath);
+    const currentSession = cliPreparation.session;
+    const isNeoConnector = !!currentSession.environment && (currentSession.environment.productType || 'neocrm') === 'neocrm';
 
     // 提取本轮会话中用户显式上传/引用的文件路径白名单（单文件安全豁免）
     const sessionAllowedFiles = (messages || [])
@@ -1143,7 +1210,6 @@ ${dialogHistoryText}`;
       return;
     }
 
-    const currentSession = this.sessionStore.getCurrentSession();
     if (currentSession?.environment?.id && this.envService) {
       const freshEnv = this.envService.getEnvironmentById(currentSession.environment.id);
       if (freshEnv) {
@@ -1187,12 +1253,13 @@ ${dialogHistoryText}`;
 
       const activeToolsSpec: any[] = [];
       if (config.settings.enableCrmTools && builtinMcpEnabled) {
-        activeToolsSpec.push(...CRM_HARNESS_TOOLS_SPEC);
+        activeToolsSpec.push(...(isNeoConnector ? filterNeoCliTools(CRM_HARNESS_TOOLS_SPEC) : CRM_HARNESS_TOOLS_SPEC));
       }
 
       for (const mcpSrv of activeCustomMcp) {
         for (const t of mcpSrv.tools || []) {
           const safeName = t.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+          if (isNeoConnector && LEGACY_NEX_TOOLS.has(safeName)) continue;
           if (!activeToolsSpec.some((existing) => existing.function?.name === safeName)) {
             activeToolsSpec.push({
               type: "function",
@@ -1210,10 +1277,11 @@ ${dialogHistoryText}`;
       const isAutoflowPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]"));
       const isApprovalPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::approval-architect]"));
       const isBiPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::neobi-architect]"));
-      if (isAutoflowPreset || isApprovalPreset || isBiPreset) {
+      const isNexPreset = Boolean(presetPrompt && presetPrompt.includes("[PROTECTED_PRESET::nex-architect]"));
+      if (isAutoflowPreset || isBiPreset) {
         const lockStatus = licenseService.getLicenseStatus();
         if (!lockStatus.isAuthorized) {
-          const featureName = isBiPreset ? "BI分析部署大师功能" : isApprovalPreset ? "审批流高级功能" : "自动流程功能";
+          const featureName = isBiPreset ? "BI分析部署大师功能" : "自动流程功能";
           sendEvent({
             requestId,
             sessionId,
@@ -1234,6 +1302,32 @@ ${dialogHistoryText}`;
       const isPtcMode = sessionMode === 'ptc';
       const isMinimalMode = sessionMode === 'minimal';
       const isStandardMode = sessionMode === 'standard' || sessionMode === 'default';
+
+      if (isNeoConnector) {
+        const latestUserContent = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
+        const cliSkillNames = new Set<string>();
+        if (isNexConversation(latestUserContent) || presetPrompt?.includes('[PROTECTED_PRESET::nex-architect]')) {
+          cliSkillNames.add('neo-cli-usage');
+          cliSkillNames.add('neo-nex-dev');
+        }
+        if (isApprovalConversation(latestUserContent) || presetPrompt?.includes('[PROTECTED_PRESET::approval-architect]')) {
+          cliSkillNames.add('neo-cli-usage');
+          cliSkillNames.add('neo-approval-flow-designer');
+        }
+        for (const skillName of cliSkillNames) {
+          const instruction = getProtectedSkillInstruction(skillName);
+          if (!instruction) throw new Error(`Neo CLI 技能缺失: ${skillName}`);
+          systemParts.push(`【已加载技能 ${skillName}】\n${instruction}`);
+          sendEvent({ requestId, sessionId, messageId, type: 'tool_start', toolCall: {
+            id: `${requestId}_${skillName}`, name: 'skill', arguments: { name: skillName }, status: 'running',
+          } });
+          sendEvent({ requestId, sessionId, messageId, type: 'tool_update', toolCall: {
+            id: `${requestId}_${skillName}`, name: 'skill', arguments: { name: skillName }, status: 'success',
+            resultSummary: `已加载 ${skillName}，优先通过 neo CLI 获取元数据`,
+            resultData: { name: skillName, instruction }, durationMs: 0,
+          } });
+        }
+      }
 
       if (isMinimalMode) {
         systemParts.push(`You are a helpful software engineer assistant.
@@ -1309,6 +1403,8 @@ declare const tools: {
 - neo-backend-dev: 销售易/NeoCRM 后端 Java PaaS 开发、触发器 Trigger、REST API 与自定义代码包。
 - neo-entity-management: 销售易实体模型元数据管理、自定义实体、字段创建与选项集维护。
 - neo-frontend-dev: 销售易前端自定义组件开发 (React 16 + TypeScript)。
+- neo-cli-usage: NeoCRM CLI 1.0.8 项目配置、共享登录与命令用法。
+- neo-nex-dev: NEX 标准页面扩展；通过 neo list nex 查询、neo retrieve nex 拉取源码。
 </available_skills>
 若当前任务属于上述专业领域，你可以在采取行动前调用 skill({ name: "..." }) 工具获取该领域的专业实战指导规范。`);
 
@@ -1348,11 +1444,21 @@ declare const tools: {
         systemParts.push(`【项目工作区物理安全沙箱约束】：\n当前项目工作区根目录绝对路径: ${projectPath || "未绑定工作区"}。\n你调用的 bash 终端命令均在上述项目目录内执行。请优先使用相对路径。`);
       }
 
-      // 若处于自动流程或审批流专家预设角色，全局优先注入《销售易流程实施视角规范》核心工程认知
-      if (isAutoflowPreset || isApprovalPreset) {
+      // 若处于审批流角色，注入最新官方 neo-approval-flow-designer 核心规范
+      if (isApprovalPreset) {
+        const approvalSkill = getProtectedSkillInstruction("skill-neo-approval-flow-designer");
+        if (approvalSkill) {
+          systemParts.push(`【全局首要植入规范：销售易新版审批流设计助手 (neo-approval-flow-designer)】\n${approvalSkill}`);
+        }
+      } else if (isAutoflowPreset) {
         const perspectiveSkill = getProtectedSkillInstruction("skill-process-implementation-perspective");
         if (perspectiveSkill) {
-          systemParts.push(`【全局首要植入规范：销售易流程实施工程认知与实操视角 (严格以「我」描述工程研判，先给结论与证据层级，四层模型解构，业务边界冻结)】\n${perspectiveSkill}`);
+          systemParts.push(`【全局首要植入规范：销售易自动流程实施工程认知与实操视角】\n${perspectiveSkill}`);
+        }
+      } else if (isNexPreset) {
+        const nexSkill = getProtectedSkillInstruction("skill-neo-nex-dev");
+        if (nexSkill) {
+          systemParts.push(`【全局首要植入规范：销售易 NEX 1.0/2.0 标准页面扩展开发规范 (neo-nex-dev)】\n${nexSkill}`);
         }
       }
 
@@ -1580,7 +1686,7 @@ ${mcpInfoText}
           userContent.trim() === '拉取代码' ||
           userContent.trim() === '拉取后端前端代码';
 
-        if (isAskingPullCode) {
+        if (isAskingPullCode && !(pType === 'neocrm' && isNexConversation(userContent))) {
           systemParts.push(`【系统实时调度指令 (最高优先级)】：检测到用户正在请求【拉取代码 / 拉取后端前端代码 / 同步本地工程】。当前本地工作区路径为: ${projectPath || '未指定'}。根据当前平台规范，【你必须立即在首轮输出中自动调用 pull_crm_project_code 工具执行真实接口数据拉取，并在本地项目目录实际创建文件与目录落盘】，绝不可仅在回答中以 Markdown 文本虚构假报告！`);
         }
 
@@ -1629,6 +1735,8 @@ ${mcpInfoText}
         }
       }
 
+      // Keep connector authorization and CLI routing after any standalone skill/preset setup advice.
+      if (isNeoConnector) systemParts.push(getNeoCliSessionInstruction(cliPreparation), NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING);
       const systemPromptText = systemParts.join('\n\n');
       const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
@@ -1874,6 +1982,10 @@ ${mcpInfoText}
         }
 
         const reader = response.body.getReader();
+        const cancelReader = () => {
+          try { reader.cancel().catch(() => {}); } catch {}
+        };
+        controller.signal.addEventListener('abort', cancelReader, { once: true });
         const decoder = new TextDecoder('utf-8');
         let buffer = '';
 
@@ -1883,9 +1995,11 @@ ${mcpInfoText}
         let toolCallsMap: Record<number, { id: string; name: string; arguments: string }> = {};
         const contentMarkupFilter = new DeepSeekToolMarkupFilter();
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        try {
+          while (true) {
+            if (controller.signal.aborted) break;
+            const { done, value } = await reader.read();
+            if (done || controller.signal.aborted) break;
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -2002,6 +2116,12 @@ ${mcpInfoText}
             }
           }
         }
+
+        } finally {
+          controller.signal.removeEventListener('abort', cancelReader);
+        }
+
+        throwIfAborted();
 
         const filteredTail = isDeepSeekModel ? contentMarkupFilter.finish() : '';
         if (filteredTail) {
@@ -2157,7 +2277,7 @@ ${mcpInfoText}
       }
 
       // 6. 兜底总结收敛轮：如果执行了工具但尚未输出最终回复正文（例如触达安全熔断，或网关未透传下一步思考）
-      if (!finalContentGenerated.trim() && executedToolsLog.length > 0) {
+      if (!controller.signal.aborted && !finalContentGenerated.trim() && executedToolsLog.length > 0) {
         const cleanSynthesisHistory: any[] = [];
         if (systemMessage) {
           cleanSynthesisHistory.push(systemMessage);
@@ -2257,13 +2377,19 @@ ${safeToolDataContext}
         const synthesisMarkupFilter = new DeepSeekToolMarkupFilter();
         if (synthesisResponse && synthesisResponse.ok && synthesisResponse.body) {
           const reader = synthesisResponse.body.getReader();
+          const cancelSynthReader = () => {
+            try { reader.cancel().catch(() => {}); } catch {}
+          };
+          controller.signal.addEventListener('abort', cancelSynthReader, { once: true });
           const decoder = new TextDecoder('utf-8');
           let buffer = '';
           let isInThinkTag = false;
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+          try {
+            while (true) {
+              if (controller.signal.aborted) break;
+              const { done, value } = await reader.read();
+              if (done || controller.signal.aborted) break;
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split("\n");
@@ -2328,7 +2454,12 @@ ${safeToolDataContext}
               } catch {}
             }
           }
+          } finally {
+            controller.signal.removeEventListener('abort', cancelSynthReader);
+          }
         }
+
+        throwIfAborted();
 
         const synthesisTail = isDeepSeekModel ? synthesisMarkupFilter.finish() : '';
         if (synthesisTail) {
@@ -2342,7 +2473,7 @@ ${safeToolDataContext}
         }
 
         // 若大模型接口在收敛轮因网络未能生成文本，直接以已成功执行的真实数据生成保底结构化 Markdown 报告
-        if (!synthesisStreamed.trim()) {
+        if (!controller.signal.aborted && !synthesisStreamed.trim()) {
           const formattedReceipts = executedToolsLog
             .map((t, idx) => `**${idx + 1}. \`${t.name}\`**: ${t.summary || '已执行完成'}`)
             .join("\n");
@@ -2507,7 +2638,9 @@ ${safeToolDataContext}
       ? DSH_PTC_TOOL_SPEC
       : (activeToolsSpec && activeToolsSpec.length > 0 ? activeToolsSpec : CRM_HARNESS_TOOLS_SPEC);
 
-    const effectiveTools = selectedToolsSpec;
+    const effectiveTools = currentSession.environment && (currentSession.environment.productType || 'neocrm') === 'neocrm'
+      ? filterNeoCliTools(selectedToolsSpec)
+      : selectedToolsSpec;
     const geminiFunctionDeclarations = effectiveTools.map((spec) => {
       const fn = spec.function;
       const cleanedParams = cleanGeminiSchema(fn.parameters);
@@ -2568,12 +2701,17 @@ ${safeToolDataContext}
       }
 
       const reader = response.body.getReader();
+      const cancelGeminiReader = () => {
+        try { reader.cancel().catch(() => {}); } catch {}
+      };
+      controller.signal.addEventListener('abort', cancelGeminiReader, { once: true });
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
 
       const modelTurnParts: any[] = [];
       const pendingFunctionCalls: Array<{ id: string; name: string; args: any }> = [];
 
+      try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -2632,6 +2770,14 @@ ${safeToolDataContext}
             // 忽略单行解析异常
           }
         }
+      }
+
+      } finally {
+        controller.signal.removeEventListener('abort', cancelGeminiReader);
+      }
+
+      if (controller.signal.aborted) {
+        throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
       }
 
       if (pendingFunctionCalls.length > 0) {
@@ -2784,6 +2930,9 @@ ${safeToolDataContext}
       const error = new Error('对话已停止');
       error.name = 'AbortError';
       throw error;
+    }
+    if (env && (env.productType || 'neocrm') === 'neocrm' && LEGACY_NEX_TOOLS.has(name)) {
+      throw new Error('旧 NEX 工具已停用。请加载 neo-nex-dev 技能，通过 bash 执行 neo list nex / neo retrieve nex，并报告真实 CLI 结果。');
     }
     if (name === 'workspace_list_pages') {
       if (!this.workspaceService) throw new Error('自定义工作台服务尚未就绪');
@@ -3090,7 +3239,10 @@ ${safeToolDataContext}
     // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
     if (name === "run_code") {
       const toolsContext: Record<string, Function> = {
-        bash: async (params: any) => this.dshToolService.executeBash(params, projectPath, signal),
+        bash: async (params: any) => {
+          this.sessionStore.prepareNeoCliForConversation(projectPath);
+          return this.dshToolService.executeBash(params, projectPath, signal);
+        },
         read: async (params: any) => this.dshToolService.readFile(params, projectPath, sessionAllowedFiles),
         write: async (params: any) => this.dshToolService.writeFile(params, projectPath),
         edit: async (params: any) => this.dshToolService.editFile(params, projectPath),
@@ -3186,6 +3338,7 @@ ${safeToolDataContext}
 
     // ================= DeepSeek Harness 原生工具分发 (无需 CRM 登录) =================
     if (name === "bash") {
+      this.sessionStore.prepareNeoCliForConversation(projectPath);
       const res = await this.dshToolService.executeBash(
         {
           ...args,
@@ -3624,13 +3777,14 @@ ${safeToolDataContext}
     }
 
     if (name === "list_flows") {
-      if (!env || env.productType === 'neocrm' || !env.productType) {
+      if (requiresFlowLicense(args.procType) && (!env || env.productType === 'neocrm' || !env.productType)) {
         licenseService.assertAuthorized();
       }
       const res = await this.workflowService.listTenantFlows(env, tokenData, {
         procType: args.procType,
         keyword: args.keyword,
-      });
+      }, { projectPath, signal });
+      if (!res.success) throw new Error(res.error || '获取流程列表失败');
       const flows = res.data || [];
       const ptLabel = args.procType === 1 ? "自动流程" : args.procType === 2 ? "审批流" : "流程";
       const totalInTenant = res.totalInTenant !== undefined ? res.totalInTenant : flows.length;
@@ -3648,6 +3802,9 @@ ${safeToolDataContext}
 
       return {
         data: {
+          source: res.source,
+          cliCommands: res.cliCommands,
+          fallbackReason: res.fallbackReason,
           totalCount: flows.length,
           matchedKeyword: args.keyword || null,
           tenantTotalCount: totalInTenant,
@@ -3666,19 +3823,24 @@ ${safeToolDataContext}
           guidance: flows.length === 0 && args.keyword
             ? `当前租户在【${args.keyword}】对象下未配置历史${ptLabel}（当前租户在其他对象下共存在 ${totalInTenant} 条流程资产）。这意味着该对象无旧流程冲突，可作为该对象的第 1 个新流直接部署。` : undefined,
         },
-        summary,
+        summary: `${res.source === 'cli' ? '通过 neo CLI 获取；' : res.fallbackReason ? 'CLI 失败，已回退原有方式；' : res.source === 'mixed' ? '自动流程与审批流分别获取；' : ''}${summary}`,
       };
     }
 
     if (name === "get_flow_detail") {
-      if (!env || env.productType === 'neocrm' || !env.productType) {
+      if (requiresFlowLicense(args.procType) && (!env || env.productType === 'neocrm' || !env.productType)) {
         licenseService.assertAuthorized();
       }
       const pt = args.procType === 2 ? 2 : 1;
-      const res = await this.workflowService.getFlowDetail(env, tokenData, args.procdefId, pt);
+      const res = await this.workflowService.getFlowDetail(env, tokenData, args.procdefId, pt, { projectPath, signal });
       if (!res.success) throw new Error(res.error || "获取流程定义详情失败");
       return {
         data: {
+          source: res.source,
+          cliCommands: res.cliCommands,
+          fallbackReason: res.fallbackReason,
+          fragments: res.definition?.fragments,
+          revision: res.definition?.source?.revision,
           procdefId: args.procdefId,
           procType: pt === 1 ? "自动流程" : "审批流",
           baseInfo: res.definition?.baseInfo,
@@ -3696,7 +3858,7 @@ ${safeToolDataContext}
             resourceConfig: res.definition?.businessConfig?.resourceConfig,
           },
         },
-        summary: `成功读取 ${pt === 1 ? "自动流程" : "审批流"} (${args.procdefId}) 完整拓扑`,
+        summary: `${res.source === 'cli' ? '通过 neo CLI 获取；' : res.fallbackReason ? 'CLI 失败，已回退原有方式；' : ''}成功读取 ${pt === 1 ? "自动流程" : "审批流"} (${args.procdefId}) 完整拓扑`,
       };
     }
 

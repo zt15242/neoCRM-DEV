@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { SessionState, ApprovalDeployPlan, WorkflowDeployResult, WorkflowLicenseStatus, TenantFlowItem } from "../../../shared/types";
+import { SessionState, ApprovalDeployPlan, WorkflowDeployResult, TenantFlowItem } from "../../../shared/types";
 import { 
   FileCheck, 
   X, 
@@ -19,8 +19,6 @@ import {
   Edit3,
   Check,
   FileCode,
-  Lock,
-  Unlock,
   Bell,
   SlidersHorizontal,
   CheckSquare,
@@ -32,8 +30,6 @@ import {
 interface ConfirmDeployApprovalModalProps {
   plan: ApprovalDeployPlan;
   crmSession: SessionState;
-  licenseStatus?: WorkflowLicenseStatus | null;
-  onOpenLicenseModal?: () => void;
   onClose: () => void;
   onRefreshSession: () => void;
   onSendDiagnosticToAi?: (diagnosticMessage: string) => void;
@@ -43,8 +39,6 @@ interface ConfirmDeployApprovalModalProps {
 export const ConfirmDeployApprovalModal: React.FC<ConfirmDeployApprovalModalProps> = ({
   plan,
   crmSession,
-  licenseStatus,
-  onOpenLicenseModal,
   onClose,
   onRefreshSession,
   onSendDiagnosticToAi,
@@ -362,20 +356,6 @@ ${logLines}
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-mono font-semibold">
                   procType=2
                 </span>
-                {licenseStatus?.isAuthorized ? (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium flex items-center space-x-1">
-                    <Unlock className="w-2.5 h-2.5 text-emerald-600" />
-                    <span>已激活 (余{licenseStatus.remainingDays}天)</span>
-                  </span>
-                ) : (
-                  <button
-                    onClick={onOpenLicenseModal}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium flex items-center space-x-1 hover:bg-amber-100 cursor-pointer"
-                  >
-                    <Lock className="w-2.5 h-2.5 text-amber-600" />
-                    <span>未激活授权</span>
-                  </button>
-                )}
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 整体引导式分步核对与确认 · 全程保障审批矩阵严谨合规

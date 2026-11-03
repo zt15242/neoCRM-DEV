@@ -1,3 +1,5 @@
+import { useRestrictedFeatures } from '../../security/RestrictedFeatures';
+import { requiresRoleLicense } from '../../../shared/licensePolicy';
 import React, { useState } from 'react';
 import { AiChatSession, AiAgentPreset, WorkflowLicenseStatus, SessionState } from '../../../shared/types';
 import { 
@@ -73,6 +75,8 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   workflowLicenseStatus,
   streamingSessionIds = [],
 }) => {
+  const { isRoleVisible } = useRestrictedFeatures();
+  const visiblePresets = presets.filter((preset) => isRoleVisible(preset.id));
   const [keyword, setKeyword] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -118,14 +122,14 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     setEditingId(null);
   };
 
-  const validSessions = sessions.filter((s) => s.messages && s.messages.length > 0);
+  const validSessions = sessions.filter((s) => isRoleVisible(s.presetId) && s.messages && s.messages.length > 0);
 
   const filteredSessions = validSessions.filter((s) => {
     if (!keyword.trim()) return true;
     return s.title.toLowerCase().includes(keyword.toLowerCase());
   });
 
-  const currentPreset = presets.find((p) => p.id === selectedPresetId) || presets[0];
+  const currentPreset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
   const activeTenantName = crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || 'neoCRM-DEV';
   const activeUserName = crmSession?.tokenData?.userInfo?.name || '开发者';
 
@@ -148,10 +152,10 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
               <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                 选择智能体角色
               </div>
-              {presets.map((p) => {
+              {visiblePresets.map((p) => {
                 const Icon = getPresetIcon(p.iconName);
                 const isSelected = p.id === selectedPresetId;
-                const isLocked = (p.id === 'autoflow-architect' || p.id === 'approval-architect' || p.id === 'neobi-architect' || p.id === 'nex-architect') && !workflowLicenseStatus?.isAuthorized;
+                const isLocked = requiresRoleLicense(p.id) && !workflowLicenseStatus?.isAuthorized;
 
                 return (
                   <button

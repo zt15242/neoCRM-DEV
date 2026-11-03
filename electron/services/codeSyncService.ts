@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensureNeoCliProject, syncSessionToNeoCli } from './neocrmCliSession';
 import { execSync } from 'node:child_process';
 import axios from 'axios';
 import { NeoEnvironment, TokenData, EntityMetadata, FieldMetadata } from '../../shared/types';
@@ -387,37 +388,22 @@ ${path.basename(targetDir)}/
     const componentsDir = path.join(srcDir, 'components');
     const xObjectsDir = path.join(srcDir, 'xObjects');
     const fieldsDir = path.join(xObjectsDir, 'fields');
-    const neoCliDir = path.join(targetDir, '.neo-cli');
 
     fs.mkdirSync(codePackagesDir, { recursive: true });
     fs.mkdirSync(componentsDir, { recursive: true });
     fs.mkdirSync(fieldsDir, { recursive: true });
-    fs.mkdirSync(neoCliDir, { recursive: true });
-
-    // 1. 生成 neo.config.js 与 .neo-cli/token.json (对齐 neo-cmp-cli)
-    const neoConfigPath = path.join(targetDir, 'neo.config.js');
-    if (!fs.existsSync(neoConfigPath)) {
-      const neoConfigCode = `module.exports = {
-  neoBaseURL: '${baseUrl}',
-  envName: '${env.name}',
-  tenantId: '${tokenData.tenant_id}',
-};
-`;
-      fs.writeFileSync(neoConfigPath, neoConfigCode, 'utf-8');
-      createdFiles.push('neo.config.js');
+    // Register the exported folder as a CLI project and share auth through the CLI's protected global store.
+    const hadCliManifest = fs.existsSync(path.join(targetDir, 'neo-project.json'));
+    const cliProject = ensureNeoCliProject(targetDir);
+    fs.mkdirSync(path.join(cliProject.root, 'neocrm-src'), { recursive: true });
+    if (!hadCliManifest) createdFiles.push('neo-project.json');
+    let authSyncWarning = '';
+    try {
+      const cliAuthPath = syncSessionToNeoCli(cliProject.root, env, tokenData);
+      fs.chmodSync(cliAuthPath, 0o600);
+    } catch (error: any) {
+      authSyncWarning = ` CLI 登录态未同步: ${error.message}`;
     }
-
-    const tokenJsonPath = path.join(neoCliDir, 'token.json');
-    const tokenJsonContent = {
-      access_token: tokenData.access_token,
-      instance_uri: baseUrl,
-      tenant_id: tokenData.tenant_id,
-      user_id: tokenData.userInfo?.userId,
-      user_name: tokenData.userInfo?.name,
-      saved_at: Date.now(),
-    };
-    fs.writeFileSync(tokenJsonPath, JSON.stringify(tokenJsonContent, null, 2), 'utf-8');
-    createdFiles.push('.neo-cli/token.json');
 
     // 2. 拉取租户后端代码包 (Backend PaaS Code Packages)
     let packagesCount = 0;
@@ -537,10 +523,12 @@ ${path.basename(targetDir)}/
  │    └── xObjects/              # 租户实体与字段字典
  │         ├── AllxObjects.md
  │         └── fields/
- ├── .neo-cli/token.json         # neo-cmp-cli 凭证
- ├── neo.config.js               # 销售易环境配置文件
+ ├── neo-project.json            # neocrm-cli 项目标识
+ ├── neocrm-src/                 # neocrm-cli 元数据源码
  └── package.json
 \`\`\`
+
+连接器与 neocrm-cli 共用该工程登录态。凭证保存在用户级 \`~/.neocrm-cli/auth/\`，不会写入工程；可在此目录运行 \`neo loginstatus\` 查看。
 `;
     fs.writeFileSync(readmePath, readmeContent, 'utf-8');
     createdFiles.push('README.md');
@@ -561,7 +549,7 @@ ${path.basename(targetDir)}/
       productType: 'neocrm',
       createdFilesCount: createdFiles.length,
       files: createdFiles,
-      summary: `成功在工作区 [${path.basename(targetDir)}] 拉取销售易代码与元数据：包含 ${packagesCount} 个后端脚本包、${entities.length} 个实体模型字典、核心对象字段定义与 neo.config.js 配置。`,
+      summary: `成功在工作区 [${path.basename(targetDir)}] 拉取销售易代码与元数据：包含 ${packagesCount} 个后端脚本包、${entities.length} 个实体模型字典、核心对象字段定义与 neocrm-cli 项目配置。${authSyncWarning}`,
     };
   }
 
