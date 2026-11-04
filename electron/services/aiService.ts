@@ -4,6 +4,7 @@ import { requiresFlowLicense } from '../../shared/licensePolicy';
 import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
 import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
+import { NeoMetadataCliReader } from './neoMetadataCli';
 import { resolveSalesforceAlias } from './salesforceService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
@@ -70,7 +71,7 @@ import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
-import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, LEGACY_NEX_TOOLS, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING } from '../security/neoCliConversation';
+import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -82,6 +83,7 @@ export class AiService {
   private nexService = new NexService(this.metadataService);
   private dshToolService = new DshToolService();
   private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
+  private neoMetadataCli = new NeoMetadataCliReader();
 
   private workbuddyService?: any;
   private workspaceService?: {
@@ -101,6 +103,38 @@ export class AiService {
 
   public setWorkspaceService(service: any) {
     this.workspaceService = service;
+  }
+
+  private async readNeoMetadataWithCli<T>(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    projectPath: string | undefined,
+    signal: AbortSignal | undefined,
+    read: (root: string) => Promise<T>,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    const root = projectPath || this.sessionStore.getNeoCliProjectRoot();
+    if (!root) throw new Error('当前没有可用的销售易 CLI 工作区');
+    const prepared = this.sessionStore.prepareNeoCliForConversation(root);
+    if (!prepared.success) throw new Error(prepared.message);
+    const actual = prepared.session;
+    const normalize = (value: string) => value.replace(/\/$/, '');
+    if (normalize(actual.tokenData?.instance_uri || actual.environment?.neoBaseURL || '') !==
+        normalize(tokenData.instance_uri || env.neoBaseURL || '') ||
+        String(actual.tokenData?.tenant_id || '') !== String(tokenData.tenant_id || '') ||
+        String(actual.tokenData?.userInfo?.userId || '') !== String(tokenData.userInfo?.userId || '')) {
+      throw new Error('CLI 共享会话与当前连接器租户或用户不一致');
+    }
+    signal?.throwIfAborted();
+    return read(prepared.targetPath || root);
+  }
+
+  private safeNeoCliFallbackReason(error: unknown, tokenData: TokenData): string {
+    let message = String((error as any)?.message || error).replace(/\s+/g, ' ');
+    for (const secret of [tokenData.access_token, tokenData.refresh_token, tokenData.cookieString]) {
+      if (secret) message = message.split(secret).join('[REDACTED]');
+    }
+    return message.slice(0, 500);
   }
 
   constructor(
@@ -1077,7 +1111,7 @@ export class AiService {
 
       if (isNeoConnector) {
         const latestUserContent = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
-        const cliSkillNames = new Set<string>();
+        const cliSkillNames = new Set<string>(['neo-cli-usage']);
         if (isNexConversation(latestUserContent) || presetPrompt?.includes('[PROTECTED_PRESET::nex-architect]')) {
           cliSkillNames.add('neo-cli-usage');
           cliSkillNames.add('neo-nex-dev');
@@ -1099,6 +1133,7 @@ export class AiService {
             resultData: { name: skillName, instruction }, durationMs: 0,
           } });
         }
+        systemParts.push(getNeoCliSessionInstruction(cliPreparation), NEO_CLI_FIRST_ROUTING);
       }
 
       if (isMinimalMode) {
@@ -1409,9 +1444,14 @@ ${mcpInfoText}
           /(?:生成脚本|写脚本|运行脚本|执行脚本|读取文件|分析文件|写文件|写入文件|检查文件|python脚本|bash脚本|自动化脚本)/i.test(userContent);
 
         if (isAskingObjects) {
-          systemParts.push(`【系统实时调度指令 (优先级最高)】：检测到用户正在查询已连接环境（${env.name} · ${pType}）的实时对象/实体清单。根据当前平台规范，【你必须立即在首轮输出中自动调用 list_entities 工具向平台接口发起真实请求拉取数据】，严禁不调用工具直接静态回复！`);
+          systemParts.push(pType === 'neocrm'
+            ? `【系统实时调度指令 (优先级最高)】：用户正在查询销售易实时对象清单。必须先在当前项目目录真实执行 \`neo list object\` 并依据 CLI 返回作答；仅当 CLI 执行失败或返回无法解析时，才调用 \`list_entities\` 连接器回退，并标注 CLI 错误与最终数据来源。CLI 返回空列表是有效结果。严禁静态臆造。`
+            : `【系统实时调度指令 (优先级最高)】：检测到用户正在查询已连接环境（${env.name} · ${pType}）的实时对象/实体清单。根据当前平台规范，【你必须立即在首轮输出中自动调用 list_entities 工具向平台接口发起真实请求拉取数据】，严禁不调用工具直接静态回复！`);
         } else if (isAskingFields) {
-          systemParts.push(`【系统实时调度指令 (最高优先级 - 必须调用工具核对真实字段！)】：
+          systemParts.push(pType === 'neocrm'
+            ? `【系统实时调度指令 (最高优先级 - CLI 先行核对销售易字段)】：
+必须先在当前项目目录真实执行 \`neo describe object --api-key <entityApiKey>\`，按 CLI 结果核对字段。只有 CLI 失败或输出无效时，才调用 \`get_entity_fields\` 连接器回退，并标明 CLI 错误及实际来源。严禁凭记忆臆造 API Key、类型或选项值。`
+            : `【系统实时调度指令 (最高优先级 - 必须调用工具核对真实字段！)】：
 检测到用户正在质疑或要求核对业务对象的真实字段定义（如用户提示“字段名称有问题、可能不是 name 是别的”）。
 【核心铁律 - 绝不凭记忆猜字段】：
 1. 你必须立即在首轮输出中自动调用 get_entity_fields 或 get_print_template_fields 工具，向 CRM 平台发起真实接口请求获取对象的字段元数据！
@@ -1493,7 +1533,7 @@ ${mcpInfoText}
       }
 
       // Keep connector authorization and CLI routing after any standalone skill/preset setup advice.
-      if (isNeoConnector) systemParts.push(getNeoCliSessionInstruction(cliPreparation), NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING);
+      if (isNeoConnector) systemParts.push(NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING);
       const systemPromptText = systemParts.join('\n\n');
       const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
@@ -3003,12 +3043,14 @@ ${currentCompactionSummary.summary}
 
       if (env && tokenData) {
         toolsContext.list_entities = async (params: any) => {
-          const res = await this.metadataService.fetchEntityList(env, tokenData);
-          return { totalCount: res.length, entities: res.slice(0, 150) };
+          const result = await this.executeUnifiedTool('list_entities', params || {}, [], env, tokenData,
+            projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
         };
         toolsContext.get_entity_fields = async (params: any) => {
-          const res = await this.metadataService.fetchEntityFields(env, tokenData, params?.entityApiKey || '');
-          return { entityApiKey: params?.entityApiKey, totalFields: res.length, fields: res };
+          const result = await this.executeUnifiedTool('get_entity_fields', params || {}, [], env, tokenData,
+            projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
         };
         toolsContext.execute_sql_query = async (params: any) => {
           const res = await this.dataService.executeQueryAll(env, tokenData, params?.sql || params?.query || '');
@@ -3027,9 +3069,15 @@ ${currentCompactionSummary.summary}
           return await this.dataService.deleteRecord(env, tokenData, params?.entityApiKey || '', params?.recordId || params?.id);
         };
         toolsContext.create_custom_entity = async (params: any) => {
+          if ((env.productType || 'neocrm') === 'neocrm') {
+            throw new Error('销售易自定义对象必须通过 neo generate/deploy CLI，并先审查 source 与 dry-run；连接器直写已禁用');
+          }
           return await this.metadataService.createEntity(env, tokenData, params);
         };
         toolsContext.create_custom_field = async (params: any) => {
+          if ((env.productType || 'neocrm') === 'neocrm') {
+            throw new Error('销售易自定义字段必须通过 neo generate/deploy CLI，并先审查 source 与 dry-run；连接器直写已禁用');
+          }
           return await this.metadataService.createField(env, tokenData, params?.entityApiKey || '', params);
         };
       }
@@ -3272,6 +3320,35 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === 'list_entities') {
+      if ((env.productType || 'neocrm') === 'neocrm') {
+        try {
+          const result = await this.readNeoMetadataWithCli(env, tokenData, projectPath, signal,
+            (root) => this.neoMetadataCli.listObjects(root, { keyword: args.keyword, customOnly: args.isCustomOnly, signal }));
+          return {
+            data: { source: 'cli', cliCommand: result.command, totalCount: result.totalCount,
+              tenantTotalCount: result.tenantTotalCount, returnedCount: result.entities.length,
+              entities: result.entities.slice(0, 250),
+              _hint: '已通过 neo CLI 返回当前租户实体列表；如列表为空，视为 CLI 的有效结果。' },
+            summary: `通过 neo CLI ${result.command} 成功检索到 ${result.totalCount} 个对象`,
+          };
+        } catch (error: any) {
+          if (signal?.aborted || error?.name === 'AbortError') throw error;
+          const fallbackReason = this.safeNeoCliFallbackReason(error, tokenData);
+          const list = await this.metadataService.fetchEntityList(env, tokenData);
+          let filtered = list;
+          if (args.keyword) {
+            const keyword = String(args.keyword).toLowerCase();
+            filtered = filtered.filter((entity) => entity.apiKey.toLowerCase().includes(keyword) || entity.label.toLowerCase().includes(keyword));
+          }
+          if (args.isCustomOnly) filtered = filtered.filter((entity) => !entity.isStandard);
+          const entities = filtered.slice(0, 250).map((entity) => ({ apiKey: entity.apiKey, label: entity.label,
+            isStandard: entity.isStandard, ...(entity.description ? { description: entity.description } : {}) }));
+          return { data: { source: 'connector-fallback', cliCommand: 'neo list object', fallbackReason,
+            totalCount: filtered.length, returnedCount: entities.length, entities,
+            _hint: 'neo CLI 失败后已回退到当前连接器接口。' },
+            summary: `neo CLI 失败（${fallbackReason}），已回退连接器并检索到 ${filtered.length} 个对象` };
+        }
+      }
       const list = await this.metadataService.fetchEntityList(env, tokenData);
       let filtered = list;
       if (args.keyword) {
@@ -3303,6 +3380,26 @@ ${currentCompactionSummary.summary}
     if (name === 'get_entity_fields') {
       const apiKey = args.entityApiKey;
       if (!apiKey) throw new Error('缺少 entityApiKey 参数');
+      if ((env.productType || 'neocrm') === 'neocrm') {
+        try {
+          const result = await this.readNeoMetadataWithCli(env, tokenData, projectPath, signal,
+            (root) => this.neoMetadataCli.describeObject(root, String(apiKey), signal));
+          return { data: { source: 'cli', cliCommand: result.command, entityApiKey: result.apiKey,
+            totalFields: result.totalFields, fields: result.fields, fieldDictionary: result.markdown },
+            summary: `通过 neo CLI ${result.command} 成功加载 ${apiKey} 的 ${result.totalFields} 个字段定义` };
+        } catch (error: any) {
+          if (signal?.aborted || error?.name === 'AbortError') throw error;
+          const fallbackReason = this.safeNeoCliFallbackReason(error, tokenData);
+          const fields = await this.metadataService.fetchEntityFields(env, tokenData, apiKey);
+          const summaryList = fields.slice(0, 80).map((field) => ({ apiKey: field.apiKey, label: field.label,
+            itemType: field.itemType, typeName: field.typeName, custom: field.custom,
+            referObjectApiKey: field.referObjectApiKey,
+            pickOptions: field.pickOption?.map((option) => `${option.optionCode}:${option.optionLabel}`).slice(0, 15) }));
+          return { data: { source: 'connector-fallback', cliCommand: `neo describe object --api-key ${apiKey}`,
+            fallbackReason, entityApiKey: apiKey, totalFields: fields.length, fields: summaryList },
+            summary: `neo CLI 字段读取失败（${fallbackReason}），已回退连接器并加载 ${apiKey} 的 ${fields.length} 个字段定义` };
+        }
+      }
       const fields = await this.metadataService.fetchEntityFields(env, tokenData, apiKey);
       const summaryList = fields.slice(0, 80).map((f) => ({
         apiKey: f.apiKey,
@@ -3444,6 +3541,9 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "create_custom_entity") {
+      if ((env.productType || 'neocrm') === 'neocrm') {
+        throw new Error('销售易自定义对象必须通过 neo generate/deploy CLI，并先审查 source 与 dry-run；连接器直写已禁用');
+      }
       const res = await this.metadataService.createEntity(env, tokenData, {
         apiKey: args.apiKey,
         label: args.label,
@@ -3457,6 +3557,9 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "create_custom_field") {
+      if ((env.productType || 'neocrm') === 'neocrm') {
+        throw new Error('销售易自定义字段必须通过 neo generate/deploy CLI，并先审查 source 与 dry-run；连接器直写已禁用');
+      }
       const res = await this.metadataService.createField(env, tokenData, args.entityApiKey, {
         apiKey: args.apiKey,
         label: args.label,

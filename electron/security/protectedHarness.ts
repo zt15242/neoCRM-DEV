@@ -528,7 +528,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'list_entities',
-      description: '【核心 CRM 业务对象与实体列表拉取工具】获取当前已连接租户/企业下的所有业务实体对象清单（包含所有标准对象与自定义对象）。全面支持：1) 纷享销客 (FXIAOKE OpenAPI v2 租户真实对象列表，拉取 150+ 个真实业务对象)；2) 销售易 (NeoCRM 标准与自定义实体列表)；3) Salesforce (SObjects 列表)。【执行铁律】：当且仅当系统处于已连接状态时，凡用户询问当前租户/环境有哪些对象、查询租户对象信息、了解支持的业务模型时，必须立即自动调用此工具拉取当前连接环境的线上真实数据，严禁仅凭记忆或静态理论臆造回答！',
+      description: '【核心 CRM 业务对象与实体列表拉取工具】获取当前已连接租户/企业下的所有业务实体对象清单（包含所有标准对象与自定义对象）。纷享销客、Salesforce 使用当前连接器接口。销售易 NeoCRM 必须先在当前项目目录执行 `neo list object`；仅当 CLI 失败或无效时才调用此连接器工具回退，并如实记录来源与 CLI 错误。CLI 成功返回空列表不回退。严禁静态臆造租户数据。',
       parameters: {
         type: 'object',
         properties: {
@@ -548,7 +548,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'get_entity_fields',
-      description: '【核心 CRM 对象元数据探测工具 (Describe)】获取指定业务实体的完整字段列表与元数据详情（包含字段中文名 label、API Key、类型代码 itemType、类型名称、是否必填、关联目标等）。全面支持：1) 纷享销客 Describe 探测 (如 AccountObj/ContactObj/ContractObj/SalesOrderObj 等真实字段清单与枚举选项)；2) 销售易元数据探测 (如 account/contract/opportunity 等)；3) Salesforce Describe。核心原则：在查询或分析字段、编写脚本或配置流程前，必须先调用此工具获取实时字段定义与选项列表，严禁臆造字段 API Key！',
+      description: '【核心 CRM 对象元数据探测工具 (Describe)】获取指定业务实体的字段 API Key、类型、必填项、关联目标和选项值。纷享销客、Salesforce 使用当前连接器接口。销售易 NeoCRM 必须先在当前项目目录执行 `neo describe object --api-key <entityApiKey>`；仅当 CLI 失败或无效时才调用此连接器工具回退，并如实记录来源与 CLI 错误。字段不确定时必须先读取真实定义，严禁臆造 API Key。',
       parameters: {
         type: 'object',
         properties: {

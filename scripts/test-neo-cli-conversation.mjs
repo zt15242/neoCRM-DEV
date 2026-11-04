@@ -23,8 +23,9 @@ try {
     stdin: { contents: `
       export { SessionStore } from './electron/services/sessionStore';
       export { AiService } from './electron/services/aiService';
+      export { NeoMetadataCliReader } from './electron/services/neoMetadataCli';
       export { ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation } from './electron/services/neocrmCliSession';
-      export { filterNeoCliTools, getNeoCliSessionInstruction } from './electron/security/neoCliConversation';
+      export { filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING } from './electron/security/neoCliConversation';
       export { licenseService } from './electron/security/licenseService';
       export { requiresRoleLicense, requiresFlowLicense } from './shared/licensePolicy';
       export { decryptBuiltinSkillAsset } from './electron/security/protectedSkillAssets';
@@ -50,8 +51,8 @@ try {
     } }],
   });
   const subject = createRequire(import.meta.url)(output);
-  const { SessionStore, AiService, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
-    filterNeoCliTools, getNeoCliSessionInstruction, CRM_HARNESS_TOOLS_SPEC, getProtectedSkillInstruction } = subject;
+  const { SessionStore, AiService, NeoMetadataCliReader, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
+    filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING, CRM_HARNESS_TOOLS_SPEC, getProtectedSkillInstruction } = subject;
   const project = path.join(fixture, '当前工作区');
   fs.mkdirSync(project);
   const environment = { id: 'connector-sandbox', name: '当前连接器', productType: 'neocrm', envType: 'sandbox',
@@ -127,8 +128,15 @@ try {
   assert.equal(tools.some((tool) => tool.function.name === 'get_nex_extension_code'), false);
   assert.equal(tools.some((tool) => tool.function.name === 'bash'), true);
   assert.equal(tools.some((tool) => tool.function.name === 'skill'), true);
+  assert.equal(filterNeoCliTools([{ function: { name: 'create_custom_entity' } }]).length, 0);
+  assert.equal(filterNeoCliTools([{ function: { name: 'create_custom_field' } }]).length, 0);
   assert.match(getProtectedSkillInstruction('neo-nex-dev'), /neo retrieve nex/);
   assert.match(getProtectedSkillInstruction('skill-neo-cli-usage'), /neo-project.json/);
+  assert.match(NEO_CLI_FIRST_ROUTING, /neo list object/);
+  assert.match(NEO_CLI_FIRST_ROUTING, /neo describe object/);
+  assert.match(NEO_CLI_FIRST_ROUTING, /没有普通业务记录 XOQL 查询/);
+  assert.match(NEO_CLI_FIRST_ROUTING, /CLI 命令失败.*才允许调用对应的旧连接器工具/s);
+  assert.match(NEO_CLI_FIRST_ROUTING, /禁止调用 neo login、neo logout 或会输出令牌的 neo loginstatus/);
 
   const ai = new AiService(store, {}, {});
   const fixtureConfig = { providers: [{ id: 'fixture', name: 'Fixture', baseUrl: 'http://127.0.0.1:1', apiKey: 'fixture-key',
@@ -162,6 +170,86 @@ try {
   assert.equal(events.filter((event) => event.type === 'tool_start' && event.toolCall.name === 'skill').length, 2);
   await assert.rejects(() => ai.executeUnifiedTool('list_nex_extensions', {}, [], environment, token, project), /旧 NEX 工具已停用/);
   console.log('PASS conversation integration: creates manifest before model request, loads both skills, blocks legacy NEX tools');
+
+  requests.length = 0;
+  const generalEvents = [];
+  await ai.startChatStream({ requestId: 'fixture-general', sessionId: 'fixture-session', messageId: 'fixture-msg',
+    providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true,
+    messages: [{ id: 'fixture-general-u', role: 'user', content: '查询当前租户有哪些对象', createdAt: Date.now() }], mode: 'standard' },
+    (event) => generalEvents.push(event));
+  const generalPrompt = requests[0].messages.find((message) => message.role === 'system').content;
+  assert.match(generalPrompt, /已加载技能 neo-cli-usage/);
+  assert.match(generalPrompt, /销售易功能统一 CLI 优先路由/);
+  assert.match(generalPrompt, /CLI 成功返回空数据是有效结果/);
+  assert.match(generalPrompt, /这些操作直接使用现有连接器工具/);
+  assert.equal(generalEvents.filter((event) => event.type === 'tool_start' && event.toolCall.name === 'skill').length, 1);
+  console.log('PASS every NeoCRM conversation loads CLI skill and global CLI-first routing, including non-NEX/non-approval requests');
+
+  saveFixture(session);
+  const cliCommands = [];
+  const entityListOutput = '共 2 个实体：\n\n标准实体\n  account  客户\n\n自定义实体\n  demo__c  示例对象\n';
+  const fieldDictionary = '# 客户 (account)\n\n共 2 个字段\n\n## 基础字段\n\n| 字段名称 | API Key | 类型 | Java类型 | 必填 | 可创建 | 可更新 | 说明 |\n|:---|:---|:---|:---|:---:|:---:|:---:|:---|\n| 客户名称 | accountName | 文本 | String | ❌ | ✅ | ✅ | — |\n| 客户编号 | accountCode | 文本 | String | ❌ | ✅ | ✅ | — |\n';
+  ai.neoMetadataCli = new NeoMetadataCliReader(async (args, cwd) => {
+    cliCommands.push({ args, cwd });
+    if (args[0] === 'list') return entityListOutput;
+    if (args[0] === 'describe') return fieldDictionary;
+    throw new Error('unexpected CLI command');
+  });
+  ai.metadataService = {
+    fetchEntityList: async () => { throw new Error('connector must not run after CLI success'); },
+    fetchEntityFields: async () => { throw new Error('connector must not run after CLI success'); },
+  };
+  const listed = await ai.executeUnifiedTool('list_entities', {}, [], environment, token, project);
+  assert.equal(listed.data.source, 'cli');
+  assert.equal(listed.data.tenantTotalCount, 2);
+  assert.deepEqual(listed.data.entities.map((entity) => entity.apiKey), ['account', 'demo__c']);
+  const described = await ai.executeUnifiedTool('get_entity_fields', { entityApiKey: 'account' }, [], environment, token, project);
+  assert.equal(described.data.source, 'cli');
+  assert.equal(described.data.totalFields, 2);
+  assert.equal(described.data.fields[0].apiKey, 'accountName');
+  assert.match(described.data.fieldDictionary, /accountCode/);
+  assert.deepEqual(cliCommands.map((item) => item.args.slice(0, 2)), [['list', 'object'], ['describe', 'object']]);
+  assert(cliCommands.every((item) => item.cwd === project));
+  console.log('PASS entity list/field tools execute and validate CLI output before returning');
+
+  ai.metadataService = {
+    createEntity: async () => { throw new Error('connector metadata write must not run'); },
+    createField: async () => { throw new Error('connector metadata write must not run'); },
+  };
+  await assert.rejects(() => ai.executeUnifiedTool('create_custom_entity', { apiKey: 'demo', label: '示例' }, [], environment, token, project),
+    /必须通过 neo generate\/deploy CLI/);
+  await assert.rejects(() => ai.executeUnifiedTool('create_custom_field', { entityApiKey: 'account', apiKey: 'demo', label: '示例', itemType: 1 }, [], environment, token, project),
+    /必须通过 neo generate\/deploy CLI/);
+  console.log('PASS NeoCRM metadata writes cannot bypass CLI source and deployment gates');
+
+  let ptcEntityList;
+  let ptcEntityFields;
+  ai.dshToolService = { executePtcCode: async (_args, tools) => {
+    ptcEntityList = await tools.list_entities({});
+    ptcEntityFields = await tools.get_entity_fields({ entityApiKey: 'account' });
+    return { logs: [], executionTimeMs: 1 };
+  } };
+  const beforePtcCommands = cliCommands.length;
+  await ai.executeUnifiedTool('run_code', { code: 'fixture' }, [], environment, token, project);
+  assert.equal(ptcEntityList.source, 'cli');
+  assert.equal(ptcEntityFields.source, 'cli');
+  assert.deepEqual(cliCommands.slice(beforePtcCommands).map((item) => item.args.slice(0, 2)),
+    [['list', 'object'], ['describe', 'object']]);
+  console.log('PASS PTC metadata helpers use the same CLI-first dispatcher');
+
+  ai.neoMetadataCli = new NeoMetadataCliReader(async () => { throw new Error('CLI unavailable fixture-access-secret'); });
+  ai.metadataService = {
+    fetchEntityList: async () => [{ apiKey: 'account', label: '客户', isStandard: true }],
+    fetchEntityFields: async () => [{ apiKey: 'accountName', label: '客户名称', itemType: 1, typeName: '文本', custom: false }],
+  };
+  const fallbackList = await ai.executeUnifiedTool('list_entities', {}, [], environment, token, project);
+  assert.equal(fallbackList.data.source, 'connector-fallback');
+  assert.match(fallbackList.data.fallbackReason, /CLI unavailable/);
+  assert.doesNotMatch(fallbackList.data.fallbackReason, /fixture-access-secret/);
+  const fallbackFields = await ai.executeUnifiedTool('get_entity_fields', { entityApiKey: 'account' }, [], environment, token, project);
+  assert.equal(fallbackFields.data.source, 'connector-fallback');
+  assert.doesNotMatch(fallbackFields.data.fallbackReason, /fixture-access-secret/);
+  console.log('PASS invalid/unavailable CLI falls back once with source and redacted failure reason');
 
   for (const [mode, protocol] of [['ptc', 'openai'], ['standard', 'google-gemini']]) {
     fixtureConfig.providers[0].protocol = protocol;

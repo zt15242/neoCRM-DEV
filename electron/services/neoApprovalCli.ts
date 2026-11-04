@@ -52,6 +52,8 @@ export const runNeoApprovalCli: CliRun = (args, cwd, signal) => {
   });
 };
 
+export const runNeoCliCommand = runNeoApprovalCli;
+
 function jsonObject(text: string): any {
   try {
     const value = JSON.parse(text.replace(/^\uFEFF/, '').trim());

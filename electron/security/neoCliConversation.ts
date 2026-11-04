@@ -15,13 +15,17 @@ export function getNeoCliConversationSkill(name: string): string | null {
 export const LEGACY_NEX_TOOLS = new Set([
   'list_nex_extensions', 'get_nex_extension_code', 'generate_nex_extension', 'deploy_nex_extension',
 ]);
+export const NEO_CLI_ONLY_WRITE_TOOLS = new Set(['create_custom_entity', 'create_custom_field']);
 
 export function isNexConversation(content: string): boolean {
   return /\bnex\b|页面扩展|扩展代码/i.test(content);
 }
 
 export function filterNeoCliTools<T extends { function?: { name?: string } }>(tools: T[]): T[] {
-  return tools.filter((tool) => !LEGACY_NEX_TOOLS.has(tool.function?.name || ''));
+  return tools.filter((tool) => {
+    const name = tool.function?.name || '';
+    return !LEGACY_NEX_TOOLS.has(name) && !NEO_CLI_ONLY_WRITE_TOOLS.has(name);
+  });
 }
 
 export function getNeoCliSessionInstruction(preparation: { success: boolean; message: string }): string {
@@ -29,9 +33,25 @@ export function getNeoCliSessionInstruction(preparation: { success: boolean; mes
 当前工作区准备结果：${preparation.message}。
 ${preparation.success ? '项目清单和 CLI 共享授权已验证就绪。' : 'CLI 尚未就绪；不得声称初始化或同步成功。'}
 缺少 neo-project.json 时由宿主自动补齐并复用当前连接器会话，不调用 neo init，不调用 neo login，不要求用户重新鉴权。
-若 CLI 仍报错，报告原始错误与准备结果；可使用连接器已授权的数据工具继续适用的查询。不得把本地文件或失败的接口探测当作租户查询结果。
+销售易功能统一遵循 NEO_CLI_FIRST_ROUTING：先运行当前项目中的 neo CLI；只有该功能没有 CLI 命令，或 CLI 执行失败后，才使用现有连接器能力。任何回退都要在结果中说明实际来源和原因。
+若 CLI 仍报错，不要重复登录、猜测环境或反复执行同一失败命令；保留原始错误和准备结果。不得把本地文件或失败的接口探测当作租户查询结果。
 只有连接器自身明确未登录或授权失效时，才通过连接器界面处理登录。`;
 }
+
+export const NEO_CLI_FIRST_ROUTING = `【销售易功能统一 CLI 优先路由】
+对当前销售易连接器的每项租户操作，先判断 CLI 1.0.8 是否有对应命令。存在时先在当前工作区执行实际 neo 命令，再使用结果；CLI 命令失败、超时或返回无效结果后，才允许调用对应的旧连接器工具作为兼容回退。回退必须报告 CLI 命令、失败原因和最终数据来源，不能把连接器回退描述成 CLI 成功。CLI 成功返回空数据是有效结果，不得回退。
+
+CLI 已覆盖的功能包括：
+- 实体列表与字段结构：neo list object；neo describe object --api-key <apiKey>。
+- 审批流：neo list approvalprocess；neo retrieve approvalprocess --definition-id <id>。
+- 页面布局、通用选项集、校验/查重规则、UI 组件、NEX、后端代码包：使用对应的 neo list / describe / retrieve / generate / deploy / enable / disable 命令。
+- 自动流程或指定元数据类型若 CLI 1.0.8 没有对应子命令，则使用既有连接器流程适配器，并标明 CLI 不覆盖该能力。
+
+CLI 1.0.8 没有普通业务记录 XOQL 查询、记录创建/更新/删除或打印模板查询命令。这些操作直接使用现有连接器工具；不要虚构 neo query 或 neo data 命令。
+
+销售易自定义对象与字段写入必须使用 source-driven 的 neo generate / neo deploy 流程。禁止用旧连接器 create_custom_entity / create_custom_field 直写或在 CLI 写入失败后降级直写；先检查 source 与 dry-run，并遵守部署确认门禁。
+
+运行命令使用当前对话绑定的项目目录，禁止调用 neo login、neo logout 或会输出令牌的 neo loginstatus。CLI 准备失败时不重新鉴权；写入操作仍遵守用户确认和现有安全门禁。`;
 
 export const NEO_NEX_CLI_ROUTING = `【NEX 查询与源码获取执行通道】
 NEX 必须按已加载的 neo-cli-usage 和 neo-nex-dev 技能使用当前工作区的 neo CLI。禁止调用旧 list_nex_extensions / get_nex_extension_code / generate_nex_extension / deploy_nex_extension，也不能探测旧 BFF 接口或用本地 src/nex 扫描冒充租户结果。
