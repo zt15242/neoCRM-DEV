@@ -23,7 +23,7 @@ try {
     } }],
   });
   const { AiService } = require(backend);
-  const service = Object.create(AiService.prototype);
+  const service = new AiService({}, {}, {});
   const a = new AbortController(), b = new AbortController();
   service.activeControllers = new Map([['req-a', a], ['sess-a', a], ['req-b', b], ['sess-b', b]]);
   assert.equal(service.abortChatStream('missing'), false);
@@ -47,7 +47,7 @@ try {
     const initial = ['a','b','c','d'].map(id => ({ id: 'sess-' + id, title: id,
       presetId: 'harness-agent', providerId: 'fixture', modelId: 'fixture', createdAt: 1, updatedAt: 1,
       messages: [{id: 'old-' + id, role: 'user', content: 'original ' + id, createdAt: 1}] }));
-    let persisted = structuredClone(initial), listener;
+    let persisted = structuredClone(initial), listener, agentListener;
     window.started = []; window.aborted = []; window.toasts = []; window.saves = [];
     window.neoApi = {
       aiGetConfig: async () => ({ providers: [{ id: 'fixture', name: 'Fixture', apiKey: 'test-only', models: [{ id: 'fixture', name: 'Fixture' }] }],
@@ -68,8 +68,13 @@ try {
       },
       aiAbortChatStream: async id => { window.aborted.push(id); await new Promise(resolve => { window.resolveAbort = resolve; }); return true; },
       onAiStreamEvent: callback => { listener = callback; return () => { listener = null; }; },
+      onAgentSessionUpdated: callback => { agentListener = callback; return () => { agentListener = null; }; },
     };
     window.emit = (params, type, extra = {}) => flushSync(() => listener({ ...params, type, ...extra }));
+    window.emitAgent = session => {
+      persisted = [structuredClone(session), ...persisted.filter(item => item.id !== session.id)];
+      flushSync(() => agentListener(session));
+    };
     function Harness() {
       const [id, setId] = useState('sess-a');
       const [sessions, setSessions] = useState(initial);
@@ -195,6 +200,21 @@ try {
         await run('window.emit(window.started.find(s => s.sessionId === "sess-a"), "done")');
         assert.equal(await run('window.composer.isStreaming'), true);
         console.log('PASS recovery: save/start failures release their own locks; completion of another stream leaves this session busy');
+
+        await run('window.agent = { id: "sess-agent", title: "Analyze files", presetId: "harness-agent", providerId: "fixture", modelId: "fixture", createdAt: 1, updatedAt: Date.now(), messages: [{id:"agent-u", role:"user",content:"Analyze files",createdAt:1},{id:"agent-a",role:"assistant",content:"",createdAt:1}], agentRun: {kind:"subagent",createdBySessionId:"sess-b",parentSessionId:"sess-b",status:"queued",requestId:"agent-request",messageId:"agent-a"} }; window.emitAgent(window.agent)');
+        assert.equal(await run('window.snapshot().sessions.some(s => s.id === "sess-agent")'), true);
+        assert.equal(await run('Boolean(document.querySelector("[aria-label=后台代理任务]"))'), true);
+        assert.equal(await run('window.composer.isStreaming'), true);
+        await select('sess-agent');
+        assert.equal(await run('window.composer.isStreaming'), true);
+        await run('window.agent = {...window.agent,updatedAt:Date.now()+1,messages:window.agent.messages.map(m=>m.id==="agent-a"?{...m,content:"Verified agent result"}:m),agentRun:{...window.agent.agentRun,status:"completed"}}; window.emitAgent(window.agent)');
+        assert.equal(await run('window.composer.isStreaming'), false);
+        assert.equal(await run('window.snapshot().sessions.find(s=>s.id==="sess-agent").messages.at(-1).content'), 'Verified agent result');
+        await run('Array.from(document.querySelectorAll("button")).find(button=>button.textContent==="返回主会话").click()');
+        assert.equal(await run('window.snapshot().id'), 'sess-b');
+        assert.equal(await run('window.composer.isStreaming'), true);
+        assert.equal(await run('window.snapshot().sessions.filter(s=>s.id==="sess-agent").length'), 1);
+        console.log('PASS agent snapshots: autonomous insertion, queued/busy and completed/idle UI, parent task links and return to the live main conversation');
         win.destroy(); app.exit(0);
       } catch (error) { console.error(error); win.destroy(); app.exit(1); }
     }).catch(error => { console.error(error); app.exit(1); });

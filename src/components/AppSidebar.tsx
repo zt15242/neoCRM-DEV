@@ -48,6 +48,7 @@ import {
   WorkspaceProject 
 } from '../../shared/types';
 import { AI_AGENT_PRESETS } from '../../shared/constants';
+import { AGENT_STATUS_LABELS, orderAgentSessions } from './ai/chatSessionState';
 
 export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'mail' | 'workspace' | 'meeting';
 
@@ -735,7 +736,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           projects.map((proj) => {
             const isExpanded = expandedProjectIds.includes(proj.id);
             const isCurrentActive = activeProjectId === proj.id;
-            const projSessions = filteredSessions.filter((s) => s.projectId === proj.id || (!s.projectId && (proj.isDefault || proj === projects[0])));
+            const projSessions = orderAgentSessions(filteredSessions.filter((s) => s.projectId === proj.id || (!s.projectId && (proj.isDefault || proj === projects[0]))));
 
             return (
               <div key={proj.id} className="space-y-0.5">
@@ -841,8 +842,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                         return (
                           <div
                             key={sess.id}
+                            title={sess.agentRun ? `${sess.agentRun.kind === 'subagent' ? '子代理' : '自主会话'} · ${AGENT_STATUS_LABELS[sess.agentRun.status]}${sess.agentRun.error ? `\n${sess.agentRun.error}` : ''}` : sess.title}
                             onClick={() => onSelectSession(sess.id)}
-                            className={`group relative px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition-all flex items-center justify-between ${
+                            className={`group relative px-2.5 py-1.5 rounded-lg text-xs cursor-pointer transition-all flex items-center justify-between ${sess.agentRun?.parentSessionId ? 'ml-3 border-l border-slate-300' : ''} ${
                               isActive
                                 ? 'bg-slate-200/90 text-slate-900 font-semibold shadow-2xs'
                                 : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-900'
@@ -878,7 +880,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                                   </button>
                                 </form>
                               ) : (
-                                <span className="truncate flex-1">{sess.title}</span>
+                                <>
+                                  <span className="truncate flex-1">{sess.title}</span>
+                                  {sess.agentRun && <span className={`text-[9px] shrink-0 ${['running', 'queued'].includes(sess.agentRun.status) ? 'text-sky-600 animate-pulse' : sess.agentRun.status === 'failed' ? 'text-rose-600' : 'text-slate-400'}`}>
+                                    {sess.agentRun.kind === 'subagent' ? '代理' : '自主'} · {AGENT_STATUS_LABELS[sess.agentRun.status]}
+                                  </span>}
+                                </>
                               )}
                             </div>
 

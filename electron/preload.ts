@@ -115,6 +115,11 @@ export const neoApi = {
   aiClearSessions: () => ipcRenderer.invoke('ai:clearSessions'),
   aiStartChatStream: (params: any) => ipcRenderer.invoke('ai:startChatStream', params),
   aiAbortChatStream: (targetId?: string) => ipcRenderer.invoke('ai:abortChatStream', targetId),
+  onAgentSessionUpdated: (callback: (session: any) => void) => {
+    const listener = (_: any, session: any) => callback(session);
+    ipcRenderer.on('ai:agentSessionUpdated', listener);
+    return () => { ipcRenderer.removeListener('ai:agentSessionUpdated', listener); };
+  },
   aiSelectAndParseFile: () => ipcRenderer.invoke('file:selectAndParse'),
   aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke('file:parseBuffer', fileName, buffer),
   aiSaveMcpServer: (server: any) => ipcRenderer.invoke('ai:saveMcpServer', server),

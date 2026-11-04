@@ -380,6 +380,18 @@ export interface AiChatMessage {
 
 export type AiSessionMode = 'standard' | 'ptc' | 'minimal' | 'plan' | 'default';
 
+export interface AiAgentRun {
+  kind: 'autonomous' | 'subagent';
+  createdBySessionId: string;
+  parentSessionId?: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'waiting';
+  requestId: string;
+  messageId: string;
+  startedAt?: number;
+  finishedAt?: number;
+  error?: string;
+}
+
 export interface AiChatSession {
   id: string;
   title: string;
@@ -395,6 +407,7 @@ export interface AiChatSession {
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;
+  agentRun?: AiAgentRun;
 }
 
 export interface AiStreamEvent {

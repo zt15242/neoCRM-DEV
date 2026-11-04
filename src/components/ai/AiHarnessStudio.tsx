@@ -20,7 +20,7 @@ import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI
 import { AiSidebar } from './AiSidebar';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
-import { mergeSavedChatSessions } from './chatSessionState';
+import { mergeSavedChatSessions, AGENT_STATUS_LABELS } from './chatSessionState';
 import { MessageTurnNavigator } from './MessageTurnNavigator';
 import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
@@ -188,9 +188,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   // 严格在挂载或外部非流式更新时同步 sessions
   useEffect(() => {
-    if (propSessions && propSessions.length > 0 && Object.keys(activeStreams).length === 0) {
-      setSessionsState(propSessions);
-      sessionsRef.current = propSessions;
+    if (propSessions) {
+      const next = propSessions.map(item => activeStreamsRef.current[item.id] && !item.agentRun
+        ? sessionsRef.current.find(current => current.id === item.id) || item : item);
+      setSessionsState(next);
+      sessionsRef.current = next;
     }
   }, [propSessions]);
 
@@ -303,6 +305,28 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const reasoningStartTimesRef = useRef<Record<string, number>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    const receive = (session: AiChatSession) => {
+      if (!session.agentRun || !isRoleVisible(session.presetId)) return;
+      const existing = sessionsRef.current.find(item => item.id === session.id);
+      if (existing && existing.updatedAt > session.updatedAt) return;
+      setSessions(previous => {
+        return existing ? previous.map(item => item.id === session.id ? session : item) : [session, ...previous];
+      });
+      const state = session.agentRun;
+      const next = { ...activeStreamsRef.current };
+      if (state.status === 'running' || state.status === 'queued') {
+        next[session.id] = { requestId: state.requestId, messageId: state.messageId };
+      } else delete next[session.id];
+      activeStreamsRef.current = next;
+      setActiveStreams(next);
+    };
+    const unsubscribe = window.neoApi?.onAgentSessionUpdated?.(receive);
+    // 重新加载界面后也恢复后台运行标记；先订阅再读取，避免漏掉新任务。
+    window.neoApi?.aiGetSessions?.().then(items => items.filter(item => item.agentRun).forEach(receive)).catch(() => {});
+    return () => { unsubscribe?.(); };
+  }, [privateFeaturesVisible]);
+
   // 判断供应商是否已配置完成
   const isProviderConfigured = (p?: AiProviderConfig | null) =>
     Boolean(
@@ -363,7 +387,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       if (window.neoApi?.aiGetSessions) {
         const list = await window.neoApi.aiGetSessions();
         const validList = list.filter((s) => s.messages && s.messages.length > 0);
-        setSessions(validList);
+        setSessions(previous => mergeSavedChatSessions(validList, previous, activeStreamsRef.current, ''));
         if (validList.length > 0 && !activeSessionId) {
           const first = validList[0];
           if (requiresRoleLicense(first.presetId) && !licStatus?.isAuthorized) {
@@ -394,6 +418,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   }, []);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId && isRoleVisible(s.presetId)) || null;
+
+  useEffect(() => {
+    const selected = sessionsRef.current.find(item => item.id === activeSessionId);
+    if (!selected?.agentRun) return;
+    setCurrentProviderId(selected.providerId);
+    setCurrentModelId(selected.modelId);
+    setSelectedPresetId(selected.presetId);
+    setActiveSkillIds(selected.activeSkillIds || []);
+  }, [activeSessionId]);
 
   const handleJumpToTop = () => {
     if (messagesContainerRef.current) {
@@ -929,6 +962,13 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             <h2 className="text-xs font-semibold text-slate-800 truncate">
               {activeSession ? activeSession.title : currentPreset.name}
             </h2>
+            {activeSession?.agentRun && <span className="text-[10px] shrink-0 text-sky-700">
+              {activeSession.agentRun.kind === 'subagent' ? '子代理' : '自主会话'} · {AGENT_STATUS_LABELS[activeSession.agentRun.status]}
+            </span>}
+            {activeSession?.agentRun && sessions.some(item => item.id === activeSession.agentRun?.createdBySessionId) && <button
+              onClick={() => setActiveSessionId(activeSession.agentRun!.createdBySessionId)}
+              className="text-[10px] shrink-0 text-sky-600 hover:underline"
+            >返回主会话</button>}
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
               {currentPreset.name.split(" (")[0]}
             </span>
@@ -1047,6 +1087,18 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             </button>
           </div>
         </div>
+
+        {activeSessionId && sessions.some(item => item.agentRun?.createdBySessionId === activeSessionId) && (
+          <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-slate-100 px-3 py-2" aria-label="后台代理任务">
+            {sessions.filter(item => item.agentRun?.createdBySessionId === activeSessionId).map(item => (
+              <button key={item.id} onClick={() => setActiveSessionId(item.id)}
+                className="max-w-64 truncate rounded-md bg-slate-50 px-2 py-1 text-[11px] text-slate-600 hover:bg-sky-50 hover:text-sky-700"
+                title={item.agentRun?.error || item.title}>
+                {item.title} · {AGENT_STATUS_LABELS[item.agentRun!.status]}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* 中部消息展示区：独立的左侧刻度导轨槽位与独立滚动的消息流 (彼此物理隔离，绝不重叠覆盖) */}
         <div className="flex-1 flex flex-row min-w-0 min-h-0 overflow-hidden relative">

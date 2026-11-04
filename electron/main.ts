@@ -73,6 +73,11 @@ metadataService.setTokenRefreshCallback(handleTokenRefresh);
 dataService.setTokenRefreshCallback(handleTokenRefresh);
 
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
+aiService.onAgentSessionChanged((session) => {
+  if (win && !win.isDestroyed() && restrictedFeatureService.canUseRole(session.presetId)) {
+    win.webContents.send('ai:agentSessionUpdated', session);
+  }
+});
 const fileService = new FileService();
 const workflowService = new WorkflowService(metadataService, undefined, sessionStore);
 const printTemplateService = new PrintTemplateService(metadataService);

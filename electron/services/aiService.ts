@@ -6,6 +6,12 @@ import { requestMeetingModelText } from './meetingModelClient';
 import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
 import { NeoMetadataCliReader } from './neoMetadataCli';
 import { NeoBusinessTypeService } from './neoBusinessTypeService';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { AgentSessionService, type AgentRunContext, type ChatRunParams } from './agentSessionService';
+import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '../security/agentTools';
+const connectorKey = (session: any) => JSON.stringify([session.environment?.id, session.environment?.productType,
+  session.tokenData?.tenant_id, session.tokenData?.userInfo?.userId,
+  session.tokenData?.instance_uri || session.environment?.neoBaseURL]);
 import { resolveSalesforceAlias } from './salesforceService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
@@ -76,6 +82,21 @@ import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isAp
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
+  private agentContext = new AsyncLocalStorage<AgentRunContext>();
+  private agentListeners = new Set<(session: AiChatSession) => void>();
+  private recoveredAgentSessions = false;
+  private agentSessions = new AgentSessionService({
+    getSessions: () => this.getSessions(),
+    saveSession: (session) => { this.saveSession(session, true); },
+    run: (params, emit) => this.runWithAgentContext(params, emit, true),
+    abort: (id) => { this.abortController(id); },
+    notify: (session) => { for (const listener of this.agentListeners) listener(session); },
+  });
+
+  public onAgentSessionChanged(listener: (session: AiChatSession) => void) {
+    this.agentListeners.add(listener);
+    return () => { this.agentListeners.delete(listener); };
+  }
 
   private skillPackageService = new SkillPackageService();
   private mcpClientService = new McpClientService();
@@ -842,21 +863,40 @@ export class AiService {
 
   public getSessions(): AiChatSession[] {
     const filePath = this.getSessionsPath();
-    if (!fs.existsSync(filePath)) return [];
+    if (!fs.existsSync(filePath)) { this.recoveredAgentSessions = true; return []; }
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       const list: AiChatSession[] = Array.isArray(data) ? data : [];
+      if (!this.recoveredAgentSessions) {
+        this.recoveredAgentSessions = true;
+        let changed = false;
+        for (const session of list) {
+          if (session.agentRun && ['running', 'queued'].includes(session.agentRun.status)) {
+            session.agentRun = { ...session.agentRun, status: 'interrupted', finishedAt: Date.now(), error: '应用已重启，任务中断；可发送消息继续' };
+            for (const message of session.messages || []) {
+              message.toolCalls = message.toolCalls?.map(item => item.status === 'running'
+                ? { ...item, status: 'error', resultSummary: '应用已重启，执行中断' } : item);
+            }
+            changed = true;
+          }
+        }
+        if (changed) fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+      }
       return list.filter((s) => Array.isArray(s.messages) && s.messages.length > 0);
     } catch {
       return [];
     }
   }
 
-  public saveSession(session: AiChatSession): AiChatSession[] {
+  public saveSession(session: AiChatSession, fromAgent = false): AiChatSession[] {
     const sessions = this.getSessions();
     const idx = sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
-      sessions[idx] = session;
+      const stored = sessions[idx];
+      sessions[idx] = !fromAgent && stored.agentRun
+        ? { ...session, agentRun: stored.agentRun,
+            ...(this.agentSessions.isActive(session.id) ? { messages: stored.messages, compactionSummary: stored.compactionSummary } : {}) }
+        : session;
     } else {
       sessions.unshift(session);
     }
@@ -865,12 +905,14 @@ export class AiService {
   }
 
   public deleteSession(sessionId: string): AiChatSession[] {
-    const sessions = this.getSessions().filter((s) => s.id !== sessionId);
+    this.abortChatStream(sessionId);
+    const sessions = this.getSessions().filter((s) => s.id !== sessionId && s.agentRun?.createdBySessionId !== sessionId);
     fs.writeFileSync(this.getSessionsPath(), JSON.stringify(sessions, null, 2), 'utf-8');
     return sessions;
   }
 
   public clearSessions(): boolean {
+    this.abortChatStream();
     fs.writeFileSync(this.getSessionsPath(), JSON.stringify([], null, 2), 'utf-8');
     return true;
   }
@@ -878,6 +920,19 @@ export class AiService {
   // ================= 对话流与 Agent Harness 核心 =================
 
   public abortChatStream(requestIdOrSessionId?: string): boolean {
+    if (!requestIdOrSessionId) this.agentSessions.stopAll();
+    else {
+      const id = this.getSessions().find(item => item.id === requestIdOrSessionId || item.agentRun?.requestId === requestIdOrSessionId)?.id
+        || [...this.activeControllers].find(([id, ctrl]) => id.startsWith('sess_') && ctrl === this.activeControllers.get(requestIdOrSessionId))?.[0]
+        || requestIdOrSessionId;
+      const stoppedChildren = this.agentSessions.stopOwnedBy(id);
+      const stopped = this.agentSessions.stop(id);
+      return this.abortController(requestIdOrSessionId) || stopped || stoppedChildren;
+    }
+    return this.abortController();
+  }
+
+  private abortController(requestIdOrSessionId?: string): boolean {
     if (!requestIdOrSessionId) {
       let anyAborted = false;
       for (const [id, ctrl] of this.activeControllers.entries()) {
@@ -903,22 +958,25 @@ export class AiService {
     return false;
   }
 
-  public async startChatStream(
-    params: {
-      requestId: string;
-      sessionId: string;
-      messageId: string;
-      providerId: string;
-      modelId: string;
-      presetPrompt?: string;
-      messages: AiChatMessage[];
-      enableTools?: boolean;
-      activeSkillIds?: string[];
-      activeMcpServerIds?: string[];
-      compactionSummary?: any;
-      projectPath?: string;
-      mode?: AiSessionMode;
-    },
+  public async startChatStream(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void): Promise<void> {
+    const stored = this.getSessions().find(item => item.id === params.sessionId);
+    if (stored?.agentRun) {
+      this.agentSessions.startFromUi(stored, params);
+      return;
+    }
+    return this.runWithAgentContext(params, sendEvent);
+  }
+
+  private runWithAgentContext(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void, managed = false) {
+    const stored = this.getSessions().find(item => item.id === params.sessionId);
+    const effective = { ...params, projectId: stored?.projectId || params.projectId,
+      mode: params.mode || stored?.mode || 'standard' as AiSessionMode };
+    return DshToolService.runInSession(params.sessionId,
+      () => this.agentContext.run({ params: effective, managed }, () => this.runChatStream(effective, sendEvent)));
+  }
+
+  private async runChatStream(
+    params: ChatRunParams,
     sendEvent: (event: AiStreamEvent) => void
   ): Promise<void> {
     const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
@@ -954,6 +1012,8 @@ export class AiService {
 
     // 必须在任何压缩、MCP 探测或模型校验前注册控制器，否则用户在准备阶段点击停止时没有可取消句柄。
     const controller = new AbortController();
+    const agentContext = this.agentContext.getStore();
+    if (agentContext) agentContext.signal = controller.signal;
     const previousController = this.activeControllers.get(requestId) || (sessionId ? this.activeControllers.get(sessionId) : undefined);
     previousController?.abort();
     this.activeControllers.set(requestId, controller);
@@ -980,7 +1040,13 @@ export class AiService {
 
     // Prepare the actual conversation workspace before compaction, model setup or tool discovery.
     const cliPreparation = this.sessionStore.prepareNeoCliForConversation(projectPath);
-    const currentSession = cliPreparation.session;
+    const currentSession = { ...cliPreparation.session, projectId: params.projectId };
+    const connectorIdentity = connectorKey(currentSession);
+    if (agentContext) agentContext.connectorIdentity = connectorIdentity;
+    if (params.expectedConnector && params.expectedConnector !== connectorIdentity) {
+      cleanupController();
+      throw new Error('连接器账号或租户已切换，代理已停止，请在目标环境确认后重新派发');
+    }
     const isNeoConnector = !!currentSession.environment && (currentSession.environment.productType || 'neocrm') === 'neocrm';
 
     // 提取本轮会话中用户显式上传/引用的文件路径白名单（单文件安全豁免）
@@ -1060,6 +1126,7 @@ export class AiService {
         (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp")?.enabled !== false;
 
       const activeToolsSpec: any[] = [];
+      if (!this.agentContext.getStore()?.managed) activeToolsSpec.push(...AGENT_TOOLS_SPEC);
       if (config.settings.enableCrmTools && builtinMcpEnabled) {
         activeToolsSpec.push(...(isNeoConnector ? filterNeoCliTools(CRM_HARNESS_TOOLS_SPEC) : CRM_HARNESS_TOOLS_SPEC));
       }
@@ -1104,8 +1171,11 @@ export class AiService {
 
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
       const systemParts: string[] = [];
+      if (this.agentContext.getStore()?.managed) {
+        systemParts.push('你是主会话派发的执行代理。完成本会话的明确任务，汇报真实结果、文件路径、验证和未完成事项。不得再创建或调度代理。需要用户确认时说明具体问题并等待，不能自行扩大授权。');
+      } else if (mode !== 'minimal' && enableTools !== false && config.settings.enableCrmTools) systemParts.push(AGENT_ROUTING_INSTRUCTION);
 
-      const sessionMode: AiSessionMode = mode || currentSession.mode || 'standard';
+      const sessionMode: AiSessionMode = mode || 'standard';
       const isPlanMode = sessionMode === 'plan';
       const isPtcMode = sessionMode === 'ptc';
       const isMinimalMode = sessionMode === 'minimal';
@@ -1183,6 +1253,12 @@ declare const tools: {
   todo_write(args: { todos: Array<{ id: string; content: string; status: 'pending'|'in_progress'|'completed' }> }): Promise<any>;
   workspace_changes(): Promise<any>;
   load_workspace_dependencies(): Promise<any>;
+  create_session(args: { title: string; task: string }): Promise<any>;
+  spawn_agent(args: { title: string; task: string }): Promise<any>;
+  list_agents(): Promise<any>;
+  wait_agents(args: { sessionIds: string[]; timeoutMs?: number }): Promise<any>;
+  send_agent_message(args: { sessionId: string; message: string }): Promise<any>;
+  stop_agent(args: { sessionId: string }): Promise<any>;
   workspace_list_pages(): Promise<{ pages: any[]; dataSources: { crmAccounts: any[]; mailAccounts: any[] } }>;
   workspace_list_component_files(): Promise<{ files: Array<{ relativePath: string; [key: string]: any }> }>;
   workspace_write_component_file(args: { packageId: string; relativePath: string; content: string }): Promise<{ relativePath: string; [key: string]: any }>;
@@ -1994,10 +2070,13 @@ ${mcpInfoText}
         if (toolCallsList.length > 0) {
           // 防死循环保护：检测是否连续多次以完全相同的参数调用相同工具
           const allDuplicates = toolCallsList.every((tc) => {
+            // 代理状态会随后台执行变化，重复等待不是无效重试。
+            if (tc.name === 'wait_agents' || tc.name === 'list_agents') return false;
             let parsedArgs = {};
             try {
               parsedArgs = JSON.parse(tc.arguments || '{}');
             } catch {}
+            if (tc.name === 'run_code' && /\btools\.(?:wait_agents|list_agents)\b/.test((parsedArgs as any).code || '')) return false;
             return calledToolSignatures.has(`${tc.name}:${JSON.stringify(parsedArgs)}`);
           });
 
@@ -2772,6 +2851,17 @@ ${currentCompactionSummary.summary}
       error.name = 'AbortError';
       throw error;
     }
+    if (AGENT_TOOL_NAMES.has(name)) {
+      const context = this.agentContext.getStore();
+      if (!context || context.params.enableTools === false || context.params.mode === 'minimal') throw new Error('当前会话未启用代理工具');
+      const data = await this.agentSessions.execute(name, args, context);
+      return { data, summary: data.sessionId ? `代理会话 ${data.title || data.sessionId}：${data.status}` : `代理状态已读取（${data.agents?.length || 0} 项）` };
+    }
+    const agentRun = this.agentContext.getStore();
+    if (agentRun?.managed && agentRun.params.expectedConnector &&
+        connectorKey(this.sessionStore.getCurrentSession()) !== agentRun.params.expectedConnector) {
+      throw new Error('连接器账号或租户已切换，不能继续执行原代理工具；请停止并重新派发');
+    }
     if (env && (env.productType || 'neocrm') === 'neocrm' && LEGACY_NEX_TOOLS.has(name)) {
       throw new Error('旧 NEX 工具已停用。请加载 neo-nex-dev 技能，通过 bash 执行 neo list nex / neo retrieve nex，并报告真实 CLI 结果。');
     }
@@ -3048,6 +3138,14 @@ ${currentCompactionSummary.summary}
           instanceUri: tokenData?.instance_uri || env?.neoBaseURL,
         }),
       };
+
+      for (const toolName of AGENT_TOOL_NAMES) {
+        toolsContext[toolName] = async (params: any = {}) => {
+          const result = await this.executeUnifiedTool(toolName, params, [], env, tokenData,
+            projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        };
+      }
 
       if (env && tokenData) {
         toolsContext.list_entities = async (params: any) => {

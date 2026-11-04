@@ -4,6 +4,7 @@ import { exec, execSync, spawn, ChildProcess } from 'node:child_process';
 import { WorkspaceGitChangesSummary, WorkspaceGitChangeItem } from '../../shared/types';
 import axios from 'axios';
 import { getNeoCliEnvironment } from './neoCliRuntime';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface DshTodoItem {
   content: string;
@@ -20,6 +21,7 @@ export interface DshGoalItem {
 
 interface DshJobProcess {
   id: string;
+  sessionId?: string;
   command: string;
   workdir: string;
   status: 'running' | 'completed' | 'killed' | 'error';
@@ -32,11 +34,24 @@ interface DshJobProcess {
 }
 
 export class DshToolService {
-  private static currentGoal: DshGoalItem | null = null;
-  private static currentTodos: DshTodoItem[] = [];
+  private static sessionContext = new AsyncLocalStorage<string>();
+  private static goals = new Map<string, DshGoalItem | null>();
+  private static todos = new Map<string, DshTodoItem[]>();
+  static runInSession<T>(sessionId: string, run: () => T): T {
+    return this.sessionContext.run(sessionId, run);
+  }
+  private static get currentGoal() { return this.goals.get(this.sessionContext.getStore() || 'default') || null; }
+  private static set currentGoal(value: DshGoalItem | null) { this.goals.set(this.sessionContext.getStore() || 'default', value); }
+  private static get currentTodos() { return this.todos.get(this.sessionContext.getStore() || 'default') || []; }
+  private static set currentTodos(value: DshTodoItem[]) { this.todos.set(this.sessionContext.getStore() || 'default', value); }
+  private static canAccessJob(job: DshJobProcess) {
+    const session = this.sessionContext.getStore();
+    return !session || job.sessionId === session;
+  }
   private static backgroundJobs = new Map<string, DshJobProcess>();
 
   private static registerJob(job: DshJobProcess) {
+    job.sessionId = this.sessionContext.getStore();
     if (DshToolService.backgroundJobs.size > 80) {
       const keys = Array.from(DshToolService.backgroundJobs.keys());
       for (let i = 0; i < 20; i++) {
@@ -847,6 +862,7 @@ export class DshToolService {
   // ================= 14. job_list / job_output / job_kill (DSH 官方后台任务系统) =================
   public listJobs(): { total: number; jobs: Array<{ id: string; command: string; status: string; durationMs: number; exitCode?: number; hasUnread: boolean }> } {
     const jobs = Array.from(DshToolService.backgroundJobs.values())
+      .filter(job => DshToolService.canAccessJob(job))
       .reverse()
       .map((j) => ({
         id: j.id,
@@ -870,7 +886,7 @@ export class DshToolService {
     isFinished: boolean;
   }> {
     const job = DshToolService.backgroundJobs.get(params.job_id);
-    if (!job) {
+    if (!job || !DshToolService.canAccessJob(job)) {
       throw new Error(`未找到 ID 为 ${params.job_id} 的后台长任务`);
     }
 
@@ -899,7 +915,7 @@ export class DshToolService {
 
   public killJob(params: { job_id: string; reason?: string }): { success: boolean; job_id: string; status: string } {
     const job = DshToolService.backgroundJobs.get(params.job_id);
-    if (!job) {
+    if (!job || !DshToolService.canAccessJob(job)) {
       throw new Error(`未找到 ID 为 ${params.job_id} 的后台任务`);
     }
     if (job.status === 'running' && job.process) {

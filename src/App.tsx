@@ -421,8 +421,9 @@ export const App: React.FC = () => {
 
   const handleDeleteSession = async (sessionId: string) => {
     if (window.neoApi?.aiDeleteSession) {
-      await window.neoApi.aiDeleteSession(sessionId);
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      const remaining = await window.neoApi.aiDeleteSession(sessionId);
+      setSessions(remaining);
+      if (activeSessionId && !remaining.some(item => item.id === activeSessionId)) setActiveSessionId(null);
       if (activeSessionId === sessionId) {
         setActiveSessionId(null);
       }

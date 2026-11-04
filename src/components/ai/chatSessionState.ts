@@ -1,5 +1,16 @@
 import type { AiChatSession } from '../../../shared/types';
 
+export const AGENT_STATUS_LABELS = {
+  queued: '排队中', running: '执行中', completed: '已完成', failed: '失败',
+  cancelled: '已停止', interrupted: '已中断', waiting: '待答复',
+};
+
+export function orderAgentSessions(sessions: AiChatSession[]): AiChatSession[] {
+  const ids = new Set(sessions.map(item => item.id));
+  const roots = sessions.filter(item => !item.agentRun?.parentSessionId || !ids.has(item.agentRun.parentSessionId));
+  return roots.flatMap(item => [item, ...sessions.filter(child => child.agentRun?.parentSessionId === item.id)]);
+}
+
 // Saved lists can lag behind other conversations, including ones that just finished.
 export function mergeSavedChatSessions(
   saved: AiChatSession[],

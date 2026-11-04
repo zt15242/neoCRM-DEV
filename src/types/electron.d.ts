@@ -175,6 +175,7 @@ declare global {
         mode?: "standard" | "ptc" | "minimal" | "plan" | "default";
       }) => Promise<boolean>;
       aiAbortChatStream: (targetId?: string) => Promise<boolean>;
+      onAgentSessionUpdated: (callback: (session: AiChatSession) => void) => () => void;
       aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;
       aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => Promise<AiFileAttachment>;
       aiSaveMcpServer: (server: McpServerConfig) => Promise<McpServerConfig[]>;
