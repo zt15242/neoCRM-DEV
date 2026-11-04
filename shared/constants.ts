@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.34';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.35';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -784,10 +784,10 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
   {
     id: "skill-neo-entity-management",
     name: "销售易实体模型与字段字典 (neo-entity-management)",
-    description: "Neo 实体模型管理技能（基于 neo CLI + neocrm-mcp 工具）。查询实体定义、字段类型与选项值、实体间关联关系，用 SQL 验证数据，创建自定义实体与字段，设计数据模型。",
+    description: "Neo 实体模型管理技能。查询实体定义、字段类型与关联，创建实体与字段，查询、创建、更新和部署业务类型，设计数据模型。",
     category: "builtin",
     iconName: "Box",
-    triggerKeywords: ["实体管理", "业务对象", "字段定义", "自定义实体", "数据字典", "创建字段", "实体关系"],
+    triggerKeywords: ["实体管理", "业务对象", "字段定义", "自定义实体", "数据字典", "创建字段", "实体关系", "业务类型", "businessType", "busiType"],
     enabled: true,
   },
   {

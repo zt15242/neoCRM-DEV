@@ -192,6 +192,15 @@ export class DataService {
     return list;
   }
 
+  public invalidateEntityBusiTypes(tokenData: TokenData, entityApiKey: string): void {
+    this.busiTypeCache.delete(`${tokenData.tenant_id || 't'}_${entityApiKey}`);
+    for (const key of this.nameCache.keys()) {
+      if (key.startsWith(`entityBelongType:${entityApiKey}_`) || key.startsWith('entityBelongType_')) {
+        this.nameCache.delete(key);
+      }
+    }
+  }
+
   /**
    * 从记录对象中按优先级提取人类可读的名称 (Name)
    */

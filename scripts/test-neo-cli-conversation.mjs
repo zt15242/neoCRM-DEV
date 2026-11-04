@@ -24,6 +24,8 @@ try {
       export { SessionStore } from './electron/services/sessionStore';
       export { AiService } from './electron/services/aiService';
       export { NeoMetadataCliReader } from './electron/services/neoMetadataCli';
+      export { NeoBusinessTypeService } from './electron/services/neoBusinessTypeService';
+      export { DataService } from './electron/services/dataService';
       export { ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation } from './electron/services/neocrmCliSession';
       export { filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING } from './electron/security/neoCliConversation';
       export { licenseService } from './electron/security/licenseService';
@@ -51,7 +53,7 @@ try {
     } }],
   });
   const subject = createRequire(import.meta.url)(output);
-  const { SessionStore, AiService, NeoMetadataCliReader, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
+  const { SessionStore, AiService, NeoMetadataCliReader, NeoBusinessTypeService, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
     filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING, CRM_HARNESS_TOOLS_SPEC, getProtectedSkillInstruction } = subject;
   const project = path.join(fixture, '当前工作区');
   fs.mkdirSync(project);
@@ -184,6 +186,96 @@ try {
   assert.match(generalPrompt, /这些操作直接使用现有连接器工具/);
   assert.equal(generalEvents.filter((event) => event.type === 'tool_start' && event.toolCall.name === 'skill').length, 1);
   console.log('PASS every NeoCRM conversation loads CLI skill and global CLI-first routing, including non-NEX/non-approval requests');
+
+  const businessCalls = [];
+  const businessRecords = [];
+  const invalidated = [];
+  ai.dataService = { invalidateEntityBusiTypes: (...args) => invalidated.push(args) };
+  ai.neoBusinessTypes = new NeoBusinessTypeService(async (config) => {
+    businessCalls.push(config);
+    assert.equal(config.headers.Authorization, `Bearer ${store.getCurrentSession().tokenData.access_token}`);
+    if (config.method === 'POST') businessRecords.push({ ...config.data, apiKey: config.data.apiKey + '__c' });
+    return { data: { code: 200, data: config.url.endsWith('/busiTypes') && config.method === 'GET'
+      ? { records: businessRecords } : { apiKey: 'account', enableBusitype: true } } };
+  });
+  const originalModelFetch = globalThis.fetch;
+  const businessInput = { entityApiKey: 'account', apiKey: 'enterprise__c', label: '企业客户' };
+  for (const [mode, protocol] of [['standard', 'openai'], ['ptc', 'openai'], ['standard', 'google-gemini'], ['ptc', 'google-gemini']]) {
+    fixtureConfig.providers[0].protocol = protocol;
+    requests.length = 0;
+    const businessEvents = [];
+    let ptcResult;
+    ai.dshToolService = { executePtcCode: async (_args, sdk) => {
+      ptcResult = await sdk.deploy_business_type({ ...businessInput, dryRun: true });
+      return { logs: [], executionTimeMs: 1 };
+    } };
+    globalThis.fetch = async (_url, options) => {
+      const body = JSON.parse(options.body); requests.push(body);
+      const toolName = mode === 'ptc' ? 'run_code' : 'deploy_business_type';
+      const args = mode === 'ptc' ? { code: 'await tools.deploy_business_type(input)' } : { ...businessInput, dryRun: true };
+      const data = requests.length === 1
+        ? protocol === 'google-gemini'
+          ? { candidates: [{ content: { parts: [{ functionCall: { name: toolName, args } }] }, finishReason: 'STOP' }] }
+          : { choices: [{ delta: { tool_calls: [{ index: 0, id: 'business-type', type: 'function', function: { name: toolName, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] }
+        : protocol === 'google-gemini'
+          ? { candidates: [{ content: { parts: [{ text: '预演完成' }] }, finishReason: 'STOP' }] }
+          : { choices: [{ delta: { content: '预演完成' }, finish_reason: 'stop' }] };
+      return new Response(`data: ${JSON.stringify(data)}\n\n${protocol === 'openai' ? 'data: [DONE]\n\n' : ''}`,
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    // The latest message deliberately omits “业务类型”: the ongoing task must retain its skill.
+    await ai.startChatStream({ requestId: `business-${mode}-${protocol}`, sessionId: 'fixture-session', messageId: 'business-msg',
+      providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true, mode,
+      messages: [{ id: 'business-u1', role: 'user', content: '为客户创建企业客户业务类型', createdAt: Date.now() },
+        { id: 'business-u2', role: 'user', content: '继续处理', createdAt: Date.now() }] }, (event) => businessEvents.push(event));
+    assert.equal(businessEvents.some((event) => event.type === 'error'), false, JSON.stringify(businessEvents));
+    assert.equal(requests.length, 2, `${mode}/${protocol}`);
+    const system = protocol === 'google-gemini' ? JSON.stringify(requests[0].systemInstruction) : requests[0].messages[0].content;
+    assert.match(system, /已加载技能 neo-entity-management/);
+    assert.match(system, /销售易业务类型创建与部署/);
+    assert.doesNotMatch(system, /业务类型创建需通过 CRM 后台|再通过 CRM 后台或经审批的人工 API 流程完成/);
+    if (mode === 'ptc') assert.equal(ptcResult.operation, 'create');
+    else {
+      const tool = businessEvents.find((event) => event.type === 'tool_update' && event.toolCall?.name === 'deploy_business_type');
+      assert.equal(tool.toolCall.resultData.dryRun, true);
+      assert.equal(tool.toolCall.resultData.operation, 'create');
+      assert.equal(tool.toolCall.resultData.source, 'connector-fallback');
+      assert.equal(JSON.stringify(requests[0].tools).includes('list_business_types'), true);
+    }
+  }
+  assert.equal(businessCalls.some((call) => call.method !== 'GET'), false);
+  globalThis.fetch = originalModelFetch;
+  fixtureConfig.providers[0].protocol = 'openai';
+  console.log('PASS business-type conversations: domain skill auto-loaded on follow-up; standard/PTC OpenAI/Gemini execute real dispatcher and preview without writing');
+
+  const originalPrepare = store.prepareNeoCliForConversation.bind(store);
+  store.prepareNeoCliForConversation = () => ({ success: false, message: 'custom OAuth cannot share CLI', session });
+  await assert.rejects(() => ai.executeUnifiedTool('deploy_business_type', { ...businessInput, dryRun: false }, [], environment, token, project), /用户确认/);
+  const businessDeployed = await ai.executeUnifiedTool('deploy_business_type', { ...businessInput, dryRun: false, confirm: true }, [], environment, token, project);
+  assert.equal(businessDeployed.data.verified, true);
+  assert.equal(invalidated.length, 1);
+  const businessListed = await ai.executeUnifiedTool('list_business_types', { entityApiKey: 'account' }, [], environment, token, project);
+  assert.equal(businessListed.data.totalCount, 1);
+  const lookup = new subject.DataService();
+  lookup.nameCache.set('entityBelongType:account_bt1', '旧名');
+  lookup.nameCache.set('entityBelongType_bt1', '旧名');
+  lookup.nameCache.set('contact_unchanged', '保留');
+  lookup.busiTypeCache.set(`${token.tenant_id}_account`, [{ id: 'bt1', apiKey: 'enterprise__c', label: '旧名' }]);
+  assert.equal(await lookup.getRecordName(environment, token, 'entityBelongType:account', 'bt1'), '旧名');
+  lookup.invalidateEntityBusiTypes(token, 'account');
+  lookup.fetchEntityBusiTypes = async () => {
+    lookup.nameCache.set('entityBelongType:account_bt1', '新名');
+    return [{ id: 'bt1', apiKey: 'enterprise__c', label: '新名' }];
+  };
+  assert.equal(await lookup.getRecordName(environment, token, 'entityBelongType:account', 'bt1'), '新名');
+  assert.equal(lookup.busiTypeCache.has(`${token.tenant_id}_account`), false);
+  assert.equal(lookup.nameCache.get('contact_unchanged'), '保留');
+  const callsBeforeMismatch = businessCalls.length;
+  await assert.rejects(() => ai.executeUnifiedTool('deploy_business_type', businessInput, [], environment, { ...token, tenant_id: 'other' }, project), /租户或用户不一致/);
+  assert.equal(businessCalls.length, callsBeforeMismatch);
+  await assert.rejects(() => ai.executeUnifiedTool('list_business_types', { entityApiKey: 'account' }, [], { ...environment, productType: 'salesforce' }, token, project), /仅支持销售易/);
+  store.prepareNeoCliForConversation = originalPrepare;
+  console.log('PASS business-type shared login: valid connector works without CLI sharing; deployment verifies and invalidates cache; cross-tenant/wrong-connector requests blocked');
 
   saveFixture(session);
   const cliCommands = [];

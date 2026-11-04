@@ -49,6 +49,8 @@ CLI 已覆盖的功能包括：
 
 CLI 1.0.8 没有普通业务记录 XOQL 查询、记录创建/更新/删除或打印模板查询命令。这些操作直接使用现有连接器工具；不要虚构 neo query 或 neo data 命令。
 
+业务类型查询、创建和更新由 list_business_types / deploy_business_type 专用工具处理：CLI 1.0.8 没有对应写入命令，宿主复用当前连接器授权调用 Metadata API 并回读，不要求用户去后台操作。不要虚构 neo deploy business-type，也不要把 enableBusitype 开关或子表单布局配置当作创建业务类型。
+
 销售易自定义对象与字段写入必须使用 source-driven 的 neo generate / neo deploy 流程。禁止用旧连接器 create_custom_entity / create_custom_field 直写或在 CLI 写入失败后降级直写；先检查 source 与 dry-run，并遵守部署确认门禁。
 
 运行命令使用当前对话绑定的项目目录，禁止调用 neo login、neo logout 或会输出令牌的 neo loginstatus。CLI 准备失败时不重新鉴权；写入操作仍遵守用户确认和现有安全门禁。`;
@@ -63,6 +65,18 @@ NEX 必须按已加载的 neo-cli-usage 和 neo-nex-dev 技能使用当前工作
 export function isApprovalConversation(content: string): boolean {
   return /审批流|审批流程|approvalprocess|approval[\s_-]*flow/i.test(content);
 }
+
+export function isBusinessTypeConversation(content: string): boolean {
+  return /业务类型|busi_?types?|business[\s_-]*types?/i.test(content);
+}
+
+export const NEO_BUSINESS_TYPE_ROUTING = `【销售易业务类型创建与部署】
+当前已加载 neo-entity-management。用户要求查询、创建、修改或部署业务类型时，主动调用 list_business_types 查询真实目标对象的业务类型。创建业务类型与启用对象的 enableBusitype、配置业务类型子表单是不同操作。
+CLI 1.0.8 没有业务类型写入命令，使用宿主 deploy_business_type；它复用连接器登录态，不重新鉴权，不用 bash/curl 读取凭证或手写 HTTP。
+可以传 entityApiKey 和 apiKey、label、description、active，或传 entityApiKey 和当前项目内已有的 sourceFile（businessTypes/*.business-type.json）。先用 dryRun=true 取得目标租户、create/update/unchanged 判定和变更清单；本地生成 source 不代表已部署。
+向用户展示预演结果。用户已明确授权同一租户、同一范围的写入时继续执行 dryRun=false、confirm=true；否则请求用户确认该清单。不要在已获得明确授权后再次要求重复确认。
+只有工具返回 success=true、verified=true 且 dryRun=false 才可报告已部署。verificationPending=true 或写入状态未知时，先 list_business_types 回读核实，不重复写入；如实说明未完成范围。标准对象的业务类型也由此专用工具处理，不要误套标准对象整体不可 deploy 的限制。
+PTC 模式使用 tools.list_business_types / tools.deploy_business_type，执行路径和确认规则相同。`;
 
 export const NEO_APPROVAL_CLI_ROUTING = `【审批流读取：CLI 优先，失败才回退】
 查询销售易审批流时先加载 neo-cli-usage 与 neo-approval-flow-designer。目录使用 neo list approvalprocess --json；定义使用 neo retrieve approvalprocess --definition-id <真实定义 ID> --json。

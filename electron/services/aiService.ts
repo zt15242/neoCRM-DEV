@@ -5,6 +5,7 @@ import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
 import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
 import { NeoMetadataCliReader } from './neoMetadataCli';
+import { NeoBusinessTypeService } from './neoBusinessTypeService';
 import { resolveSalesforceAlias } from './salesforceService';
 function cleanGeminiSchema(schema: any): any {
   if (!schema || typeof schema !== "object") return { type: "object", properties: {} };
@@ -71,7 +72,7 @@ import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
-import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING } from '../security/neoCliConversation';
+import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, isBusinessTypeConversation, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -84,6 +85,7 @@ export class AiService {
   private dshToolService = new DshToolService();
   private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
   private neoMetadataCli = new NeoMetadataCliReader();
+  private neoBusinessTypes = new NeoBusinessTypeService();
 
   private workbuddyService?: any;
   private workspaceService?: {
@@ -1120,6 +1122,9 @@ export class AiService {
           cliSkillNames.add('neo-cli-usage');
           cliSkillNames.add('neo-approval-flow-designer');
         }
+        // Keep the domain skill on short follow-ups such as “确认部署”.
+        const businessTypeConversation = messages.slice(-8).some((message) => isBusinessTypeConversation(message.content || ''));
+        if (businessTypeConversation) cliSkillNames.add('neo-entity-management');
         for (const skillName of cliSkillNames) {
           const instruction = getProtectedSkillInstruction(skillName);
           if (!instruction) throw new Error(`Neo CLI 技能缺失: ${skillName}`);
@@ -1134,6 +1139,7 @@ export class AiService {
           } });
         }
         systemParts.push(getNeoCliSessionInstruction(cliPreparation), NEO_CLI_FIRST_ROUTING);
+        if (businessTypeConversation) systemParts.push(NEO_BUSINESS_TYPE_ROUTING);
       }
 
       if (isMinimalMode) {
@@ -1164,6 +1170,8 @@ declare const tools: {
   // CRM 实时数据与元数据操作 (当前已连接环境: ${currentSession.environment?.name || 'CRM'})
   list_entities(args?: { keyword?: string; isCustomOnly?: boolean }): Promise<{ totalCount: number; entities: Array<{ apiKey: string; label: string }> }>;
   get_entity_fields(args: { entityApiKey: string }): Promise<{ entityApiKey: string; totalFields: number; fields: any[] }>;
+  list_business_types(args: { entityApiKey: string }): Promise<any>;
+  deploy_business_type(args: { entityApiKey: string; apiKey?: string; label?: string; description?: string; active?: boolean; sourceFile?: string; dryRun?: boolean; confirm?: boolean }): Promise<any>;
   execute_sql_query(args: { sql: string }): Promise<{ records: any[]; totalSize: number; fields: string[] }>;
   create_record(args: { entityApiKey: string; data: Record<string, any> }): Promise<any>;
   update_record(args: { entityApiKey: string; recordId: string; data: Record<string, any> }): Promise<any>;
@@ -3052,6 +3060,13 @@ ${currentCompactionSummary.summary}
             projectPath, projectId, sessionAllowedFiles, signal);
           return result.data;
         };
+        for (const toolName of ['list_business_types', 'deploy_business_type']) {
+          toolsContext[toolName] = async (params: any) => {
+            const result = await this.executeUnifiedTool(toolName, params || {}, [], env, tokenData,
+              projectPath, projectId, sessionAllowedFiles, signal);
+            return result.data;
+          };
+        }
         toolsContext.execute_sql_query = async (params: any) => {
           const res = await this.dataService.executeQueryAll(env, tokenData, params?.sql || params?.query || '');
           if (!res.success || !res.data) throw new Error(res.error || 'CRM 全量查询失败');
@@ -3538,6 +3553,37 @@ ${currentCompactionSummary.summary}
         data: { success: true },
         summary: `成功在 ${env.productType || 'CRM'} [${apiKey}] 中删除记录 [${recordId}]`,
       };
+    }
+
+    if (name === 'list_business_types' || name === 'deploy_business_type') {
+      if ((env.productType || 'neocrm') !== 'neocrm') throw new Error('业务类型工具仅支持销售易连接器');
+      try {
+        signal?.throwIfAborted();
+        const root = projectPath || this.sessionStore.getNeoCliProjectRoot() || undefined;
+        const current = this.sessionStore.prepareNeoCliForConversation(root).session;
+        if (!current.isLoggedIn || !current.tokenData || !current.environment) throw new Error('当前销售易连接器未登录');
+        const origin = (value: string) => new URL(value).origin;
+        if (origin(current.tokenData.instance_uri || current.environment.neoBaseURL) !== origin(tokenData.instance_uri || env.neoBaseURL) ||
+            String(current.tokenData.tenant_id || '') !== String(tokenData.tenant_id || '') ||
+            String(current.tokenData.userInfo?.userId || '') !== String(tokenData.userInfo?.userId || '')) {
+          throw new Error('当前连接器会话与本次对话的租户或用户不一致，停止业务类型操作');
+        }
+        // No CLI command exists: a valid connector also works without CLI sharing/custom OAuth support.
+        const data = name === 'list_business_types'
+          ? await this.neoBusinessTypes.list(current.environment, current.tokenData, args.entityApiKey, signal)
+          : await this.neoBusinessTypes.deploy(current.environment, current.tokenData, args, root, signal);
+        if (name === 'list_business_types') return { data,
+          summary: `通过连接器 Metadata API 查询 ${args.entityApiKey} 的 ${(data as any).totalCount} 个业务类型（CLI 1.0.8 未覆盖）` };
+        const deployed = data as any;
+        if (deployed.writeAccepted || (deployed.success && !deployed.dryRun)) this.dataService.invalidateEntityBusiTypes(tokenData, args.entityApiKey);
+        return { data, summary: deployed.dryRun ? `业务类型部署预演：${deployed.operation} ${deployed.expected.apiKey}`
+          : deployed.verified ? `业务类型 ${deployed.expected.apiKey} 已部署并回读验证（Metadata API）`
+          : `业务类型接口已接受写入，回读待确认：${deployed.expected.apiKey}` };
+      } catch (error: any) {
+        if (error?.writeAttempted) this.dataService.invalidateEntityBusiTypes(tokenData, args.entityApiKey);
+        if (signal?.aborted || error?.name === 'AbortError') throw error;
+        throw new Error(this.safeNeoCliFallbackReason(error, tokenData));
+      }
     }
 
     if (name === "create_custom_entity") {
