@@ -15,6 +15,7 @@ import { ApiService } from './services/apiService';
 import { MetadataService } from './services/metadataService';
 import { DataService } from './services/dataService';
 import { UpdateService } from './services/updateService';
+import { configureWindowLifecycle } from './services/windowLifecycle';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
@@ -111,6 +112,13 @@ ipcMain.handle('access:command', (_, action: AccessCommand) => {
 });
 ipcMain.handle('access:unlock', (_, key: string) => restrictedFeatureService.unlock(key));
 
+const windowLifecycle = configureWindowLifecycle({
+  app,
+  platform: process.platform,
+  getWindow: () => win,
+  createWindow,
+  onQuit: () => authService.cancelActiveAuth(),
+});
 
 function createWindow() {
   // 移除 Windows / Linux 下默认的原生 File Edit View 菜单栏
@@ -135,6 +143,11 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false,
     },
+  });
+  const mainWindow = win;
+  windowLifecycle.registerWindow(mainWindow);
+  mainWindow.once('closed', () => {
+    if (win === mainWindow) win = null;
   });
 
   // 让渲染进程的 getDisplayMedia 能够拿到设备播放声音。
@@ -231,18 +244,10 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
-});
-
-app.on('window-all-closed', () => {
-  authService.cancelActiveAuth();
-  if (process.platform !== 'darwin') {
-    app.quit();
+  if (process.platform === 'darwin') {
+    app.dock?.setMenu(Menu.buildFromTemplate([
+      { label: '打开 NeoCRM', click: () => windowLifecycle.showWindow() },
+    ]));
   }
 });
 
