@@ -393,6 +393,24 @@ export const CRM_HARNESS_TOOLS_SPEC = [
   {
     type: 'function',
     function: {
+      name: 'execute_open_api',
+      description: '通过当前销售易连接器执行 Open API v2 请求。仅限销售易。url 可传 /rest/... 相对路径或 API 文档中的完整 URL；宿主始终丢弃 URL 原域名，改用当前连接器环境实例地址并注入当前连接器 Bearer 授权，不要读取或提供令牌、不要用 bash/curl。支持 GET/POST/PUT/PATCH/DELETE。写请求须先展示租户、方法、最终路径、查询参数和请求体，取得用户明确确认后设置 confirm=true。',
+      parameters: {
+        type: 'object',
+        properties: {
+          method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+          url: { type: 'string', description: 'Open API 路径（如 /rest/metadata/v2.0/...）或文档完整 URL；原域名会被替换为当前连接器实例。' },
+          queryParams: { type: 'object', description: '可选 URL 查询参数。' },
+          body: { type: 'object', description: '可选 JSON 对象请求体；GET 不发送请求体。' },
+          confirm: { type: 'boolean', description: 'POST/PUT/PATCH/DELETE 必须在用户明确确认展示的目标租户、方法、路径和请求体后设为 true。' },
+        },
+        required: ['method', 'url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'workspace_list_entities',
       description: '读取指定工作台 CRM 账号绑定环境中的真实对象清单。创建或调整 CRM 查询组件时，先用 workspace_list_pages 选择账号，再调用本工具确认对象 API 名。',
       parameters: { type: 'object', properties: { accountId: { type: 'string', description: 'workspace_list_pages 返回的真实 CRM 账号 ID' } }, required: ['accountId'] },

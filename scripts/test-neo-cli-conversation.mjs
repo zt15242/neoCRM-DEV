@@ -25,6 +25,7 @@ try {
       export { AiService } from './electron/services/aiService';
       export { NeoMetadataCliReader } from './electron/services/neoMetadataCli';
       export { NeoBusinessTypeService } from './electron/services/neoBusinessTypeService';
+      export { NeoOpenApiService, resolveNeoOpenApiUrl } from './electron/services/neoOpenApiService';
       export { DataService } from './electron/services/dataService';
       export { ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation } from './electron/services/neocrmCliSession';
       export { filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING } from './electron/security/neoCliConversation';
@@ -53,7 +54,7 @@ try {
     } }],
   });
   const subject = createRequire(import.meta.url)(output);
-  const { SessionStore, AiService, NeoMetadataCliReader, NeoBusinessTypeService, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
+  const { SessionStore, AiService, NeoMetadataCliReader, NeoBusinessTypeService, NeoOpenApiService, resolveNeoOpenApiUrl, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
     filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING, CRM_HARNESS_TOOLS_SPEC, getProtectedSkillInstruction } = subject;
   const project = path.join(fixture, '当前工作区');
   fs.mkdirSync(project);
@@ -132,6 +133,7 @@ try {
   const tools = filterNeoCliTools(CRM_HARNESS_TOOLS_SPEC);
   assert.equal(tools.some((tool) => tool.function.name === 'list_nex_extensions'), false);
   assert.equal(tools.some((tool) => tool.function.name === 'get_nex_extension_code'), false);
+  assert.equal(tools.some((tool) => tool.function.name === 'execute_open_api'), true);
   assert.equal(tools.some((tool) => tool.function.name === 'bash'), true);
   assert.equal(tools.some((tool) => tool.function.name === 'skill'), true);
   assert.equal(filterNeoCliTools([{ function: { name: 'create_custom_entity' } }]).length, 0);
@@ -156,6 +158,44 @@ try {
     protocol: 'openai', models: [{ id: 'fixture', tools: true, contextWindow: 128000, maxOutputTokens: 8192 }] }],
     settings: { enableCrmTools: true, injectTenantContext: false, maxTokens: 512, contextMessageLimit: 10 }, mcpServers: [], skills: [] };
   ai.getAiConfig = () => fixtureConfig;
+  assert.equal(resolveNeoOpenApiUrl('https://crm-sandbox.fixture.invalid',
+    'https://api.xiaoshouyi.com/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement?controlApiKey=stage__c'),
+  'https://crm-sandbox.fixture.invalid/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement?controlApiKey=stage__c');
+  assert.equal(resolveNeoOpenApiUrl('https://crm-sandbox.fixture.invalid', '/rest/metadata/v2.0/xobjects/account'),
+    'https://crm-sandbox.fixture.invalid/rest/metadata/v2.0/xobjects/account');
+  for (const invalid of ['//attacker.invalid/path', 'javascript:alert(1)', 'https://user:pass@host.invalid/path', '/\\\\attacker.invalid/path']) {
+    assert.throws(() => resolveNeoOpenApiUrl('https://crm-sandbox.fixture.invalid', invalid));
+  }
+  const apiCalls = [];
+  ai.neoOpenApi = new NeoOpenApiService(async config => {
+    apiCalls.push(config);
+    return { status: 200, data: { code: '0', msg: '成功', echoed: token.access_token } };
+  });
+  const openApiInput = { method: 'PATCH', url: 'https://api.xiaoshouyi.com/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement',
+    queryParams: { controlApiKey: 'stage__c', dependentApiKey: 'phase__c' }, body: { useLabel: true } };
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', openApiInput, [], environment, token, project), /明确确认.*confirm=true/);
+  const openApiResult = await ai.executeUnifiedTool('execute_open_api', { ...openApiInput, confirm: true }, [], environment, token, project);
+  assert.equal(openApiResult.data.success, true);
+  assert.equal(apiCalls.at(-1).url, `${new URL(token.instance_uri).origin}/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement`);
+  assert.equal(apiCalls.at(-1).headers.Authorization, `Bearer ${token.access_token}`);
+  assert.equal(apiCalls.at(-1).params.dependentApiKey, 'phase__c');
+  assert.deepEqual(apiCalls.at(-1).data, { useLabel: true });
+  assert.equal(apiCalls.at(-1).maxRedirects, 0);
+  assert.equal(JSON.stringify(openApiResult.data).includes(token.access_token), false);
+  assert.equal((await ai.executeUnifiedTool('execute_open_api', { method: 'GET', url: '/rest/auc/v2.0/userInfo' }, [], environment, token, project)).data.status, 200);
+  await ai.executeUnifiedTool('execute_open_api', { method: 'DELETE', url: '/rest/metadata/v2.0/xobjects/account/dependencies', body: { controlApiKey: 'stage__c' }, confirm: true }, [], environment, token, project);
+  assert.deepEqual(apiCalls.at(-1).data, { controlApiKey: 'stage__c' });
+  let ptcApiResult;
+  ai.dshToolService = { executePtcCode: async (_args, sdk) => {
+    ptcApiResult = await sdk.execute_open_api({ method: 'PATCH', ...openApiInput, confirm: true });
+    return { logs: [], executionTimeMs: 1 };
+  } };
+  await ai.executeUnifiedTool('run_code', { code: 'await tools.execute_open_api(request)' }, [], environment, token, project);
+  assert.equal(ptcApiResult.success, true);
+  assert.equal(apiCalls.at(-1).url, `${new URL(token.instance_uri).origin}/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement`);
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', { ...openApiInput, confirm: true }, [],
+    { ...environment, productType: 'salesforce' }, token, project), /仅支持销售易/);
+  console.log('PASS Open API: replaces foreign host with connector instance, injects auth internally, redacts output, and gates writes');
   const requests = [];
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
@@ -191,6 +231,7 @@ try {
     messages: [{ id: 'fixture-general-u', role: 'user', content: '查询当前租户有哪些对象', createdAt: Date.now() }], mode: 'standard' },
     (event) => generalEvents.push(event));
   const generalPrompt = requests[0].messages.find((message) => message.role === 'system').content;
+  assert.equal(requests[0].tools.some((tool) => tool.function.name === 'execute_open_api'), true);
   assert.match(generalPrompt, /已加载技能 neo-cli-usage/);
   assert.match(generalPrompt, /销售易功能统一 CLI 优先路由/);
   assert.match(generalPrompt, /CLI 成功返回空数据是有效结果/);

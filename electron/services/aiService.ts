@@ -6,6 +6,7 @@ import { requestMeetingModelText } from './meetingModelClient';
 import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
 import { NeoMetadataCliReader } from './neoMetadataCli';
 import { NeoBusinessTypeService } from './neoBusinessTypeService';
+import { NeoOpenApiService } from './neoOpenApiService';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { AgentSessionService, type AgentRunContext, type ChatRunParams } from './agentSessionService';
 import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '../security/agentTools';
@@ -109,6 +110,7 @@ export class AiService {
   private codeSyncService = new CodeSyncService(this.metadataService, this.dataService);
   private neoMetadataCli = new NeoMetadataCliReader();
   private neoBusinessTypes = new NeoBusinessTypeService();
+  private neoOpenApi = new NeoOpenApiService();
 
   private workbuddyService?: any;
   private workspaceService?: {
@@ -1130,7 +1132,9 @@ export class AiService {
       const activeToolsSpec: any[] = [];
       if (!this.agentContext.getStore()?.managed) activeToolsSpec.push(...AGENT_TOOLS_SPEC);
       if (config.settings.enableCrmTools && builtinMcpEnabled) {
-        activeToolsSpec.push(...(isNeoConnector ? filterNeoCliTools(CRM_HARNESS_TOOLS_SPEC) : CRM_HARNESS_TOOLS_SPEC));
+        const connectorTools = isNeoConnector ? filterNeoCliTools(CRM_HARNESS_TOOLS_SPEC)
+          : CRM_HARNESS_TOOLS_SPEC.filter((tool) => tool.function.name !== 'execute_open_api');
+        activeToolsSpec.push(...connectorTools);
       }
 
       for (const mcpSrv of activeCustomMcp) {
@@ -3169,6 +3173,13 @@ ${currentCompactionSummary.summary}
             return result.data;
           };
         }
+        if ((env.productType || 'neocrm') === 'neocrm') {
+          toolsContext.execute_open_api = async (params: any) => {
+            const result = await this.executeUnifiedTool('execute_open_api', params || {}, [], env, tokenData,
+              projectPath, projectId, sessionAllowedFiles, signal);
+            return result.data;
+          };
+        }
         toolsContext.execute_sql_query = async (params: any) => {
           const res = await this.dataService.executeQueryAll(env, tokenData, params?.sql || params?.query || '');
           if (!res.success || !res.data) throw new Error(res.error || 'CRM 全量查询失败');
@@ -3693,6 +3704,12 @@ ${currentCompactionSummary.summary}
         if (signal?.aborted || error?.name === 'AbortError') throw error;
         throw new Error(this.safeNeoCliFallbackReason(error, tokenData));
       }
+    }
+
+    if (name === 'execute_open_api') {
+      if ((env.productType || 'neocrm') !== 'neocrm') throw new Error('execute_open_api 仅支持销售易连接器');
+      const result = await this.neoOpenApi.execute(env, tokenData, args, signal);
+      return { data: result, summary: `销售易 Open API ${result.method} ${new URL(result.url).pathname} 返回 HTTP ${result.status}` };
     }
 
     if (name === "create_custom_entity") {
