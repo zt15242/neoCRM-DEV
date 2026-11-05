@@ -26,6 +26,7 @@ try {
       export { NeoMetadataCliReader } from './electron/services/neoMetadataCli';
       export { NeoBusinessTypeService } from './electron/services/neoBusinessTypeService';
       export { NeoOpenApiService, resolveNeoOpenApiUrl } from './electron/services/neoOpenApiService';
+      export { PrintTemplateService } from './electron/services/printTemplateService';
       export { DataService } from './electron/services/dataService';
       export { ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation } from './electron/services/neocrmCliSession';
       export { filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING } from './electron/security/neoCliConversation';
@@ -54,10 +55,11 @@ try {
     } }],
   });
   const subject = createRequire(import.meta.url)(output);
-  const { SessionStore, AiService, NeoMetadataCliReader, NeoBusinessTypeService, NeoOpenApiService, resolveNeoOpenApiUrl, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
+  const { SessionStore, AiService, NeoMetadataCliReader, NeoBusinessTypeService, NeoOpenApiService, PrintTemplateService, resolveNeoOpenApiUrl, ensureNeoCliProject, readNeoCliAuth, writeNeoCliAuth, getNeoCliAuthLocation,
     filterNeoCliTools, getNeoCliSessionInstruction, NEO_CLI_FIRST_ROUTING, CRM_HARNESS_TOOLS_SPEC, getProtectedSkillInstruction } = subject;
-  const project = path.join(fixture, '当前工作区');
-  fs.mkdirSync(project);
+  const projectLink = path.join(fixture, '当前工作区');
+  fs.mkdirSync(projectLink);
+  const project = fs.realpathSync(projectLink);
   const environment = { id: 'connector-sandbox', name: '当前连接器', productType: 'neocrm', envType: 'sandbox',
     neoBaseURL: 'https://crm-sandbox.example.test', tokenURL: 'https://login.example.test/oauth2/token', loginURL: '' };
   const token = { access_token: 'fixture-access', refresh_token: 'fixture-refresh', tenant_id: 'fixture-tenant',
@@ -68,6 +70,27 @@ try {
   const saveFixture = (current) => fs.writeFileSync(sessionsPath, JSON.stringify({ current, history: [] }));
   saveFixture(session);
   store = new SessionStore();
+
+  const duplicateHistory = [
+    { id: 'old-connector-fixture', environmentId: 'old-connector', environmentName: '旧连接器',
+      tenantId: token.tenant_id, tenantName: '示例租户', userName: '测试用户', instanceUri: token.instance_uri,
+      lastLoginAt: Date.now() - 1000, tokenData: { ...token, access_token: 'stale-token' },
+      environment: { ...environment, id: 'old-connector', name: '旧连接器' } },
+    { id: session.activeAccountId, environmentId: environment.id, environmentName: environment.name,
+      tenantId: token.tenant_id, tenantName: '示例租户', userName: '测试用户', instanceUri: token.instance_uri,
+      lastLoginAt: Date.now(), tokenData: token, environment },
+    { id: 'other-tenant', environmentId: environment.id, environmentName: environment.name,
+      tenantId: 'other-tenant', userName: '测试用户', instanceUri: token.instance_uri,
+      lastLoginAt: Date.now() - 2000, tokenData: { ...token, tenant_id: 'other-tenant' }, environment },
+  ];
+  fs.writeFileSync(sessionsPath, JSON.stringify({ current: session, history: duplicateHistory }));
+  const normalizedHistory = store.getAccountHistory();
+  assert.equal(normalizedHistory.length, 2);
+  assert.equal(normalizedHistory.some((record) => record.id === session.activeAccountId), true);
+  assert.equal(normalizedHistory.some((record) => record.tokenData.access_token === 'stale-token'), false);
+  assert.equal(JSON.parse(fs.readFileSync(sessionsPath, 'utf8')).history.length, 2);
+  console.log('PASS account history: merges duplicate connector records for the same tenant/user and preserves the active credentials');
+  saveFixture(session);
 
   const ready = store.prepareNeoCliForConversation(project);
   assert.equal(ready.success, true);
@@ -169,7 +192,7 @@ try {
   const apiCalls = [];
   ai.neoOpenApi = new NeoOpenApiService(async config => {
     apiCalls.push(config);
-    return { status: 200, data: { code: '0', msg: '成功', echoed: token.access_token } };
+    return { status: 200, data: { code: '0', msg: '成功', echoed: `${token.access_token} ${token.cookieString}` } };
   });
   const openApiInput = { method: 'PATCH', url: 'https://api.xiaoshouyi.com/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement',
     queryParams: { controlApiKey: 'stage__c', dependentApiKey: 'phase__c' }, body: { useLabel: true } };
@@ -178,6 +201,7 @@ try {
   assert.equal(openApiResult.data.success, true);
   assert.equal(apiCalls.at(-1).url, `${new URL(token.instance_uri).origin}/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement`);
   assert.equal(apiCalls.at(-1).headers.Authorization, `Bearer ${token.access_token}`);
+  assert.equal(apiCalls.at(-1).headers.Cookie, undefined);
   assert.equal(apiCalls.at(-1).params.dependentApiKey, 'phase__c');
   assert.deepEqual(apiCalls.at(-1).data, { useLabel: true });
   assert.equal(apiCalls.at(-1).maxRedirects, 0);
@@ -185,6 +209,113 @@ try {
   assert.equal((await ai.executeUnifiedTool('execute_open_api', { method: 'GET', url: '/rest/auc/v2.0/userInfo' }, [], environment, token, project)).data.status, 200);
   await ai.executeUnifiedTool('execute_open_api', { method: 'DELETE', url: '/rest/metadata/v2.0/xobjects/account/dependencies', body: { controlApiKey: 'stage__c' }, confirm: true }, [], environment, token, project);
   assert.deepEqual(apiCalls.at(-1).data, { controlApiKey: 'stage__c' });
+  await ai.executeUnifiedTool('execute_open_api', { method: 'POST', url: '/admin/translation_v3/fileUpload.action', body: {}, confirm: true }, [], environment, token, project);
+  assert.equal(apiCalls.at(-1).headers.Cookie, token.cookieString);
+  assert.equal(apiCalls.at(-1).headers.Authorization, undefined);
+  assert.equal(JSON.stringify(apiCalls.at(-1).headers).includes(token.cookieString), true);
+  assert.equal(JSON.stringify((await ai.executeUnifiedTool('execute_open_api',
+    { method: 'GET', url: '/admin/template-manage/object.action' }, [], environment, token, project)).data).includes(token.cookieString), false);
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api',
+    { method: 'POST', url: '/admin/translation_v3/fileUpload.action', body: {}, confirm: true }, [], environment,
+    { ...token, cookieString: '', cookies: [] }, project), /需要销售易后台会话 Cookie/);
+  console.log('PASS Open API auth routing: /rest uses OAuth Bearer Token; /admin uses the connector web-session Cookie');
+
+  const templateFile = path.join(project, 'sample-template.docx');
+  fs.writeFileSync(templateFile, Buffer.from('fixture docx bytes'));
+  let uploadRequest;
+  ai.printTemplateService = new PrintTemplateService({}, async (url, form, config) => {
+    uploadRequest = { url, form, config };
+    return { data: { status: 0, data: { fileName: 'sample-template.docx', fileUrl: '/uploaded/sample-template.docx' } } };
+  });
+  await assert.rejects(() => ai.executeUnifiedTool('upload_print_template_file',
+    { file_path: templateFile, confirm: false }, [], environment, token, project), /取得明确确认/);
+  const uploaded = await ai.executeUnifiedTool('upload_print_template_file',
+    { file_path: templateFile, confirm: true }, [], environment, token, project);
+  assert.equal(uploadRequest.url, `${environment.neoBaseURL}/admin/translation_v3/fileUpload.action`);
+  assert.match(uploadRequest.config.headers['content-type'], /^multipart\/form-data; boundary=/);
+  assert.equal(uploadRequest.config.headers.Cookie, token.cookieString);
+  assert.equal(uploadRequest.config.headers.Authorization, undefined);
+  assert.match(uploadRequest.form._streams.join(' '), /name="uploadFile"/);
+  assert.match(uploadRequest.form._streams.join(' '), /name="fileName"/);
+  assert.match(uploadRequest.form._streams.join(' '), /name="encoding"/);
+  assert.equal(uploaded.data.fileUrl, '/uploaded/sample-template.docx');
+  console.log('PASS print template upload: requires confirmation, sends multipart with Cookie only, and returns verified file URL');
+
+  let listReadCount = 0;
+  let saveDefinition;
+  const createdTemplate = { id: 'template-123', name: 'OTS运货单', systemId: 42,
+    fileName: 'sample-template.docx', fileUrl: '/uploaded/sample-template.docx',
+    outputType: 1, status: 0, statusName: '禁用' };
+  const completePrintService = new PrintTemplateService({}, async () => ({ data: {} }), async (url, body, config) => {
+    saveDefinition = { url, body, config };
+    return { data: { status: 0, msg: '成功' } };
+  });
+  completePrintService.listPrintObjects = async () => ({ success: true, data: [
+    { objectId: 42, apiKey: 'waybill__c__c', label: 'OTS物流运货单', allNum: 0, enableNum: 0 },
+  ] });
+  completePrintService.listTemplatesByObject = async () => {
+    listReadCount++;
+    return { success: true, total: listReadCount === 1 ? 0 : 1, data: listReadCount === 1 ? [] : [createdTemplate] };
+  };
+  completePrintService.uploadTemplateFile = async () => ({ success: true, data: {
+    fileName: 'sample-template.docx', fileUrl: '/uploaded/sample-template.docx',
+  } });
+  ai.printTemplateService = completePrintService;
+  await assert.rejects(() => ai.executeUnifiedTool('create_print_template', {
+    file_path: templateFile, entityApiKey: 'waybill__c__c', name: 'OTS运货单', outputType: 1, confirm: false,
+  }, [], environment, token, project), /展示并确认/);
+  const created = await ai.executeUnifiedTool('create_print_template', {
+    file_path: templateFile, entityApiKey: 'waybill__c__c', name: 'OTS运货单', outputType: 1, confirm: true,
+  }, [], environment, token, project);
+  assert.equal(created.data.templatePrintId, 'template-123');
+  assert.equal(listReadCount, 2);
+  assert.equal(saveDefinition.url, `${environment.neoBaseURL}/admin/template-manage/save-template-print.action`);
+  assert.equal(saveDefinition.config.headers.Cookie, token.cookieString);
+  assert.equal(saveDefinition.config.headers.Authorization, undefined);
+  const savedPayload = JSON.parse(new URLSearchParams(saveDefinition.body).get('templateParam'));
+  assert.deepEqual({ systemId: savedPayload.systemId, name: savedPayload.name, fileName: savedPayload.fileName,
+    fileUrl: savedPayload.fileUrl, outputType: savedPayload.outputType, status: savedPayload.status }, {
+    systemId: 42, name: 'OTS运货单', fileName: 'sample-template.docx', fileUrl: '/uploaded/sample-template.docx', outputType: 1, status: 0,
+  });
+  console.log('PASS print template lifecycle: confirmation gate, duplicate preflight, upload, definition save, and persisted readback');
+
+  let fallbackReadCount = 0;
+  const metadataFallbackService = new PrintTemplateService({ fetchEntityList: async () => [
+    { objectId: 42, apiKey: 'waybill__c__c', label: 'OTS物流运货单' },
+  ] }, async () => ({ data: {} }), async () => ({ data: { status: 0, msg: '成功' } }));
+  metadataFallbackService.listPrintObjects = async () => ({ success: true, data: [] });
+  metadataFallbackService.listTemplatesByObject = async () => {
+    fallbackReadCount++;
+    return { success: true, total: fallbackReadCount === 1 ? 0 : 1,
+      data: fallbackReadCount === 1 ? [] : [createdTemplate] };
+  };
+  metadataFallbackService.uploadTemplateFile = completePrintService.uploadTemplateFile;
+  const fallbackCreated = await metadataFallbackService.createPrintTemplate(environment, token, {
+    filePath: templateFile, entityApiKey: 'waybill__c__c', objectId: 42, name: 'OTS运货单', outputType: 1,
+  });
+  assert.equal(fallbackCreated.success, true);
+  assert.equal(fallbackCreated.data.objectId, 42);
+  console.log('PASS print template object resolution: falls back to exact tenant metadata when the object is absent from configured print objects');
+
+  const canceledPrintService = new PrintTemplateService({}, async () => ({ data: {} }), async (_url, _body, config) => {
+    config.signal?.throwIfAborted();
+    return { data: { status: 0, msg: '成功' } };
+  });
+  canceledPrintService.listPrintObjects = completePrintService.listPrintObjects;
+  canceledPrintService.listTemplatesByObject = async () => ({ success: true, total: 0, data: [] });
+  canceledPrintService.uploadTemplateFile = completePrintService.uploadTemplateFile;
+  const cancelController = new AbortController();
+  canceledPrintService.definitionRequest = async () => {
+    cancelController.abort();
+    throw Object.assign(new Error('canceled'), { name: 'AbortError' });
+  };
+  const canceledCreate = await canceledPrintService.createPrintTemplate(environment, token, {
+    filePath: templateFile, entityApiKey: 'waybill__c__c', name: 'OTS运货单', outputType: 1,
+  }, cancelController.signal);
+  assert.equal(canceledCreate.success, false);
+  assert.equal(canceledCreate.uploaded, true);
+  assert.match(canceledCreate.error, /已上传.*状态未知/);
+  console.log('PASS print template cancellation: preserves uploaded-file state and reports definition status as unknown');
   let ptcApiResult;
   ai.dshToolService = { executePtcCode: async (_args, sdk) => {
     ptcApiResult = await sdk.execute_open_api({ method: 'PATCH', ...openApiInput, confirm: true });

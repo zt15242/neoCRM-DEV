@@ -16,7 +16,10 @@ type Request = (config: AxiosRequestConfig) => Promise<{ status: number; data: u
 function redact(value: unknown, token: TokenData): unknown {
   if (typeof value === 'string') {
     let result = value;
-    for (const secret of [token.access_token, token.refresh_token, token.cookieString]) {
+    const secrets = [token.access_token, token.refresh_token, token.cookieString,
+      ...(token.cookies || []).map(cookie => `${cookie.name}=${cookie.value}`),
+      ...(token.cookies || []).map(cookie => cookie.value)];
+    for (const secret of secrets) {
       if (secret) result = result.split(secret).join('[REDACTED]');
     }
     return result.slice(0, 20000);
@@ -49,6 +52,21 @@ export function resolveNeoOpenApiUrl(baseUrl: string, suppliedUrl: string): stri
   return resolved.toString();
 }
 
+function authHeadersForUrl(url: string, token: TokenData): Record<string, string> {
+  const parsed = new URL(url);
+  if (parsed.pathname.startsWith('/admin/')) {
+    const cookies = Array.isArray(token.cookies) && token.cookies.length > 0
+      ? token.cookies.map(cookie => `${cookie.name}=${cookie.value}`)
+      : (token.cookieString || '').split(';').map(cookie => cookie.trim()).filter(Boolean);
+    if (cookies.length === 0) {
+      throw new Error('该后台接口需要销售易后台会话 Cookie。请先在连接器中捕获或刷新 Cookie，再重试。');
+    }
+    return { Cookie: cookies.join('; ') };
+  }
+  if (!token.access_token) throw new Error('该 Open API 需要当前销售易连接器的 OAuth Token');
+  return { Authorization: `Bearer ${token.access_token}` };
+}
+
 export class NeoOpenApiService {
   constructor(private request: Request = (config) => axios.request(config)) {}
 
@@ -78,7 +96,7 @@ export class NeoOpenApiService {
         params: input.queryParams,
         ...(method === 'GET' ? {} : { data: input.body }),
         headers: {
-          Authorization: `Bearer ${token.access_token}`,
+          ...authHeadersForUrl(url, token),
           'Content-Type': 'application/json',
           'xsy-inner-source': 'bff',
         },

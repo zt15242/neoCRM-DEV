@@ -63,6 +63,8 @@ export const PRINT_TEMPLATE_SKILL_INSTRUCTION = `【系统全局首要植入规�
 你是一个精通销售易 Word / Excel 打印模板体系全生命周期的顶尖实测型架构师，拥有本地工作区物理文件生成权限。
 你遵循第一人称「我」的工程研判，始终以真实对象元数据与真实落盘物理文件为唯一事实标准。
 
+【接口鉴权与上传协议】：打印模板后台配置接口（/admin/template-manage/*、/admin/translation_v3/*，包括 fileUpload.action）使用当前连接器的后台会话 Cookie；公开 /rest/* Open API 使用当前连接器 OAuth Bearer Token。调用 execute_open_api 时由宿主按路径自动选择并注入凭证，严禁要求用户提供凭证或把 Cookie/Token 混用。新增模板应优先使用 create_print_template 完整工具：宿主先检查对象和同名模板，再通过 fileUpload.action multipart 上传文件、调用 save-template-print.action 创建定义，并回读确认模板 ID 和状态。上传前须确认目标租户、对象、模板名、文件和输出格式。需要仅上传、不创建定义时才调用 upload_print_template_file；单独上传不能报告为模板可用。
+
 【核心执行铁律 - 绝不允许违背】：
 1. 【字段真实性先行 - 严禁凭空臆造字段】：
    - 必须在第一步自动调用 \`get_print_template_fields\` 工具核准目标对象在当前租户真实存在的字段 API Key 与明细子对象；
@@ -72,6 +74,7 @@ export const PRINT_TEMPLATE_SKILL_INSTRUCTION = `【系统全局首要植入规�
    - 面对用户的模板生成需求，绝对严禁仅在回复中输出表格 Markdown 排版文本！
    - 绝对严禁在正文中谎称“已在本地生成物理文件：D:\\xxx.docx”或谎称“经 Python 脚本运行验证”，必须由你真实发起工具调用！
    - 你必须直接调用 \`generate_print_template\` 专用工具，在当前本地项目工作区直接生成真实合规的 Word (.docx) 物理文件（系统已内置四列主表字段、物理表格循环起始 ##={begin:子对象_prt} 与闭合 ##={end}、时间函数 ##={fun_now} 与签署区）！
+2.1 【模板上传与定义创建 - 完整闭环】：已有 Word/Excel 模板要新增到租户时，先调用真实对象/模板列表核对对象 ID 并排除同名模板，展示当前租户、对象、模板名称、文件名和输出格式，取得明确确认后调用 \`create_print_template\`。该工具执行 multipart 上传、模板定义保存和回读验证；失败时如实区分文件已上传、定义未确认、回读成功等状态，不能盲目重试。不得用 execute_open_api 的 JSON body 模拟文件上传。只有用户明确要求单独上传文件时才调用 \`upload_print_template_file\`。
 3. 【任务清单全部闭环推进 (Todo Completion)】：
    - 若建立了 todo_write 任务清单，必须负责到底，每完成调研或生成步骤，必须紧接着调用 todo_write 将任务更新为 completed；
    - 严禁在仍有任务未完成时提前停止工具调用，必须所有任务项全为 completed 全部完成后才输出最终汇报！
@@ -394,7 +397,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'execute_open_api',
-      description: '通过当前销售易连接器执行 Open API v2 请求。仅限销售易。url 可传 /rest/... 相对路径或 API 文档中的完整 URL；宿主始终丢弃 URL 原域名，改用当前连接器环境实例地址并注入当前连接器 Bearer 授权，不要读取或提供令牌、不要用 bash/curl。支持 GET/POST/PUT/PATCH/DELETE。写请求须先展示租户、方法、最终路径、查询参数和请求体，取得用户明确确认后设置 confirm=true。',
+      description: '通过当前销售易连接器执行接口请求。仅限销售易。url 可传相对路径或 API 文档完整 URL；宿主始终替换原域名为当前连接器环境。/rest/ 接口使用连接器 OAuth Bearer Token，/admin/ 后台接口使用当前后台会话 Cookie，两类凭证由宿主按路径选择并注入；不要读取或提供令牌/Cookie、不要用 bash/curl。支持 GET/POST/PUT/PATCH/DELETE 和 JSON 请求体；fileUpload.action 虽然属于 /admin/ Cookie 鉴权接口，但需 multipart 文件请求，当前工具不支持其文件上传请求体。写请求须先展示租户、方法、最终路径、查询参数和请求体，取得用户明确确认后设置 confirm=true。',
       parameters: {
         type: 'object',
         properties: {
@@ -1027,6 +1030,43 @@ export const CRM_HARNESS_TOOLS_SPEC = [
           },
         },
         required: ['entityApiKey'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'upload_print_template_file',
+      description: '将用户确认的 Word/Excel 打印模板文件上传到当前销售易租户。使用后台会话 Cookie，并按 fileUpload.action 契约发送 multipart/form-data；仅可读取当前项目内文件或本轮用户明确添加的附件。返回 fileUrl/fileName 仅证明文件上传，不代表模板定义已创建。上传前必须向用户展示租户和文件名并取得明确确认。',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: '当前项目内模板文件路径，或本轮用户明确添加的附件完整路径。仅支持 .doc/.docx/.xls/.xlsx，最大 50 MB。' },
+          file_name: { type: 'string', description: '可选上传文件名；默认使用本地文件名。' },
+          confirm: { type: 'boolean', description: '用户确认展示的租户和文件名后设为 true。' },
+        },
+        required: ['file_path', 'confirm'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_print_template',
+      description: '在当前销售易租户完成打印模板全流程：核对对象、拒绝同名重复、multipart 上传 Word/Excel 文件、创建模板定义并回读确认模板 ID 与状态。后台接口使用连接器会话 Cookie。仅可读取当前项目文件或本轮用户明确添加的附件。该操作会写入租户；必须先向用户展示租户、对象、模板名、文件名和输出格式并取得明确确认。',
+      parameters: {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: '当前项目内文件或本轮用户明确添加的附件完整路径。支持 .doc/.docx/.xls/.xlsx，最大 50 MB。' },
+          entityApiKey: { type: 'string', description: '当前租户打印对象 API Key，必须由 list_print_objects 确认。' },
+          objectId: { type: 'number', description: '可选当前租户对象 ID；若传入也必须与 entityApiKey 对应。' },
+          name: { type: 'string', description: '打印模板名称，目标对象内不能已有同名模板。' },
+          printFileName: { type: 'string', description: '可选打印输出文件名；默认模板名称。' },
+          description: { type: 'string', description: '可选模板说明。' },
+          outputType: { type: 'number', enum: [0, 1, 2], description: '输出格式：0 原始 Word/Excel，1 PDF，2 前台自选格式。' },
+          confirm: { type: 'boolean', description: '用户已明确确认目标租户、对象、模板名、文件名和输出格式后设为 true。' },
+        },
+        required: ['file_path', 'entityApiKey', 'name', 'outputType', 'confirm'],
       },
     },
   },

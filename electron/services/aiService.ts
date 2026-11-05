@@ -1262,6 +1262,7 @@ declare const tools: {
   get_entity_fields(args: { entityApiKey: string }): Promise<{ entityApiKey: string; totalFields: number; fields: any[] }>;
   list_business_types(args: { entityApiKey: string }): Promise<any>;
   deploy_business_type(args: { entityApiKey: string; apiKey?: string; label?: string; description?: string; active?: boolean; sourceFile?: string; dryRun?: boolean; confirm?: boolean }): Promise<any>;
+  create_print_template(args: { file_path: string; entityApiKey: string; objectId?: number; name: string; printFileName?: string; description?: string; outputType: 0|1|2; confirm: boolean }): Promise<any>;
   execute_sql_query(args: { sql: string }): Promise<{ records: any[]; totalSize: number; fields: string[] }>;
   create_record(args: { entityApiKey: string; data: Record<string, any> }): Promise<any>;
   update_record(args: { entityApiKey: string; recordId: string; data: Record<string, any> }): Promise<any>;
@@ -1543,6 +1544,7 @@ ${mcpInfoText}
           userContent.includes('Word文件') ||
           userContent.includes('打印模版') ||
           userContent.includes('打印模板');
+        const isAskingTemplateUpload = /(?:上传|导入).*(?:打印)?(?:模版|模板)|(?:模版|模板).*(?:上传|导入)/i.test(userContent);
 
         // 4. 脚本编写、真实执行与本地文件读写分析意图
         const isAskingScriptOrFileIO =
@@ -1563,7 +1565,9 @@ ${mcpInfoText}
 2. 严禁凭记忆臆造字段，必须根据工具返回的真实字段（如销售易客户主名称是 accountName 而非 name，合同主名称是 title 而非 name，商机是 opportunityName，订单是 po，订单产品是 productName 等）向用户进行逐个对象的精确字段校准和对照汇报！`);
         }
 
-        if (isAskingTemplateOrWord) {
+        if (isAskingTemplateUpload) {
+          systemParts.push(`【打印模板上传与创建完整流程】：用户要把现有文件上传为模板时，先读取本轮附件或项目内文件并核验扩展名/可读性；调用 list_print_objects 确认目标对象，调用 list_print_templates 检查同名项。向用户展示当前租户、对象名称/API Key/ID、模板名、文件名和输出格式并等待明确确认；确认后调用 create_print_template 一次完成 multipart 文件上传、模板定义创建和回读。只在平台回读找到模板 ID 与状态后报告“模板已创建”；若只上传成功或写入状态不明，分开报告并禁止自动重试。模板名、对象和输出格式不清楚时先询问，不要自行推断业务配置。`);
+        } else if (isAskingTemplateOrWord) {
           systemParts.push(`【系统实时调度指令 (最高执行优先级 - 必须先查字段再生成真实物理文件！)】：
 检测到用户要求生成打印模板或 Word 文档（当前工作区路径: ${projectPath || '未指定'}）。
 【核心执行铁律 - 绝不允许空谈 Markdown 文字！】：
@@ -3140,7 +3144,7 @@ ${currentCompactionSummary.summary}
         },
       };
 
-      for (const toolName of ['bash', 'read', 'read_document', 'write', 'edit', 'str_replace_editor', 'glob', 'grep', 'get_tenant_info']) {
+      for (const toolName of ['bash', 'read', 'read_document', 'write', 'edit', 'str_replace_editor', 'glob', 'grep', 'get_tenant_info', 'upload_print_template_file', 'create_print_template']) {
         toolsContext[toolName] = async (params: any = {}) => {
           const result = await this.executeCrmTool(toolName, params, env, tokenData, projectPath, sessionAllowedFiles, signal, projectId);
           return result.data;
@@ -3179,6 +3183,16 @@ ${currentCompactionSummary.summary}
               projectPath, projectId, sessionAllowedFiles, signal);
             return result.data;
           };
+        toolsContext.upload_print_template_file = async (params: any) => {
+          const result = await this.executeUnifiedTool('upload_print_template_file', params || {}, [], env, tokenData,
+            projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        };
+        toolsContext.create_print_template = async (params: any) => {
+          const result = await this.executeUnifiedTool('create_print_template', params || {}, [], env, tokenData,
+            projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        };
         }
         toolsContext.execute_sql_query = async (params: any) => {
           const res = await this.dataService.executeQueryAll(env, tokenData, params?.sql || params?.query || '');
@@ -3900,6 +3914,51 @@ ${currentCompactionSummary.summary}
         data: res,
         summary: res.message,
       };
+    }
+
+    if (name === 'upload_print_template_file') {
+      if ((env?.productType || 'neocrm') !== 'neocrm') throw new Error('打印模板上传仅支持销售易连接器');
+      if (args.confirm !== true) throw new Error('上传模板是租户写操作。请先向用户展示当前租户名称和文件名并取得明确确认，再设置 confirm=true');
+      const requestedPath = String(args.file_path || '');
+      const safePath = this.dshToolService.assertPathWithinProject(requestedPath, projectPath, sessionAllowedFiles);
+      let realPath: string;
+      try { realPath = fs.realpathSync(safePath); } catch { throw new Error('模板文件不存在或无法读取'); }
+      const isExplicitAttachment = (sessionAllowedFiles || []).some((allowed) => {
+        try { return fs.realpathSync(allowed) === realPath; } catch { return false; }
+      });
+      if (isExplicitAttachment) {
+        // Explicit user attachments may live outside the project; their canonical path is checked above.
+      } else {
+        this.dshToolService.assertPathWithinProject(realPath, projectPath);
+      }
+      const res = await this.printTemplateService.uploadTemplateFile(env!, tokenData!, {
+        filePath: realPath, fileName: args.file_name,
+      }, signal);
+      if (!res.success || !res.data) throw new Error(res.error || '上传打印模板文件失败');
+      return { data: res.data, summary: `模板文件已上传到当前租户，平台返回文件名 ${res.data.fileName}。这还不代表模板定义已创建。` };
+    }
+
+    if (name === 'create_print_template') {
+      if ((env?.productType || 'neocrm') !== 'neocrm') throw new Error('打印模板创建仅支持销售易连接器');
+      if (args.confirm !== true) throw new Error('模板创建会写入当前租户。请先展示并确认目标租户、对象、模板名、文件名和输出格式，再设置 confirm=true');
+      const safePath = this.dshToolService.assertPathWithinProject(String(args.file_path || ''), projectPath, sessionAllowedFiles);
+      let realPath: string;
+      try { realPath = fs.realpathSync(safePath); } catch { throw new Error('模板文件不存在或无法读取'); }
+      const isExplicitAttachment = (sessionAllowedFiles || []).some((allowed) => {
+        try { return fs.realpathSync(allowed) === realPath; } catch { return false; }
+      });
+      if (!isExplicitAttachment) this.dshToolService.assertPathWithinProject(realPath, projectPath);
+      const res = await this.printTemplateService.createPrintTemplate(env!, tokenData!, {
+        filePath: realPath,
+        entityApiKey: String(args.entityApiKey || ''),
+        objectId: args.objectId,
+        name: String(args.name || ''),
+        printFileName: args.printFileName,
+        description: args.description,
+        outputType: Number(args.outputType) as 0 | 1 | 2,
+      }, signal);
+      if (!res.success || !res.data) throw new Error(res.error || '模板创建未能完成并验证');
+      return { data: res.data, summary: `打印模板 ${res.data.name} 已创建并回读验证，模板 ID ${res.data.templatePrintId}，状态：${res.data.statusName}` };
     }
 
     if (name === "list_print_objects") {

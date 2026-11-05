@@ -69,7 +69,7 @@ CLI 已覆盖的功能包括：
 
 CLI 1.0.8 没有普通业务记录 XOQL 查询、记录创建/更新/删除或打印模板查询命令。这些操作直接使用现有连接器工具；不要虚构 neo query 或 neo data 命令。
 
-用户提供销售易 Open API 路径/完整 URL 并要求执行时，使用 execute_open_api；完整 URL 的原域名由宿主自动替换为当前连接器实例。不要要求 token、不要用 bash/curl 手动请求。写请求先展示租户、方法、路径、查询参数和请求体，获得明确确认后再执行。
+用户提供销售易 API 路径/完整 URL 并要求执行时，使用 execute_open_api；完整 URL 的原域名由宿主自动替换为当前连接器实例。/rest/ 接口由宿主使用连接器 OAuth Token，/admin/ 后台接口由宿主使用后台会话 Cookie（打印模板上传属于后台接口）；不要要求用户提供或读取 token/Cookie，不要用 bash/curl 手动请求。写请求先展示租户、方法、路径、查询参数和请求体，获得明确确认后再执行。
 
 业务类型查询、创建和更新由 list_business_types / deploy_business_type 专用工具处理：CLI 1.0.8 没有对应写入命令，宿主复用当前连接器授权调用 Metadata API 并回读，不要求用户去后台操作。不要虚构 neo deploy business-type，也不要把 enableBusitype 开关或子表单布局配置当作创建业务类型。
 

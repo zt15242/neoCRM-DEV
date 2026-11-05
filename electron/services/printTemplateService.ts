@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import axios from 'axios';
+import FormData from 'form-data';
+import type { AxiosRequestConfig } from 'axios';
 import { 
   Document, 
   Packer, 
@@ -17,7 +19,13 @@ import { NeoEnvironment, TokenData } from '../../shared/types';
 import { MetadataService } from './metadataService';
 
 export class PrintTemplateService {
-  constructor(private metadataService: MetadataService) {}
+  constructor(
+    private metadataService: MetadataService,
+    private uploadRequest: (url: string, data: FormData, config: AxiosRequestConfig) => Promise<{ data: any }> =
+      (url, data, config) => axios.post(url, data, config),
+    private definitionRequest: (url: string, data: string, config: AxiosRequestConfig) => Promise<{ data: any }> =
+      (url, data, config) => axios.post(url, data, config),
+  ) {}
 
   private resolveBaseUrl(env: NeoEnvironment, tokenData: TokenData): string {
     const raw = tokenData.instance_uri || env.neoBaseURL;
@@ -34,25 +42,177 @@ export class PrintTemplateService {
       Accept: 'application/json, text/javascript, */*; q=0.01',
     };
 
-    if (tokenData.access_token) {
-      headers['Authorization'] = `Bearer ${tokenData.access_token}`;
-    }
-
-    if (Array.isArray(tokenData.cookies) && tokenData.cookies.length > 0) {
-      const cookieMap = new Map<string, string>();
-      for (const c of tokenData.cookies) {
-        if (!c.path || c.path === '/' || c.path === '') {
-          cookieMap.set(c.name, `${c.name}=${c.value}`);
-        } else if (!cookieMap.has(c.name)) {
-          cookieMap.set(c.name, `${c.name}=${c.value}`);
-        }
-      }
-      headers['Cookie'] = Array.from(cookieMap.values()).join('; ');
-    } else if (tokenData.cookieString) {
-      headers['Cookie'] = tokenData.cookieString;
-    }
+    const cookie = this.getAdminCookie(tokenData);
+    if (!cookie) throw new Error('打印模板后台接口需要会话 Cookie，请先捕获或刷新 Cookie');
+    headers['Cookie'] = cookie;
 
     return headers;
+  }
+
+  private getAdminCookie(tokenData: TokenData): string {
+    if (Array.isArray(tokenData.cookies) && tokenData.cookies.length > 0) {
+      return tokenData.cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+    }
+    return tokenData.cookieString?.trim() || '';
+  }
+
+  public async uploadTemplateFile(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    params: { filePath: string; fileName?: string },
+    signal?: AbortSignal,
+  ): Promise<{ success: boolean; data?: { fileName: string; fileUrl: string }; error?: string }> {
+    const baseUrl = this.resolveBaseUrl(env, tokenData);
+    const cookie = this.getAdminCookie(tokenData);
+    if (!cookie) return { success: false, error: '打印模板文件上传需要后台会话 Cookie，请先捕获或刷新 Cookie' };
+
+    const filePath = path.resolve(params.filePath);
+    let stats: fs.Stats;
+    try { stats = fs.statSync(filePath); } catch { return { success: false, error: '指定的模板文件不存在或无法读取' }; }
+    if (!stats.isFile()) return { success: false, error: '模板上传路径必须是文件' };
+    if (stats.size === 0 || stats.size > 50 * 1024 * 1024) return { success: false, error: '模板文件大小必须大于 0 且不超过 50 MB' };
+    const fileName = path.basename(params.fileName?.trim() || filePath);
+    if (!/\.(docx?|xlsx?)$/i.test(fileName)) return { success: false, error: '仅支持 Word 或 Excel 模板文件（.doc/.docx/.xls/.xlsx）' };
+
+    const form = new FormData();
+    form.append('uploadFile', fs.createReadStream(filePath), { filename: fileName });
+    form.append('fileName', fileName);
+    form.append('encoding', 'utf-8');
+    signal?.throwIfAborted();
+    try {
+      const response = await this.uploadRequest(`${baseUrl}/admin/translation_v3/fileUpload.action`, form, {
+        headers: { ...form.getHeaders(), Cookie: cookie, 'X-Requested-With': 'XMLHttpRequest',
+          Origin: baseUrl, Referer: `${baseUrl}/admin/template-manage/index.action`, Accept: 'application/json, text/javascript, */*; q=0.01' },
+        timeout: 60000,
+        maxRedirects: 0,
+        maxBodyLength: 50 * 1024 * 1024,
+        signal,
+      });
+      const envelope = response.data;
+      const payload = envelope?.data?.data || envelope?.data || envelope;
+      const rejected = envelope?.success === false || envelope?.status === -1 || envelope?.status === '-1' ||
+        (envelope?.code !== undefined && ![0, '0', 200, '200'].includes(envelope.code));
+      if (rejected) throw new Error(envelope?.msg || envelope?.message || '平台拒绝了文件上传');
+      if (typeof payload?.fileUrl !== 'string' || !payload.fileUrl || typeof payload?.fileName !== 'string' || !payload.fileName) {
+        throw new Error('上传接口未返回 fileUrl/fileName，不能确认文件已上传');
+      }
+      return { success: true, data: { fileName: payload.fileName, fileUrl: payload.fileUrl } };
+    } catch (error: any) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      let reason = String(error?.response?.data?.msg || error?.response?.data?.message || error?.message || error);
+      for (const secret of [tokenData.access_token, tokenData.refresh_token, tokenData.cookieString,
+        ...(tokenData.cookies || []).map(cookie => cookie.value)]) {
+        if (secret) reason = reason.split(secret).join('[REDACTED]');
+      }
+      return { success: false, error: `上传打印模板文件失败: ${reason.slice(0, 500)}` };
+    }
+  }
+
+  public async createPrintTemplate(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    params: {
+      filePath: string;
+      entityApiKey: string;
+      objectId?: number | string;
+      name: string;
+      printFileName?: string;
+      description?: string;
+      outputType: 0 | 1 | 2;
+    },
+    signal?: AbortSignal,
+  ): Promise<{ success: boolean; verified?: boolean; uploaded?: boolean; data?: Record<string, unknown>; error?: string }> {
+    const name = params.name.trim();
+    if (!name || name.length > 100) return { success: false, error: '模板名称必须为 1 到 100 个字符' };
+    if (![0, 1, 2].includes(params.outputType)) return { success: false, error: 'outputType 仅支持 0（Word/Excel 原文件）、1（PDF）、2（前台自选格式）' };
+    const objects = await this.listPrintObjects(env, tokenData);
+    if (!objects.success || !objects.data) return { success: false, error: objects.error || '无法读取当前租户打印对象，停止创建' };
+    let target = objects.data.find((item) => params.objectId != null
+      ? Number(item.objectId) === Number(params.objectId)
+      : item.apiKey.toLowerCase() === params.entityApiKey.trim().toLowerCase());
+    if (!target) {
+      let entities: any[];
+      try {
+        entities = await this.metadataService.fetchEntityList(env, tokenData);
+      } catch (error: any) {
+        return { success: false, error: `打印对象列表中没有目标对象，且当前租户元数据读取失败：${error.message || error}` };
+      }
+      const entity = entities.find((item) => item.apiKey?.toLowerCase() === params.entityApiKey.trim().toLowerCase());
+      const entityObjectId = Number(entity?.objectId || entity?.id);
+      if (!entity || !Number.isFinite(entityObjectId) || entityObjectId <= 0) {
+        return { success: false, error: `当前租户打印对象列表和实体元数据中均找不到 ${params.entityApiKey || params.objectId}` };
+      }
+      if (params.objectId != null && entityObjectId !== Number(params.objectId)) {
+        return { success: false, error: `对象 ID ${params.objectId} 与当前租户元数据中的 ${params.entityApiKey}（${entityObjectId}）不匹配` };
+      }
+      target = {
+        objectId: entityObjectId,
+        apiKey: entity.apiKey,
+        label: entity.label || entity.apiKey,
+        allNum: 0,
+        enableNum: 0,
+      };
+    }
+    if (params.entityApiKey && target.apiKey.toLowerCase() !== params.entityApiKey.trim().toLowerCase()) {
+      return { success: false, error: `对象 ID ${params.objectId} 与 API Key ${params.entityApiKey} 不匹配` };
+    }
+
+    const before = await this.listAllTemplatesByObject(env, tokenData, target.objectId, signal);
+    if (!before.success || !before.data) return { success: false, error: before.error || '无法读取目标对象的现有模板，停止创建' };
+    if (before.data.some((item) => item.name.trim().toLowerCase() === name.toLowerCase())) {
+      return { success: false, error: `目标对象已存在同名模板“${name}”，为避免重复创建已停止；请先核对现有模板` };
+    }
+
+    const uploaded = await this.uploadTemplateFile(env, tokenData, { filePath: params.filePath }, signal);
+    if (!uploaded.success || !uploaded.data) return { success: false, error: uploaded.error || '模板文件上传失败' };
+    const baseUrl = this.resolveBaseUrl(env, tokenData);
+    const payload: Record<string, unknown> = {
+      id: null,
+      systemId: target.objectId,
+      langCode: '$UserLangCode',
+      status: 0,
+      name,
+      fileName: uploaded.data.fileName,
+      fileUrl: uploaded.data.fileUrl,
+      outputType: params.outputType,
+      printFileName: params.printFileName?.trim() || name,
+      ...(params.description?.trim() ? { description: params.description.trim() } : {}),
+    };
+    const form = new URLSearchParams();
+    form.append('templateParam', JSON.stringify(payload));
+    let saveError: unknown;
+    try {
+      signal?.throwIfAborted();
+      const response = await this.definitionRequest(`${baseUrl}/admin/template-manage/save-template-print.action`, form.toString(), {
+        headers: this.buildAdminHeaders(baseUrl, tokenData), timeout: 30000, signal,
+      });
+      const result = response.data;
+      const accepted = result?.status === 0 || result?.status === '0';
+      if (!accepted || result?.success === false || result?.error) {
+        throw new Error(result?.msg || result?.message || '保存接口未返回确认成功状态');
+      }
+    } catch (error: any) {
+      saveError = error;
+    }
+
+    // A save timeout may happen after persistence. Read before deciding whether anything failed.
+    const after = signal?.aborted
+      ? { success: false, error: '当前操作已取消，无法回读模板定义' }
+      : await this.listAllTemplatesByObject(env, tokenData, target.objectId, signal);
+    const created = after.success ? after.data?.find((item) => Number(item.systemId) === target.objectId &&
+      item.name.trim().toLowerCase() === name.toLowerCase() && item.fileName === uploaded.data!.fileName &&
+      item.fileUrl === uploaded.data!.fileUrl) : undefined;
+    if (created) {
+      return { success: true, verified: true, uploaded: true, data: {
+        templatePrintId: created.id, name: created.name, entityApiKey: target.apiKey, objectId: target.objectId,
+        objectLabel: target.label, fileName: created.fileName, outputType: created.outputType,
+        status: created.status, statusName: created.statusName,
+      } };
+    }
+    const reason = signal?.aborted
+      ? '文件已上传，但保存/回读流程被取消，模板定义状态未知'
+      : saveError instanceof Error ? saveError.message : '保存后回读未发现模板';
+    return { success: false, uploaded: true, error: `文件已上传（${uploaded.data.fileName}），模板定义尚未确认创建；${reason}。未自动重试以避免重复创建。${after.error ? ` 回读失败：${after.error}` : ''}` };
   }
 
   /**
@@ -232,7 +392,7 @@ export class PrintTemplateService {
         status: Number(t.status || 0),
         statusName: Number(t.status) === 1 ? '启用' : '禁用',
         outputType: Number(t.outputType ?? 0),
-        outputTypeName: Number(t.outputType) === 1 ? 'Word/原格式' : 'PDF 导出',
+        outputTypeName: Number(t.outputType) === 0 ? 'Word/Excel 原文件' : Number(t.outputType) === 1 ? 'PDF 导出' : '前台自选格式',
         fileName: t.fileName || '',
         fileUrl: t.fileUrl || '',
         printFileName: t.printFileName || '',
@@ -257,6 +417,27 @@ export class PrintTemplateService {
     } catch (e: any) {
       return { success: false, error: `查询模板列表失败: ${e.response?.data?.message || e.message}` };
     }
+  }
+
+  private async listAllTemplatesByObject(
+    env: NeoEnvironment,
+    tokenData: TokenData,
+    objectId: number,
+    signal?: AbortSignal,
+  ): Promise<{ success: boolean; data?: any[]; error?: string }> {
+    const pageSize = 100;
+    const first = await this.listTemplatesByObject(env, tokenData, { objectId, pageNo: 1, pageSize });
+    if (!first.success || !first.data) return { success: false, error: first.error || '无法读取模板列表' };
+    const pages = Math.ceil((first.total || first.data.length) / pageSize);
+    if (pages > 50) return { success: false, error: '目标对象模板超过安全核对上限，停止创建以避免重复' };
+    const all = [...first.data];
+    for (let pageNo = 2; pageNo <= pages; pageNo++) {
+      signal?.throwIfAborted();
+      const page = await this.listTemplatesByObject(env, tokenData, { objectId, pageNo, pageSize });
+      if (!page.success || !page.data) return { success: false, error: page.error || `读取模板第 ${pageNo} 页失败` };
+      all.push(...page.data);
+    }
+    return { success: true, data: all };
   }
 
   /**

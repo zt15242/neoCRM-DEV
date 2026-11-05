@@ -132,6 +132,34 @@ export class SessionStore {
     fs.writeFileSync(this.getStoragePath(), JSON.stringify(data, null, 2), 'utf-8');
   }
 
+  private accountIdentity(record: AccountRecord): string {
+    const token = record.tokenData;
+    const tenantId = token?.tenant_id ?? record.tenantId;
+    const userId = token?.userInfo?.userId;
+    const instance = token?.instance_uri || record.instanceUri || record.environment?.neoBaseURL;
+    if (tenantId == null || userId == null || !instance) return `id:${record.id}`;
+    try {
+      const url = new URL(instance);
+      const product = record.environment?.productType || 'neocrm';
+      return `${product}:${url.origin.toLowerCase()}:${String(tenantId)}:${String(userId)}`;
+    } catch {
+      return `id:${record.id}`;
+    }
+  }
+
+  private deduplicateAccountHistory(records: AccountRecord[], preferredId?: string): AccountRecord[] {
+    const unique = new Map<string, AccountRecord>();
+    for (const record of records) {
+      const key = this.accountIdentity(record);
+      const existing = unique.get(key);
+      if (!existing || record.id === preferredId ||
+          (existing.id !== preferredId && record.lastLoginAt > existing.lastLoginAt)) {
+        unique.set(key, record);
+      }
+    }
+    return [...unique.values()].sort((a, b) => b.lastLoginAt - a.lastLoginAt);
+  }
+
   public getCurrentSession(): SessionState {
     const data = this.readStorage();
     const current = data.current || { isLoggedIn: false };
@@ -188,7 +216,10 @@ export class SessionStore {
         tokenData: session.tokenData,
         environment: session.environment,
       };
-      data.history = [historyRecord, ...data.history.filter((item) => item.id !== historyRecord.id)].slice(0, 20);
+      data.history = this.deduplicateAccountHistory(
+        [historyRecord, ...data.history.filter((item) => item.id !== historyRecord.id)],
+        session.activeAccountId,
+      ).slice(0, 20);
     }
     this.writeStorage(data);
   }
@@ -206,7 +237,12 @@ export class SessionStore {
 
   public getAccountHistory(): AccountRecord[] {
     const data = this.readStorage();
-    return data.history || [];
+    const history = this.deduplicateAccountHistory(data.history || [], data.current?.activeAccountId);
+    if (history.length !== (data.history || []).length) {
+      data.history = history;
+      this.writeStorage(data);
+    }
+    return history;
   }
 
   public saveSession(
@@ -236,8 +272,9 @@ export class SessionStore {
       environment: env,
     };
 
-    const history = data.history.filter((h) => h.id !== accountId);
-    history.unshift(historyRecord);
+    const history = this.deduplicateAccountHistory(
+      [historyRecord, ...data.history.filter((h) => h.id !== accountId)], accountId,
+    );
 
     data.current = session;
     data.history = history.slice(0, 20); // 最多保留20条历史
