@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { CreateEntityPayload, CreateFieldPayload, ProjectDirectoryRequest } from '../shared/types';
 
 export const neoApi = {
@@ -44,6 +44,8 @@ export const neoApi = {
   projectOpenFolder: (folderPath: string) => ipcRenderer.invoke('project:openFolder', folderPath),
   projectListFiles: (params?: { folderPath?: string; query?: string; maxFiles?: number }) => ipcRenderer.invoke('project:listFiles', params),
   fileParseLocalPath: (filePath: string) => ipcRenderer.invoke('file:parseLocalPath', filePath),
+  fileGetPath: (file: File) => webUtils.getPathForFile(file),
+  clipboardReadFilePaths: () => ipcRenderer.invoke('clipboard:readFilePaths'),
   clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text),
   shellOpenPath: (targetPath: string) => ipcRenderer.invoke('shell:openPath', targetPath),
   shellShowItemInFolder: (targetPath: string) => ipcRenderer.invoke('shell:showItemInFolder', targetPath),

@@ -1,5 +1,6 @@
 import { decryptBuiltinSkillAsset } from './protectedSkillAssets';
 import skills from './neoNexCliSkills.json';
+import type { SessionState } from '../../shared/types';
 
 const nexSkillAliases = new Set([
   'neo-nex-dev', 'skill-neo-nex-dev', 'salesyi-nex-dev', 'skill-salesyi-nex-dev',
@@ -28,14 +29,33 @@ export function filterNeoCliTools<T extends { function?: { name?: string } }>(to
   });
 }
 
-export function getNeoCliSessionInstruction(preparation: { success: boolean; message: string }): string {
+export function getNeoCliSessionInstruction(preparation: { success: boolean; message: string; session: SessionState }): string {
+  const loggedIn = !!(preparation.session.isLoggedIn && preparation.session.environment && preparation.session.tokenData);
   return `【销售易连接器共享授权】
+当前销售易连接器状态：${loggedIn ? '已登录（宿主当前会话）' : '未登录或没有可用会话'}。此状态独立于 CLI 准备结果，不代表已经验证所有接口权限。
 当前工作区准备结果：${preparation.message}。
 ${preparation.success ? '项目清单和 CLI 共享授权已验证就绪。' : 'CLI 尚未就绪；不得声称初始化或同步成功。'}
+CLI 准备失败不代表连接器登录失效；连接器已登录时，CLI 未覆盖的业务类型仍可通过 list_business_types / deploy_business_type 执行。
 缺少 neo-project.json 时由宿主自动补齐并复用当前连接器会话，不调用 neo init，不调用 neo login，不要求用户重新鉴权。
+授权状态以宿主当前会话和当前连接器工具的实际响应为准。历史消息、压缩摘要、旧 .neo-cli/token.json 或旧脚本返回的 401 不能证明当前连接器失效；需要核实时使用 get_tenant_info 和目标专用只读工具，不读取任何凭证文件。
+禁止要求用户提供 access token、refresh token、Cookie，禁止生成“提供有效 token / 手动后台写入 / 仅生成 source”的写入通道选择卡。宿主工具已经管理授权，用户只需确认业务内容和实际写入范围。
 销售易功能统一遵循 NEO_CLI_FIRST_ROUTING：先运行当前项目中的 neo CLI；只有该功能没有 CLI 命令，或 CLI 执行失败后，才使用现有连接器能力。任何回退都要在结果中说明实际来源和原因。
 若 CLI 仍报错，不要重复登录、猜测环境或反复执行同一失败命令；保留原始错误和准备结果。不得把本地文件或失败的接口探测当作租户查询结果。
 只有连接器自身明确未登录或授权失效时，才通过连接器界面处理登录。`;
+}
+
+/** Keep obsolete login/file routes out of both native tools and the PTC SDK. */
+export function assertNeoConnectorToolAccess(name: string, args: Record<string, unknown>): void {
+  const command = name === 'bash' ? String(args.command || '') : '';
+  const file = ['read', 'read_document', 'write', 'edit', 'str_replace_editor', 'read_image', 'grep', 'glob'].includes(name)
+    ? String(args.file_path || args.path || args.pattern || '') : '';
+  const credentialPath = /(?:^|[\\/\s'"`])\.(?:neo-cli[\\/]token\.json|neocrm-cli[\\/]auth(?:[\\/]|\b))/i;
+  if (credentialPath.test(command) || credentialPath.test(file)) {
+    throw new Error('销售易授权由宿主连接器管理，禁止读取或改写 CLI 凭证文件。请使用 get_tenant_info 核对当前连接器，业务类型使用 list_business_types / deploy_business_type；旧凭证错误不代表当前连接器失效。');
+  }
+  if (/(?:^|[\s/\\'"`])neo(?:\.cmd|\.exe)?["']?\s+(?:loginstatus|login|logout)\b/i.test(command)) {
+    throw new Error('销售易对话复用当前连接器登录态，禁止执行 neo login / logout / loginstatus。CLI 共享准备由宿主完成；需要核对会话时使用 get_tenant_info，不要求用户另交 token。');
+  }
 }
 
 export const NEO_CLI_FIRST_ROUTING = `【销售易功能统一 CLI 优先路由】
@@ -73,6 +93,7 @@ export function isBusinessTypeConversation(content: string): boolean {
 export const NEO_BUSINESS_TYPE_ROUTING = `【销售易业务类型创建与部署】
 当前已加载 neo-entity-management。用户要求查询、创建、修改或部署业务类型时，主动调用 list_business_types 查询真实目标对象的业务类型。创建业务类型与启用对象的 enableBusitype、配置业务类型子表单是不同操作。
 CLI 1.0.8 没有业务类型写入命令，使用宿主 deploy_business_type；它复用连接器登录态，不重新鉴权，不用 bash/curl 读取凭证或手写 HTTP。
+这是已内置的部署通道，不询问用户选用 token、后台手工或本地 source 通道。旧接口报错后仍通过当前 list_business_types / deploy_business_type 核实，不沿用历史凭证结论。
 可以传 entityApiKey 和 apiKey、label、description、active，或传 entityApiKey 和当前项目内已有的 sourceFile（businessTypes/*.business-type.json）。先用 dryRun=true 取得目标租户、create/update/unchanged 判定和变更清单；本地生成 source 不代表已部署。
 向用户展示预演结果。用户已明确授权同一租户、同一范围的写入时继续执行 dryRun=false、confirm=true；否则请求用户确认该清单。不要在已获得明确授权后再次要求重复确认。
 只有工具返回 success=true、verified=true 且 dryRun=false 才可报告已部署。verificationPending=true 或写入状态未知时，先 list_business_types 回读核实，不重复写入；如实说明未完成范围。标准对象的业务类型也由此专用工具处理，不要误套标准对象整体不可 deploy 的限制。

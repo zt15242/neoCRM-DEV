@@ -19,6 +19,7 @@ import { configureWindowLifecycle } from './services/windowLifecycle';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
+import { getClipboardFilePaths } from './services/clipboardFiles';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
 import { NexService } from './services/nexService';
@@ -665,6 +666,7 @@ ipcMain.handle('ai:abortChatStream', async (_, targetId?: string) => {
 
 // ================= 文件解析与分析 =================
 ipcMain.handle('file:selectAndParse', async () => fileService.selectAndParseFile(win));
+ipcMain.handle('clipboard:readFilePaths', async () => getClipboardFilePaths(await clipboard.read()));
 ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: ArrayBuffer) => {
   return fileService.parseBuffer(fileName, Buffer.from(bufferData));
 });

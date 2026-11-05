@@ -22,7 +22,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['electron', 'esbuild', '@tailwindcss/postcss', 'postcss'],
+              external: ['electron', 'esbuild', '@tailwindcss/postcss', 'postcss', /^pdfjs-dist\//, 'word-extractor'],
             },
           },
         },

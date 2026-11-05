@@ -5,6 +5,7 @@ import { WorkspaceGitChangesSummary, WorkspaceGitChangeItem } from '../../shared
 import axios from 'axios';
 import { getNeoCliEnvironment } from './neoCliRuntime';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { documentService, isOfficeDocument, isBinaryDocument, type DocumentReadOptions, type DocumentReadResult } from './documentService';
 
 export interface DshTodoItem {
   content: string;
@@ -379,17 +380,17 @@ export class DshToolService {
   }
 
   // ================= 2. read 文件读取工具 =================
-  public readFile(
+  public async readFile(
     params: { file_path: string; offset?: number; limit?: number },
     projectRoot?: string,
     allowExactFiles?: string[]
-  ): {
+  ): Promise<{
     path: string;
     content: string;
     totalLines: number;
     offset: number;
     limit: number;
-  } {
+  } | DocumentReadResult> {
     if (!params.file_path) {
       throw new Error('readFile 参数缺少 file_path');
     }
@@ -399,6 +400,7 @@ export class DshToolService {
       throw new Error(`文件不存在: ${resolvedPath}`);
     }
 
+    if (isOfficeDocument(resolvedPath)) return documentService.read({ ...params, file_path: resolvedPath });
     const raw = fs.readFileSync(resolvedPath, 'utf-8');
     const allLines = raw.split('\n');
     const totalLines = allLines.length;
@@ -421,6 +423,16 @@ export class DshToolService {
   }
 
   // ================= 3. write 文件覆写/创建工具 =================
+  public async readDocument(params: DocumentReadOptions, projectRoot?: string, allowExactFiles?: string[]): Promise<DocumentReadResult> {
+    if (!params.file_path) throw new Error('read_document 参数缺少 file_path');
+    const filename = this.assertPathWithinProject(params.file_path, projectRoot, allowExactFiles);
+    return documentService.read({ ...params, file_path: filename });
+  }
+
+  private assertTextDocument(filename: string): void {
+    if (isBinaryDocument(filename)) throw new Error('Office/PDF 不能用文本替换工具修改，请使用文档专用工具生成或编辑');
+  }
+
   public writeFile(
     params: { file_path: string; content: string },
     projectRoot?: string
@@ -435,6 +447,7 @@ export class DshToolService {
     const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot);
 
     const dir = path.dirname(resolvedPath);
+    this.assertTextDocument(resolvedPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -464,6 +477,7 @@ export class DshToolService {
     }
     const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot);
 
+    this.assertTextDocument(resolvedPath);
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`目标文件不存在: ${resolvedPath}`);
     }
@@ -508,6 +522,11 @@ export class DshToolService {
     }
     const resolvedPath = this.assertPathWithinProject(params.path, projectRoot);
 
+    if (isBinaryDocument(resolvedPath)) {
+      if (params.command === 'view') return this.readDocument({ file_path: resolvedPath,
+        offset: params.view_range?.[0], limit: params.view_range ? params.view_range[1] - params.view_range[0] + 1 : undefined }, projectRoot);
+      this.assertTextDocument(resolvedPath);
+    }
     if (params.command === 'create') {
       const dir = path.dirname(resolvedPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

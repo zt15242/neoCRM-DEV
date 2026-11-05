@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.37';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.38';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -732,6 +732,12 @@ export const BUILTIN_MCP_SERVERS: McpServerConfig[] = [
  * 注意: 核心系统指令已移入桌面内核安全沙箱混淆保护，绝不向渲染进程或配置文件明文暴露
  */
 export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
+  {
+    id: 'skill-document-reader', name: '文档阅读与核对',
+    description: '读取 Excel、Word、PDF、PPT 和文本资料，按工作表、页码或幻灯片分段核对，保留来源及解析限制。',
+    category: 'builtin', iconName: 'FileText', enabled: true,
+    triggerKeywords: ['Excel', 'Word', 'PDF', 'PPT', '文档', '表格', '读取文件', '幻灯片'],
+  },
   {
     id: 'skill-neobi-architect', name: 'BI 分析部署规范',
     description: 'BI 分析方案设计、配置验证与部署规范。',

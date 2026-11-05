@@ -111,6 +111,10 @@ try {
   assert.equal(failed.success, false);
   assert.equal(failed.session.isLoggedIn, true);
   assert.doesNotMatch(getNeoCliSessionInstruction(failed), /已验证就绪/);
+  assert.match(getNeoCliSessionInstruction(failed), /当前销售易连接器状态：已登录/);
+  assert.match(getNeoCliSessionInstruction(failed), /CLI 准备失败不代表连接器登录失效/);
+  assert.match(getNeoCliSessionInstruction({ ...failed, session: { isLoggedIn: false } }), /当前销售易连接器状态：未登录/);
+  assert.equal(getNeoCliSessionInstruction(failed).includes(token.access_token), false);
   console.log('PASS missing CLI credentials repaired; preparation errors preserve connector login and report failure');
 
   const sf = { ...session, environment: { ...environment, productType: 'salesforce' } };
@@ -139,6 +143,13 @@ try {
   assert.match(NEO_CLI_FIRST_ROUTING, /没有普通业务记录 XOQL 查询/);
   assert.match(NEO_CLI_FIRST_ROUTING, /CLI 命令失败.*才允许调用对应的旧连接器工具/s);
   assert.match(NEO_CLI_FIRST_ROUTING, /禁止调用 neo login、neo logout 或会输出令牌的 neo loginstatus/);
+  for (const skillName of ['neo-cli-usage', 'neo-nex-dev', 'neo-approval-flow-designer', 'neo-entity-management',
+    'neo-backend-dev', 'neo-frontend-dev', 'neo-layout-management', 'neo-entity-rule-management', 'neo-formula-dev',
+    'neo-global-pick-management', 'neo-platform-capabilities', 'neo-solution-design', 'neo-task-summary', 'skill-schema-design']) {
+    const instruction = getProtectedSkillInstruction(skillName);
+    assert.match(instruction, /【桌面连接器执行约定】/, skillName);
+    assert.doesNotMatch(instruction, /`neo loginstatus`|neo login -e|没有则 `neo init|不存在 → 先询问用户项目名称/, skillName);
+  }
 
   const ai = new AiService(store, {}, {});
   const fixtureConfig = { providers: [{ id: 'fixture', name: 'Fixture', baseUrl: 'http://127.0.0.1:1', apiKey: 'fixture-key',
@@ -195,11 +206,13 @@ try {
     businessCalls.push(config);
     assert.equal(config.headers.Authorization, `Bearer ${store.getCurrentSession().tokenData.access_token}`);
     if (config.method === 'POST') businessRecords.push({ ...config.data, apiKey: config.data.apiKey + '__c' });
-    return { data: { code: 200, data: config.url.endsWith('/busiTypes') && config.method === 'GET'
-      ? { records: businessRecords } : { apiKey: 'account', enableBusitype: true } } };
+    return { data: { code: config.method === 'GET' ? 0 : '0', msg: '成功', data: config.url.endsWith('/busiTypes') && config.method === 'GET'
+      ? { records: businessRecords } : { totalSize: 1, count: 1, records: { apiKey: 'account', enableBusitype: true } } } };
   });
   const originalModelFetch = globalThis.fetch;
   const businessInput = { entityApiKey: 'account', apiKey: 'enterprise__c', label: '企业客户' };
+  const originalPrepare = store.prepareNeoCliForConversation.bind(store);
+  store.prepareNeoCliForConversation = () => ({ success: false, message: 'custom OAuth cannot share CLI', session: store.getCurrentSession() });
   for (const [mode, protocol] of [['standard', 'openai'], ['ptc', 'openai'], ['standard', 'google-gemini'], ['ptc', 'google-gemini']]) {
     fixtureConfig.providers[0].protocol = protocol;
     requests.length = 0;
@@ -223,16 +236,25 @@ try {
       return new Response(`data: ${JSON.stringify(data)}\n\n${protocol === 'openai' ? 'data: [DONE]\n\n' : ''}`,
         { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
     };
-    // The latest message deliberately omits “业务类型”: the ongoing task must retain its skill.
+    // Both current messages omit the domain. A stale checkpoint must retain the task, not its auth conclusion.
     await ai.startChatStream({ requestId: `business-${mode}-${protocol}`, sessionId: 'fixture-session', messageId: 'business-msg',
       providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true, mode,
-      messages: [{ id: 'business-u1', role: 'user', content: '为客户创建企业客户业务类型', createdAt: Date.now() },
+      compactionSummary: { originalMessageCount: 1, compactedAt: Date.now(),
+        summary: '为客户创建企业客户业务类型；旧 .neo-cli/token.json 的 access_token 返回 401，要求用户提供有效 token 或去后台手工创建。' },
+      messages: [{ id: 'business-u1', role: 'user', content: '之前的工作继续', createdAt: Date.now() },
         { id: 'business-u2', role: 'user', content: '继续处理', createdAt: Date.now() }] }, (event) => businessEvents.push(event));
     assert.equal(businessEvents.some((event) => event.type === 'error'), false, JSON.stringify(businessEvents));
     assert.equal(requests.length, 2, `${mode}/${protocol}`);
     const system = protocol === 'google-gemini' ? JSON.stringify(requests[0].systemInstruction) : requests[0].messages[0].content;
     assert.match(system, /已加载技能 neo-entity-management/);
     assert.match(system, /销售易业务类型创建与部署/);
+    assert.match(system, /当前销售易连接器状态：已登录/);
+    assert.match(system, /CLI 尚未就绪/);
+    assert.match(system, /历史消息、压缩摘要.*不能证明当前连接器失效/);
+    assert.match(system, /禁止要求用户提供 access token/);
+    assert.match(system, /这是已内置的部署通道/);
+    assert.doesNotMatch(system, /`neo loginstatus`|neo login -e/);
+    assert.equal(system.includes(token.access_token), false);
     assert.doesNotMatch(system, /业务类型创建需通过 CRM 后台|再通过 CRM 后台或经审批的人工 API 流程完成/);
     if (mode === 'ptc') assert.equal(ptcResult.operation, 'create');
     else {
@@ -246,9 +268,8 @@ try {
   assert.equal(businessCalls.some((call) => call.method !== 'GET'), false);
   globalThis.fetch = originalModelFetch;
   fixtureConfig.providers[0].protocol = 'openai';
-  console.log('PASS business-type conversations: domain skill auto-loaded on follow-up; standard/PTC OpenAI/Gemini execute real dispatcher and preview without writing');
+  console.log('PASS business-type conversations: stale auth checkpoint + unavailable CLI retain valid connector and domain tools in standard/PTC OpenAI/Gemini; real preview without writing');
 
-  const originalPrepare = store.prepareNeoCliForConversation.bind(store);
   store.prepareNeoCliForConversation = () => ({ success: false, message: 'custom OAuth cannot share CLI', session });
   await assert.rejects(() => ai.executeUnifiedTool('deploy_business_type', { ...businessInput, dryRun: false }, [], environment, token, project), /用户确认/);
   const businessDeployed = await ai.executeUnifiedTool('deploy_business_type', { ...businessInput, dryRun: false, confirm: true }, [], environment, token, project);
@@ -276,6 +297,58 @@ try {
   await assert.rejects(() => ai.executeUnifiedTool('list_business_types', { entityApiKey: 'account' }, [], { ...environment, productType: 'salesforce' }, token, project), /仅支持销售易/);
   store.prepareNeoCliForConversation = originalPrepare;
   console.log('PASS business-type shared login: valid connector works without CLI sharing; deployment verifies and invalidates cache; cross-tenant/wrong-connector requests blocked');
+
+  const obsoleteAuthCalls = [
+    ['bash', { command: 'cat .neo-cli/token.json' }],
+    ['bash', { command: 'cat "$HOME/.neocrm-cli/auth/project.json"' }],
+    ['bash', { command: 'node -e "require(\'fs\').readFileSync(\'.neo-cli/token.json\')"' }],
+    ['bash', { command: 'neo loginstatus' }],
+    ['bash', { command: '"/usr/local/bin/neo" login -e sandbox' }],
+    ['bash', { command: 'neo.cmd logout' }],
+    ['read', { path: '.neo-cli/token.json' }],
+    ['read', { file_path: '.neo-cli/token.json' }],
+    ['read_document', { path: 'C:\\Users\\fixture\\.neocrm-cli\\auth\\project.json' }],
+    ['read_document', { file_path: '.neo-cli/token.json' }],
+    ['write', { path: '.neocrm-cli/auth/project.json', content: '{}' }],
+    ['write', { file_path: '.neocrm-cli/auth/project.json', content: '{}' }],
+    ['edit', { path: '.neo-cli/token.json', old_string: 'old', new_string: 'new' }],
+    ['edit', { file_path: '.neo-cli/token.json', old_string: 'old', new_string: 'new' }],
+    ['str_replace_editor', { path: '.neo-cli/token.json', command: 'view' }],
+    ['glob', { pattern: '.neocrm-cli/auth/*.json' }],
+    ['grep', { path: '.neocrm-cli/auth', pattern: 'access' }],
+  ];
+  let shellInvocations = 0;
+  let fileInvocations = 0;
+  ai.dshToolService = {
+    executeBash: async () => { shellInvocations++; return { stdout: 'neo 1.0.8', stderr: '', exitCode: 0 }; },
+    readFile: async () => { fileInvocations++; return { path: path.join(project, 'neo-project.json'), content: '{}' }; },
+    executePtcCode: async (_args, sdk) => {
+      for (const [name, args] of obsoleteAuthCalls) await assert.rejects(() => sdk[name](args), /宿主连接器管理|复用当前连接器登录态/);
+      const info = await sdk.get_tenant_info({});
+      assert.equal(info.isLoggedIn, true);
+      assert.equal(info.authSource, 'connector');
+      return { logs: [], executionTimeMs: 1 };
+    },
+  };
+  for (const [name, args] of obsoleteAuthCalls) {
+    await assert.rejects(() => ai.executeUnifiedTool(name, args, [], environment, token, project), /宿主连接器管理|复用当前连接器登录态/);
+  }
+  await ai.executeUnifiedTool('run_code', { code: 'fixture' }, [], environment, token, project);
+  assert.equal(shellInvocations, 0);
+  assert.equal(fileInvocations, 0);
+  const connectorInfo = await ai.executeUnifiedTool('get_tenant_info', {}, [], environment, token, project);
+  assert.equal(connectorInfo.data.isLoggedIn, true);
+  assert.equal(connectorInfo.data.authSource, 'connector');
+  for (const secret of [token.access_token, token.refresh_token]) assert.equal(JSON.stringify(connectorInfo).includes(secret), false);
+  await ai.executeUnifiedTool('bash', { command: 'neo list object --help' }, [], environment, token, project);
+  await ai.executeUnifiedTool('read', { path: 'neo-project.json' }, [], environment, token, project);
+  await ai.executeUnifiedTool('bash', { command: 'sf org display' }, [], { ...environment, productType: 'salesforce' }, token, project);
+  assert.equal(shellInvocations, 2);
+  assert.equal(fileInvocations, 1);
+  const loadedEntitySkill = await ai.executeUnifiedTool('skill', { name: 'skill-schema-design' }, [], environment, token, project);
+  assert.match(loadedEntitySkill.data.instruction, /【桌面连接器执行约定】/);
+  assert.doesNotMatch(loadedEntitySkill.data.instruction, /`neo loginstatus`|neo login -e/);
+  console.log('PASS native/PTC tools reject legacy credentials and login commands before execution; connector status is token-free; normal project/CLI and other platforms still work');
 
   saveFixture(session);
   const cliCommands = [];

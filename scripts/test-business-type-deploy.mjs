@@ -53,7 +53,8 @@ try {
   const write = (extra = {}) => service.deploy(env, token, { ...input, dryRun: false, confirm: true, ...extra });
   const writes = () => calls.filter((call) => call.method !== 'GET');
 
-  for (const body of [[], { records: [] }, { busiTypes: [] }, { code: '200', data: [] }]) {
+  for (const body of [[], { records: [] }, { busiTypes: [] }, { code: '200', data: [] },
+    { code: 0, data: [] }, { code: '0', result: [] }, { success: true, data: [] }, { success: true, result: [] }]) {
     const reader = new NeoBusinessTypeService(async () => ({ data: body }));
     assert.equal((await reader.list(env, token, 'account')).totalCount, 0);
   }
@@ -61,6 +62,79 @@ try {
     data: [{ apiKey: 'defaultBusiType', label: '默认', description: null, active: null }] } }));
   assert.equal((await nullable.list(env, token, 'account')).businessTypes[0].apiKey, 'defaultBusiType');
   console.log('PASS list decoding: valid empty/bare/enveloped platform responses and optional null metadata are accepted');
+
+  // Some tenants use code=0 / "0" (msg="成功") for metadata as well as data APIs.
+  for (const code of [0, '0', 200, '200']) {
+    for (const payload of ['data', 'result']) {
+      reset();
+      const compatible = new NeoBusinessTypeService(async config => {
+        const response = await transport(config);
+        return { data: { code, msg: '成功', [payload]: response.data.data } };
+      });
+      const created = await compatible.deploy(env, token, { ...input, dryRun: false, confirm: true });
+      assert.equal(created.verified, true, `${code}/${payload}`);
+      assert.equal(writes().length, 1);
+      const repeated = await compatible.deploy(env, token, { ...input, dryRun: false, confirm: true });
+      assert.equal(repeated.operation, 'unchanged');
+      assert.equal(writes().length, 1);
+    }
+  }
+  for (const body of [
+    { code: 403, msg: '成功', data: [] },
+    { code: 'UNRECOGNIZED', msg: '成功', success: true, data: [] },
+    { code: 0, msg: '成功', success: false, data: [] },
+    { code: 200, msg: '成功', error: 'permission denied', data: [] },
+  ]) {
+    const failed = new NeoBusinessTypeService(async () => ({ data: body }));
+    await assert.rejects(() => failed.list(env, token, 'account'), error => {
+      assert.match(error.message, /业务类型接口失败/);
+      assert.ok(error.message.includes(`code=${body.code}`));
+      return true;
+    });
+  }
+  console.log('PASS success decoding: numeric/string 0 and 200, data/result envelopes, verified create, duplicate prevention and explicit errors');
+  reset();
+
+  for (const shape of ['record', 'array']) {
+    reset();
+    const wrappedObject = new NeoBusinessTypeService(async config => {
+      const response = await transport(config);
+      if (config.method === 'GET' && !config.url.endsWith('/busiTypes')) {
+        const object = response.data.data;
+        return { data: { code: '0', msg: '成功', data: { totalSize: 1, count: 1,
+          records: shape === 'array' ? [object] : object } } };
+      }
+      return response;
+    });
+    const preview = await wrappedObject.deploy(env, token, input);
+    assert.equal(preview.operation, 'create');
+    assert.equal(writes().length, 0);
+    assert.equal((await wrappedObject.deploy(env, token, { ...input, dryRun: false, confirm: true })).verified, true);
+    assert.equal(writes().length, 1);
+  }
+  for (const payload of [
+    { records: [] },
+    { records: [{ apiKey: 'account', enableBusitype: true }, { apiKey: 'other', enableBusitype: true }] },
+    { records: { apiKey: 'other', enableBusitype: true }, totalSize: 1 },
+    { records: { apiKey: 'account', enableBusitype: true }, totalSize: 2 },
+  ]) {
+    reset();
+    const invalid = new NeoBusinessTypeService(async config => {
+      calls.push(config);
+      return { data: { code: '0', msg: '成功', data: payload } };
+    });
+    await assert.rejects(() => invalid.deploy(env, token, { ...input, dryRun: false, confirm: true }), /预检失败.*未发送写入请求/);
+    assert.equal(writes().length, 0);
+  }
+  reset();
+  const suffixed = await write({ apiKey: 'ceshi__c__c' });
+  assert.equal(suffixed.expected.apiKey, 'ceshi__c__c');
+  assert.equal(writes()[0].data.apiKey, 'ceshi__c');
+  assert.equal(suffixed.businessType.apiKey, 'ceshi__c__c');
+  assert.equal((await write({ apiKey: 'ceshi__c__c' })).operation, 'unchanged');
+  assert.equal(writes().length, 1);
+  console.log('PASS actual tenant metadata shape: code="0", records object/array, strict identity/count preflight and full API Key preservation');
+  reset();
 
   const plan = await service.deploy(env, token, input);
   assert.equal(plan.dryRun, true);

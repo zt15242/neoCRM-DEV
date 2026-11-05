@@ -286,6 +286,10 @@ export interface AiFileAttachment {
   summaryText?: string; // 简要说明，例如 "Excel工作表: 3个Sheet, 150行"
   fullPath?: string; // 本地物理绝对路径 (供 read/edit/write/str_replace_editor 工具操作)
   relativePath?: string; // 相对工作区的相对路径
+  documentFormat?: string;
+  previewTruncated?: boolean;
+  parseWarnings?: string[];
+  contentKind?: 'text' | 'image' | 'binary';
 }
 
 export interface McpToolItem {

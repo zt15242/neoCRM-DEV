@@ -4,6 +4,7 @@ import { isRestrictedSkill } from '../../shared/restrictedFeatures';
 import { decryptBuiltinSkillAsset } from './protectedSkillAssets';
 import { NEO_CLI_SKILLS_INSTRUCTIONS } from './neoCliSkills';
 import { getNeoCliConversationSkill } from './neoCliConversation';
+import { DOCUMENT_TOOLS_SPEC, getDocumentReadingSkill } from './documentTools';
 /**
  * NeoCRM Desktop 内核受保护的私有资产与安全规范
  * 注意: 本文件包含深度封装的系统技能与内部 Harness 工具定义，受内核混淆保护，禁止导出与反向破解。
@@ -148,6 +149,8 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 
 
 export function getProtectedSkillInstruction(skillId: string): string | null {
+  const documentSkill = getDocumentReadingSkill(skillId);
+  if (documentSkill) return documentSkill;
   if (isRestrictedSkill(skillId)) {
     if (!restrictedFeatureService.canUseSkill(skillId)) return null;
     const canonical = skillId.replace(/^(?:preset-|skill-)/, '');
@@ -281,6 +284,7 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
  * 判断是否为受保护的系统级内置技能
  */
 export function isProtectedBuiltinSkill(skillId: string): boolean {
+  if (skillId === 'skill-document-reader' || skillId === 'document-reader') return true;
   const norm = skillId.replace(/^skill-/, "");
   if (NEO_CLI_SKILLS_INSTRUCTIONS[norm]) return true;
 
@@ -385,6 +389,7 @@ export const DSH_PTC_TOOL_SPEC = [
 ];
 
 export const CRM_HARNESS_TOOLS_SPEC = [
+  ...DOCUMENT_TOOLS_SPEC,
   {
     type: 'function',
     function: {
@@ -1112,7 +1117,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'read',
-      description: '读取当前项目工作区内的文件内容（严格受物理安全沙箱约束，只能读取当前项目内的文件，禁止跨出项目访问设备其他目录）。',
+      description: '读取当前项目或用户主动添加的附件。自动解析 Excel、Word、PDF、PPT；文档推荐 read_document 按分段读取。其他文件按文本逐行读取，禁止访问项目外的其他文件。',
       parameters: {
         type: 'object',
         properties: {

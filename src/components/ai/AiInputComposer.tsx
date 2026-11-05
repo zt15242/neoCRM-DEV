@@ -18,6 +18,7 @@ import {
   FileSpreadsheet,
   FileText,
   FileCode,
+  Image as ImageIcon,
   Check,
   ChevronDown,
   ShieldCheck,
@@ -44,6 +45,7 @@ import {
 } from 'lucide-react';
 import { AiSessionMode } from '../../../shared/types';
 import { globalInputHistory, HistoryCursor } from '../../utils/inputHistory';
+import { filesFromClipboard, importComposerFiles, needsNativeFilePaste } from '../../utils/composerAttachments';
 import { 
   AiContextEntityRef, 
   AiFileAttachment, 
@@ -181,6 +183,9 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<AiFileAttachment[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const pendingImportsRef = useRef(0);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [activeCommand, setActiveCommand] = useState<SlashCommandItem | null>(null);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -248,7 +253,9 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const composerContext: ComposerContext = {
     setText,
     focusTextarea,
-    onSend: (msg: string) => onSend(msg, entityRefs, attachments, activeSkillIds, activeMcpServerIds),
+    onSend: (msg: string) => {
+      if (pendingImportsRef.current === 0) onSend(msg, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
+    },
     showToast,
     onClearSession,
     onCompactSession,
@@ -813,6 +820,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   };
 
   const handleSubmit = async () => {
+    if (pendingImportsRef.current > 0) return;
     try {
       if (await consumeAccessCommand(text)) {
         setText(''); setActiveCommand(null); setSlashMenuOpen(false);
@@ -852,53 +860,87 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
   };
 
+  const appendAttachment = (file: AiFileAttachment) => {
+    setAttachments(prev => prev.some(item => item.id === file.id || (file.fullPath && item.fullPath === file.fullPath)) ? prev : [...prev, file]);
+  };
+
+  const runAttachmentImport = async (task: () => Promise<void>) => {
+    pendingImportsRef.current++;
+    setIsUploading(true);
+    try { await task(); }
+    finally {
+      pendingImportsRef.current--;
+      setIsUploading(pendingImportsRef.current > 0);
+    }
+  };
+
+  const importFiles = (files: File[]) => runAttachmentImport(async () => {
+    if (!window.neoApi) return;
+    await importComposerFiles(files, window.neoApi, appendAttachment, (name, error) => {
+      showToast?.('error', `${name}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  });
+
   const handleSelectFile = async () => {
     setPlusMenuOpen(false);
     if (isUploading) return;
-    setIsUploading(true);
-    try {
-      if (window.neoApi?.aiSelectAndParseFile) {
-        const file = await window.neoApi.aiSelectAndParseFile();
-        if (file) {
-          setAttachments((prev) => [...prev, file]);
-          showToast?.('success', `已加载文件: ${file.name}`);
+    await runAttachmentImport(async () => {
+      try {
+        if (window.neoApi?.aiSelectAndParseFile) {
+          const file = await window.neoApi.aiSelectAndParseFile();
+          if (file) appendAttachment(file);
         }
-      }
-    } catch (e: any) {
-      showToast?.('error', `文件读取失败: ${e.message}`);
-    } finally {
-      setIsUploading(false);
+      } catch (e: any) { showToast?.('error', `文件读取失败: ${e.message}`); }
+    });
+    focusTextarea();
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const files = filesFromClipboard(e.clipboardData);
+    if (files.length) {
+      e.preventDefault();
+      await importFiles(files);
+      return;
     }
+    // Ordinary text retains the browser's selection and undo behavior.
+    if (!window.neoApi?.clipboardReadFilePaths || !needsNativeFilePaste(e.clipboardData)) return;
+    e.preventDefault();
+    const plainText = e.clipboardData.getData('text/plain');
+    const before = text;
+    const start = textareaRef.current?.selectionStart ?? before.length;
+    const end = textareaRef.current?.selectionEnd ?? start;
+    await runAttachmentImport(async () => {
+      try {
+        const paths = await window.neoApi.clipboardReadFilePaths();
+        if (!paths.length) {
+          if (plainText) setText(current => current === before ? before.slice(0, start) + plainText + before.slice(end) : current + plainText);
+          return;
+        }
+        for (const filename of paths) {
+          try { appendAttachment(await window.neoApi.fileParseLocalPath(filename)); }
+          catch (error: any) { showToast?.('error', `文件添加失败: ${error.message}`); }
+        }
+      } catch (error: any) { showToast?.('error', `剪贴板读取失败: ${error.message}`); }
+    });
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    const files = e.dataTransfer.files;
-    if (!files || files.length === 0) return;
-
-    setIsUploading(true);
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-        const arrayBuffer = await f.arrayBuffer();
-        if (window.neoApi?.aiParseFileBuffer) {
-          const parsed = await window.neoApi.aiParseFileBuffer(f.name, arrayBuffer);
-          setAttachments((prev) => [...prev, parsed]);
-          showToast?.('success', `已上传并解析: ${f.name}`);
-        }
-      }
-    } catch (err: any) {
-      showToast?.('error', `拖入解析失败: ${err.message}`);
-    } finally {
-      setIsUploading(false);
-    }
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length) await importFiles(files);
+    focusTextarea();
   };
 
   const getFileIcon = (name: string) => {
+    name = name.toLowerCase();
+    if (/\.(png|jpe?g|gif|webp|bmp|tiff?|heic|avif|svg|ico)$/.test(name)) return ImageIcon;
     if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')) {
       return FileSpreadsheet;
     }
@@ -920,6 +962,17 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
 
   return (
     <div
+      onPaste={handlePaste}
+      onDragEnter={(e) => {
+        if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+        e.preventDefault();
+        dragDepthRef.current++;
+        setIsDraggingFiles(true);
+      }}
+      onDragLeave={() => {
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (!dragDepthRef.current) setIsDraggingFiles(false);
+      }}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       onClick={(e) => {
@@ -929,8 +982,13 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           focusTextarea();
         }
       }}
-      className="bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/90 shadow-md hover:border-slate-300 transition-all p-3 space-y-2 relative cursor-text glass-card"
+      className={`bg-white/95 backdrop-blur-md rounded-2xl border shadow-md transition-all p-3 space-y-2 relative cursor-text glass-card ${isDraggingFiles ? 'border-sky-400 ring-2 ring-sky-100' : 'border-slate-200/90 hover:border-slate-300'}`}
     >
+      {isDraggingFiles && (
+        <div className="absolute inset-0 z-60 rounded-2xl bg-sky-50/95 border-2 border-dashed border-sky-400 flex items-center justify-center text-sky-700 text-sm pointer-events-none">
+          <Paperclip className="w-4 h-4 mr-2" />松开添加文件
+        </div>
+      )}
       {/* ================= 浮层 A: 快捷指令自动匹配菜单 (/ Slash Commands) ================= */}
       {slashMenuOpen && filteredCommands.length > 0 && (
         <div className="absolute left-0 bottom-full mb-2 w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
@@ -1065,7 +1123,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
 
       {/* 活跃工具胶囊、附件与引用实体 */}
       {(activeCommand || attachments.length > 0 || entityRefs.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 pb-1">
+        <div className="flex flex-wrap items-center gap-1.5 pb-1 max-h-36 overflow-y-auto">
           {/* 选中的工具胶囊 (只显示工具，不填入冗余示例) */}
           {activeCommand && (
             <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-mono border border-purple-200 shadow-2xs animate-in fade-in duration-150">
@@ -1087,10 +1145,12 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             return (
               <span
                 key={att.id}
+                title={`${att.name}\n${att.summaryText || ''}${att.parseWarnings?.length ? '\n' + att.parseWarnings.join('\n') : ''}`}
                 className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-mono border border-slate-200"
               >
                 <Icon className="w-3.5 h-3.5 text-slate-500" />
                 <span className="truncate max-w-[140px]">{att.name}</span>
+                {att.contentKind === 'binary' && <span className="text-[10px] text-slate-400 font-sans">暂无预览</span>}
                 <button
                   type="button"
                   onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
@@ -1135,6 +1195,10 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       />
 
       {/* 底部操作工具栏 (Codex 经典布局: 左侧 + 与权限药丸，右侧模型与黑圆箭头发送键) */}
+      <div className="flex items-center gap-1.5 text-[10px] text-slate-400" aria-live="polite" role="status">
+        {isUploading ? <><LoaderCircle className="w-3 h-3 animate-spin" /><span>正在添加文件…</span></>
+          : <><Paperclip className="w-3 h-3" /><span>支持粘贴文件、截图或拖入文件 · 单文件最大 50 MB</span></>}
+      </div>
       <div className="flex items-center justify-between pt-1">
         {/* 左侧控制区 */}
         <div className="flex items-center space-x-2">
@@ -1157,7 +1221,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                   className="w-full px-3 py-2 text-left hover:bg-slate-50 flex items-center space-x-2 cursor-pointer"
                 >
                   <Paperclip className="w-4 h-4 text-emerald-600" />
-                  <span>上传 Excel / 本地文件分析</span>
+                  <span>添加文件（支持复制粘贴）</span>
                 </button>
                 <button
                   type="button"
@@ -1396,13 +1460,13 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           ) : (
             <button
               onClick={handleSubmit}
-              disabled={!text.trim() && attachments.length === 0 && !activeCommand}
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+              disabled={isUploading || (!text.trim() && attachments.length === 0 && !activeCommand)}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-wait ${
                 text.trim() || attachments.length > 0 || activeCommand
                   ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-xs hover:scale-105'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
-              title="发送 (Enter)"
+              title={isUploading ? '文件添加完成后即可发送' : '发送 (Enter)'}
             >
               <ArrowUp className="w-4 h-4 stroke-[2.5]" />
             </button>

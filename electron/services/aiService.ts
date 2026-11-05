@@ -9,6 +9,8 @@ import { NeoBusinessTypeService } from './neoBusinessTypeService';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { AgentSessionService, type AgentRunContext, type ChatRunParams } from './agentSessionService';
 import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '../security/agentTools';
+import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../security/documentTools';
+import { formatAttachmentContext } from './attachmentContext';
 const connectorKey = (session: any) => JSON.stringify([session.environment?.id, session.environment?.productType,
   session.tokenData?.tenant_id, session.tokenData?.userInfo?.userId,
   session.tokenData?.instance_uri || session.environment?.neoBaseURL]);
@@ -78,7 +80,7 @@ import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
-import { filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, isBusinessTypeConversation, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
+import { assertNeoConnectorToolAccess, filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, isBusinessTypeConversation, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -1181,6 +1183,22 @@ export class AiService {
       const isMinimalMode = sessionMode === 'minimal';
       const isStandardMode = sessionMode === 'standard' || sessionMode === 'default';
 
+      const documentTask = messages.some(message => message.role === 'user' && message.attachments?.length)
+        || /excel|word|pdf|ppt|幻灯片|读取文件|文档|表格|\.(?:xlsx?|docx?|pptx?)\b/i.test([...messages].reverse().find(m => m.role === 'user')?.content || '');
+      if (!isMinimalMode && documentTask && config.skills?.find(skill => skill.id === DOCUMENT_SKILL_ID)?.enabled !== false) {
+        const instruction = getDocumentReadingSkill(DOCUMENT_SKILL_ID)!;
+        systemParts.push(`【已加载技能 document-reader】\n${instruction}`);
+        sendEvent({ requestId, sessionId, messageId, type: 'tool_start', toolCall: {
+          id: `${requestId}_document-reader`, name: 'skill', arguments: { name: 'document-reader' }, status: 'running',
+        } });
+        sendEvent({ requestId, sessionId, messageId, type: 'tool_update', toolCall: {
+          id: `${requestId}_document-reader`, name: 'skill', arguments: { name: 'document-reader' }, status: 'success',
+          resultSummary: '已加载文档阅读与核对技能，支持分段读取及来源核对', resultData: { name: 'document-reader' }, durationMs: 0,
+        } });
+      }
+
+      const businessTypeConversation = isNeoConnector && (messages.slice(-8).some((message) => isBusinessTypeConversation(message.content || '')) ||
+        isBusinessTypeConversation(currentCompactionSummary?.summary || ''));
       if (isNeoConnector) {
         const latestUserContent = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
         const cliSkillNames = new Set<string>(['neo-cli-usage']);
@@ -1193,7 +1211,6 @@ export class AiService {
           cliSkillNames.add('neo-approval-flow-designer');
         }
         // Keep the domain skill on short follow-ups such as “确认部署”.
-        const businessTypeConversation = messages.slice(-8).some((message) => isBusinessTypeConversation(message.content || ''));
         if (businessTypeConversation) cliSkillNames.add('neo-entity-management');
         for (const skillName of cliSkillNames) {
           const instruction = getProtectedSkillInstruction(skillName);
@@ -1208,8 +1225,6 @@ export class AiService {
             resultData: { name: skillName, instruction }, durationMs: 0,
           } });
         }
-        systemParts.push(getNeoCliSessionInstruction(cliPreparation), NEO_CLI_FIRST_ROUTING);
-        if (businessTypeConversation) systemParts.push(NEO_BUSINESS_TYPE_ROUTING);
       }
 
       if (isMinimalMode) {
@@ -1231,6 +1246,7 @@ declare const tools: {
   // 终端命令与本地物理文件操作
   bash(args: { command: string; workdir?: string; background?: boolean; timeoutMs?: number }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   read(args: { file_path: string; offset?: number; limit?: number }): Promise<{ path: string; content: string; totalLines: number }>;
+  read_document(args: { file_path: string; mode?: 'info'|'read'; section?: string; offset?: number; limit?: number; max_chars?: number; section_offset?: number }): Promise<any>;
   write(args: { file_path: string; content: string }): Promise<{ path: string; bytesWritten: number; linesCount: number }>;
   edit(args: { file_path: string; old_string: string; new_string: string; replace_all?: boolean }): Promise<{ path: string; replacedOccurrences: number }>;
   str_replace_editor(args: { command: 'view'|'create'|'str_replace'|'insert'; path: string; file_text?: string; old_str?: string; new_str?: string; insert_line?: number; view_range?: [number, number] }): Promise<any>;
@@ -1287,6 +1303,7 @@ declare const tools: {
 
       if (!isMinimalMode) {
         systemParts.push(`<available_skills>
+- document-reader: Excel、Word、PDF、PPT 和文本阅读；通过 read_document 按工作表、页码、幻灯片与行号读取，核对来源、公式缓存及扫描件限制。
 - salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
 - salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
 - fxiaoke-crm-cli: 纷享销客 OpenAPI v2 接口与 CLI 数据操作规范，支持对象元数据探测、SQL数据查询与大批量分页对账。
@@ -1302,7 +1319,7 @@ declare const tools: {
       systemParts.push(`【项目工作区物理安全沙箱与设备访问边界红线 (最高安全约束 - 只能操作项目内内容，严禁检索整台设备)】
 - 【当前绑定项目工作区绝对路径】：${projectPath || '未绑定工作区'}
 - 【沙箱访问铁律】：
-  1. 【只能读取、修改和检索当前项目内的内容】：你所有调用的读写工具（read, write, edit, str_replace_editor, read_image 等）均被底层物理沙箱严格限定在上述项目目录内！任何试图访问项目外部文件、跨越到父级目录 (..) 或访问设备系统路径（如 /、/etc、/Users、~、C:\\ 等）的操作都将被底层内核直接拦截报错！
+  1. 【只能读取、修改和检索当前项目内的内容】：读写工具受项目边界限制。read、read_document 还可以读取用户主动上传/引用的单个附件原件；此例外仅限附件的准确路径，不允许访问同目录的其他文件。写入和修改仍严格限定在项目内。
   2. 【绝对禁止在整台设备上检索内容】：调用 glob、grep 或 bash 时，只能在当前项目目录范围内进行搜索与定位！绝对严禁对全盘设备发起扫描！
   3. 【路径规范】：所有文件路径请优先使用当前项目的工作区相对路径（如 "src/index.ts", "package.json"）或当前项目目录下的绝对路径。`);
 
@@ -1617,7 +1634,10 @@ ${mcpInfoText}
       }
 
       // Keep connector authorization and CLI routing after any standalone skill/preset setup advice.
-      if (isNeoConnector) systemParts.push(NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING);
+      if (isNeoConnector) {
+        systemParts.push(getNeoCliSessionInstruction(cliPreparation), NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING);
+        if (businessTypeConversation) systemParts.push(NEO_BUSINESS_TYPE_ROUTING);
+      }
       const systemPromptText = systemParts.join('\n\n');
       const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
@@ -1650,11 +1670,7 @@ ${mcpInfoText}
             let text = msg.content || '';
             // 参照 DSH 规范结构化注入挂载/引用的文件信息，带绝对路径与相对路径，赋予大模型分析与精准编辑能力
             if (msg.attachments && msg.attachments.length > 0) {
-              const fileDescriptions = msg.attachments.map((a) => {
-                const fullP = a.fullPath || (projectPath ? path.join(projectPath, a.name) : a.name);
-                const relP = a.relativePath || a.name;
-                return `[用户引用/挂载的工作区物理文件]:\n- 文件名: ${a.name}\n- 物理绝对路径: ${fullP}\n- 工作区相对路径: ${relP}\n- 文件大小: ${(a.size / 1024).toFixed(1)} KB\n- 初始内容/摘要:\n${a.parsedContent || '(可直接调用 read 工具读取该文件完整内容)'}\n[编辑操作指引]: 若需修改该文件，请直接调用 edit 或 str_replace_editor 工具传入上述物理绝对路径进行高保真替换！`;
-              }).join('\n\n');
+              const fileDescriptions = msg.attachments.map(formatAttachmentContext).join('\n\n');
               text = `${fileDescriptions}\n\n${text}`;
             }
 
@@ -2489,11 +2505,7 @@ ${currentCompactionSummary.summary}
       if (msg.role === 'user') {
         let text = msg.content || '';
         if (msg.attachments && msg.attachments.length > 0) {
-          const fileDescriptions = msg.attachments.map((a) => {
-            const fullP = a.fullPath || (projectPath ? path.join(projectPath, a.name) : a.name);
-            const relP = a.relativePath || a.name;
-            return `[用户引用/挂载的工作区物理文件]:\n- 文件名: ${a.name}\n- 物理绝对路径: ${fullP}\n- 工作区相对路径: ${relP}\n- 初始内容/摘要:\n${a.parsedContent || '(可调用 read 工具读取该文件完整内容)'}\n[编辑指引]: 若需修改该文件，请调用 edit 或 str_replace_editor 工具传入上述绝对路径！`;
-          }).join('\n\n');
+          const fileDescriptions = msg.attachments.map(formatAttachmentContext).join('\n\n');
           text = `${fileDescriptions}\n\n${text}`;
         }
 
@@ -3081,18 +3093,9 @@ ${currentCompactionSummary.summary}
     projectId?: string
   ): Promise<{ data: any; summary: string }> {
     // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
+    if (env && (env.productType || 'neocrm') === 'neocrm') assertNeoConnectorToolAccess(name, args);
     if (name === "run_code") {
       const toolsContext: Record<string, Function> = {
-        bash: async (params: any) => {
-          this.sessionStore.prepareNeoCliForConversation(projectPath);
-          return this.dshToolService.executeBash(params, projectPath, signal);
-        },
-        read: async (params: any) => this.dshToolService.readFile(params, projectPath, sessionAllowedFiles),
-        write: async (params: any) => this.dshToolService.writeFile(params, projectPath),
-        edit: async (params: any) => this.dshToolService.editFile(params, projectPath),
-        str_replace_editor: async (params: any) => this.dshToolService.strReplaceEditor(params, projectPath),
-        glob: async (params: any) => this.dshToolService.globSearch(params, projectPath),
-        grep: async (params: any) => this.dshToolService.grepSearch(params, projectPath),
         web_search: async (params: any) => this.dshToolService.webSearch(params),
         web_fetch: async (params: any) => this.dshToolService.webFetch(params),
         todo_write: async (params: any) => this.dshToolService.writeTodos(params),
@@ -3131,13 +3134,14 @@ ${currentCompactionSummary.summary}
           const result = await this.executeUnifiedTool('workspace_get_entity_fields', params, [], env, tokenData, projectPath, projectId, sessionAllowedFiles, signal);
           return result.data;
         },
-        get_tenant_info: async () => ({
-          isLoggedIn: Boolean(tokenData),
-          tenantName: tokenData?.userInfo?.tenantName || env?.name,
-          productType: env?.productType,
-          instanceUri: tokenData?.instance_uri || env?.neoBaseURL,
-        }),
       };
+
+      for (const toolName of ['bash', 'read', 'read_document', 'write', 'edit', 'str_replace_editor', 'glob', 'grep', 'get_tenant_info']) {
+        toolsContext[toolName] = async (params: any = {}) => {
+          const result = await this.executeCrmTool(toolName, params, env, tokenData, projectPath, sessionAllowedFiles, signal, projectId);
+          return result.data;
+        };
+      }
 
       for (const toolName of AGENT_TOOL_NAMES) {
         toolsContext[toolName] = async (params: any = {}) => {
@@ -3221,11 +3225,16 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "read") {
-      const res = this.dshToolService.readFile(args, projectPath, sessionAllowedFiles);
+      const res = await this.dshToolService.readFile(args, projectPath, sessionAllowedFiles);
       return {
         data: res,
         summary: `读取文件 [${path.basename(res.path)}]: 返回 ${res.content.split('\n').length} 行`,
       };
+    }
+
+    if (name === 'read_document') {
+      const res = await this.dshToolService.readDocument(args, projectPath, sessionAllowedFiles);
+      return { data: res, summary: `读取文档 [${path.basename(res.path)}]: ${res.sectionCount} 个分段${res.nextOffset ? '，可继续分页' : ''}` };
     }
 
     if (name === "write") {
@@ -3245,7 +3254,7 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "str_replace_editor") {
-      const res = this.dshToolService.strReplaceEditor(args, projectPath);
+      const res = await this.dshToolService.strReplaceEditor(args, projectPath);
       return {
         data: res,
         summary: `行级编辑器 [${args.command}]: ${path.basename(args.path)}`,
@@ -3413,6 +3422,8 @@ ${currentCompactionSummary.summary}
     if (name === 'get_tenant_info') {
       const pType = env.productType || 'neocrm';
       const info: Record<string, any> = {
+        isLoggedIn: true,
+        authSource: 'connector',
         productType: pType,
         envName: env.name,
         envType: env.envType || (pType === 'fxiaoke' ? '沙箱环境' : '生产/沙盒'),

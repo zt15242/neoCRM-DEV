@@ -126,6 +126,13 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
           badge: '文件系统',
           color: 'text-blue-600 bg-blue-50 border-blue-200',
         };
+      case 'read_document':
+        return {
+          title: `读取文档${toolCall.arguments?.section ? ` · ${toolCall.arguments.section}` : ''} (${toolCall.arguments?.file_path || ''})`,
+          icon: FileText,
+          badge: '文档解析',
+          color: 'text-blue-600 bg-blue-50 border-blue-200',
+        };
       case 'write':
         return {
           title: `写入文件 (${toolCall.arguments?.file_path || ''})`,
@@ -337,7 +344,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
   const meta = getToolMeta(toolCall.name);
   const Icon = meta.icon;
 
-  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question', 'exit_plan_mode', 'job_list', 'job_output', 'job_kill', 'skill', 'workspace_changes', 'load_workspace_dependencies', 'create_record', 'update_record', 'delete_record', 'create_custom_entity', 'create_custom_field', 'run_code'].includes(toolCall.name);
+  const isExternalMcp = !['get_tenant_info', 'list_entities', 'get_entity_fields', 'execute_sql_query', 'list_flows', 'get_flow_detail', 'list_autoflows', 'inspect_autoflow', 'get_approval_resources', 'generate_print_template', 'list_print_objects', 'list_print_templates', 'get_print_template_fields', 'download_template_sample', 'toggle_print_template_status', 'render_print_preview', 'bash', 'read', 'read_document', 'write', 'edit', 'str_replace_editor', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write', 'get_goal', 'create_goal', 'update_goal', 'ask_user_question', 'exit_plan_mode', 'job_list', 'job_output', 'job_kill', 'skill', 'workspace_changes', 'load_workspace_dependencies', 'create_record', 'update_record', 'delete_record', 'create_custom_entity', 'create_custom_field', 'run_code'].includes(toolCall.name);
 
   return (
     <div className="my-2 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">

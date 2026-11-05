@@ -99,6 +99,8 @@ declare global {
         size: number;
       }>>;
       fileParseLocalPath: (filePath: string) => Promise<AiFileAttachment>;
+      fileGetPath: (file: File) => string;
+      clipboardReadFilePaths: () => Promise<string[]>;
       clipboardWriteText: (text: string) => Promise<boolean>;
       shellOpenPath: (targetPath: string) => Promise<string>;
       shellShowItemInFolder: (targetPath: string) => Promise<boolean>;

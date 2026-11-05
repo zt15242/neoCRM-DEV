@@ -72,15 +72,27 @@ export class NeoBusinessTypeService {
         maxRedirects: 0, headers: { Authorization: `Bearer ${token.access_token}`, 'Content-Type': 'application/json', 'xsy-inner-source': 'bff' } });
     } catch (error: any) {
       if (signal?.aborted || error?.name === 'AbortError') throw error;
-      throw new Error(safeError(error, token));
+      const body = error?.response?.data;
+      const status = error?.response?.status;
+      const detail = body?.msg || body?.message || error?.message || error;
+      const context = `${method} ${endpoint}${status ? `, HTTP ${status}` : ''}${body?.code !== undefined ? `, code=${safeError(body.code, token)}` : ''}`;
+      throw new Error(`业务类型接口请求失败 (${context}): ${safeError(detail, token)}`);
     }
     const envelope = response.data;
+    const objectBody = envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope);
+    const hasCode = objectBody && Object.prototype.hasOwnProperty.call(envelope, 'code');
+    // Metadata tenants use both 200 and 0, just like the connector's data APIs.
+    // Explicit errors still take precedence over a success code or message.
     if (envelope?.success === false || envelope?.error ||
-        (envelope && typeof envelope === 'object' && 'code' in envelope && ![200, '200'].includes(envelope.code))) {
-      throw new Error(`业务类型接口失败: ${safeError(envelope?.msg || envelope?.message || '响应缺少成功状态', token)}`);
+        (hasCode && ![0, '0', 200, '200'].includes(envelope.code))) {
+      const detail = typeof envelope?.error === 'string' ? envelope.error
+        : envelope?.error?.message || envelope?.error?.msg || envelope?.msg || envelope?.message || '响应包含错误状态';
+      const context = `${method} ${endpoint}${hasCode ? `, code=${safeError(envelope.code, token)}` : ''}`;
+      throw new Error(`业务类型接口失败 (${context}): ${safeError(detail, token)}`);
     }
-    // Match the CLI transport: some platform endpoints return a bare data body.
-    return envelope && typeof envelope === 'object' && 'code' in envelope ? envelope.data : envelope;
+    // Keep bare bodies, and accept both platform payload envelope conventions.
+    const wrapped = hasCode || (objectBody && envelope.success === true && ('data' in envelope || 'result' in envelope));
+    return wrapped ? (envelope.data !== undefined ? envelope.data : envelope.result) : envelope;
   }
 
   private async records(env: NeoEnvironment, token: TokenData, entity: string, signal?: AbortSignal): Promise<BusinessTypeSource[]> {
@@ -106,11 +118,25 @@ export class NeoBusinessTypeService {
     if (!dryRun && input.confirm !== true) throw new Error('业务类型写入需要先展示预演结果并取得用户确认，再传 dryRun=false、confirm=true');
     const entity = apiKey(input.entityApiKey);
     const source = readBusinessTypeSource(root, input);
-    const object = await this.call(env, token, 'GET', `/rest/metadata/v2.0/xobjects/${entity}`, undefined, signal);
-    if (object?.apiKey !== entity) throw new Error('未能核实目标对象，停止业务类型部署');
-    if (object.enableBusitype !== true) throw new Error('目标对象未启用业务类型；请先确认并通过 neo CLI 更新对象开关');
-    const existing = await this.records(env, token, entity, signal);
-    const baseKey = source.apiKey.replace(/(?:__c)+$/i, '');
+    let existing: BusinessTypeSource[];
+    try {
+      const detail = await this.call(env, token, 'GET', `/rest/metadata/v2.0/xobjects/${entity}`, undefined, signal);
+      // v2 metadata can return data.records as one object, not only a bare object.
+      const records = detail?.apiKey ? detail : (detail?.records ?? detail);
+      if (Array.isArray(records) && records.length !== 1) throw new Error('对象详情必须恰好包含一个目标对象');
+      if (detail?.records !== undefined && ['totalSize', 'count'].some(key => detail[key] != null && Number(detail[key]) !== 1)) {
+        throw new Error('对象详情记录数量不一致');
+      }
+      const object = Array.isArray(records) ? records[0] : records;
+      if (object?.apiKey !== entity) throw new Error('未能核实目标对象，停止业务类型部署');
+      if (object.enableBusitype !== true) throw new Error('目标对象未启用业务类型；请先确认并通过 neo CLI 更新对象开关');
+      existing = await this.records(env, token, entity, signal);
+    } catch (error: any) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      throw Object.assign(new Error(`业务类型部署预检失败（未发送写入请求）: ${safeError(error, token)}`), { writeAttempted: false });
+    }
+    // The API appends exactly one suffix; preserve the user's complete target key.
+    const baseKey = source.apiKey.replace(/__c$/i, '');
     const fullKey = `${baseKey}__c`;
     const matches = existing.filter((item) => item.apiKey === source.apiKey || item.apiKey === fullKey);
     if (matches.length > 1) throw new Error('业务类型 API Key 存在歧义，停止部署');

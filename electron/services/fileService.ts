@@ -1,204 +1,86 @@
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { dialog, BrowserWindow } from 'electron';
-import * as XLSX from 'xlsx';
-import { AiFileAttachment } from '../../shared/types';
+import { randomUUID } from 'node:crypto';
+import { app, dialog, BrowserWindow } from 'electron';
+import type { AiFileAttachment } from '../../shared/types';
+import { documentService, DOCUMENT_EXTENSIONS, MAX_DOCUMENT_BYTES, isOfficeDocument } from './documentService';
+
+const MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', bmp: 'image/bmp', tiff: 'image/tiff', tif: 'image/tiff',
+  heic: 'image/heic', avif: 'image/avif', svg: 'image/svg+xml',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel', xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  csv: 'text/csv', tsv: 'text/tab-separated-values', ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pdf: 'application/pdf', ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
 
 export class FileService {
-  /**
-   * 打开系统原生文件选择器并解析文件
-   */
   public async selectAndParseFile(win?: BrowserWindow | null): Promise<AiFileAttachment | null> {
-    const dialogOptions: any = {
-      title: '选择要分析的文件或数据表格',
-      properties: ['openFile'],
+    const options: Electron.OpenDialogOptions = {
+      title: '选择要添加的文件', properties: ['openFile'],
       filters: [
-        {
-          name: '支持的文件 (Excel, CSV, 文本, 代码, JSON)',
-          extensions: ['xlsx', 'xls', 'csv', 'txt', 'md', 'json', 'sql', 'js', 'ts', 'java', 'xml', 'yaml', 'yml'],
-        },
         { name: '所有文件', extensions: ['*'] },
+        { name: '文档与文本 (Excel、Word、PDF、PPT)', extensions: [...DOCUMENT_EXTENSIONS, 'txt', 'md', 'json', 'sql', 'js', 'ts', 'java', 'xml', 'yaml', 'yml'] },
       ],
     };
-
-    const result = win
-      ? await dialog.showOpenDialog(win, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-
-    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-      return null;
-    }
-
-    const filePath = result.filePaths[0];
-    return this.parseLocalFile(filePath);
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+    return result.canceled || !result.filePaths.length ? null : this.parseLocalFile(result.filePaths[0]);
   }
 
-  /**
-   * 解析本地文件路径
-   */
-  public parseLocalFile(filePath: string): AiFileAttachment {
-    const fileName = path.basename(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-    const stats = fs.statSync(filePath);
-    const fileSize = stats.size;
-
-    const fileId = `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-
-    // 1. Excel / CSV 表格解析
-    if (['.xlsx', '.xls', '.csv'].includes(ext)) {
+  public async parseLocalFile(filePath: string): Promise<AiFileAttachment> {
+    const fullPath = path.resolve(filePath), stats = await fs.stat(fullPath);
+    if (!stats.isFile()) throw new Error('请选择文件，暂不支持添加文件夹');
+    if (stats.size > MAX_DOCUMENT_BYTES) throw new Error('文件超过 50 MB，请拆分后上传');
+    const name = path.basename(fullPath), ext = path.extname(name).slice(1).toLowerCase();
+    // Accept every file as an attachment; only supported documents and text are parsed.
+    if (!DOCUMENT_EXTENSIONS.includes(ext)) {
+      const handle = await fs.open(fullPath, 'r');
+      let sample: Buffer;
       try {
-        const fileBuffer = fs.readFileSync(filePath);
-        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-        const sheetNames = workbook.SheetNames;
-        const mainSheet = workbook.Sheets[sheetNames[0]];
-
-        // 提取前 50 行并转为 Markdown 表格
-        const rawJson: Record<string, any>[] = XLSX.utils.sheet_to_json(mainSheet, { defval: '' });
-        const totalRows = rawJson.length;
-        const previewRows = rawJson.slice(0, 50);
-
-        let tableMarkdown = '';
-        if (previewRows.length > 0) {
-          const headers = Object.keys(previewRows[0]);
-          tableMarkdown += `| ${headers.join(' | ')} |\n`;
-          tableMarkdown += `| ${headers.map(() => '---').join(' | ')} |\n`;
-          for (const row of previewRows) {
-            tableMarkdown += `| ${headers.map((h) => String(row[h] ?? '').replace(/\|/g, '\\|').slice(0, 50)).join(' | ')} |\n`;
-          }
-        }
-
-        const parsedContent = `【文件附件: ${fileName}】\n- 工作表列表: ${sheetNames.join(', ')}\n- 当前展示工作表: [${sheetNames[0]}] (总行数: ${totalRows} 行，展示前 ${previewRows.length} 行样本)\n\n数据表格预览:\n${tableMarkdown}`;
-        const summaryText = `Excel 数据表: ${totalRows} 行数据, ${sheetNames.length} 个工作表`;
-
-        return {
-          id: fileId,
-          name: fileName,
-          fullPath: filePath,
-          size: fileSize,
-          mimeType: ext === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          parsedContent,
-          summaryText,
-        };
-      } catch (e: any) {
-        return {
-          id: fileId,
-          name: fileName,
-          fullPath: filePath,
-          size: fileSize,
-          mimeType: 'application/octet-stream',
-          parsedContent: `【文件: ${fileName} 解析异常】: ${e.message}`,
-          summaryText: `解析失败: ${e.message}`,
-        };
+        const bytes = Buffer.alloc(Math.min(stats.size, 8192));
+        const result = await handle.read(bytes, 0, bytes.length, 0);
+        sample = bytes.subarray(0, result.bytesRead);
+      } finally { await handle.close(); }
+      const image = ext !== 'svg' && MIME[ext]?.startsWith('image/');
+      const utf16 = sample.subarray(0, 2).equals(Buffer.from([0xff, 0xfe])) || sample.subarray(0, 2).equals(Buffer.from([0xfe, 0xff]));
+      const binary = !utf16 && (sample.includes(0) || [...sample].filter(c => c < 9 || (c > 13 && c < 32)).length > sample.length * 0.05);
+      if (image || binary || /^(zip|rar|7z|gz|bz2|xz|tar|exe|dll|dmg|pkg|app|mp3|mp4|mov|wav|ogg|flac|webm|woff2?|ttf|ico)$/.test(ext)) {
+        const warning = image ? '图片已添加，尚未识别图像内容；需使用图片查看能力进一步分析。' : '文件已添加，当前格式不支持文本预览，尚未读取内容。';
+        return { id: `file_${randomUUID()}`, name, fullPath, size: stats.size,
+          mimeType: MIME[ext] || 'application/octet-stream', parsedContent: warning,
+          summaryText: image ? '图片附件' : '文件附件 · 暂无文本预览',
+          contentKind: image ? 'image' : 'binary', previewTruncated: true, parseWarnings: [warning] };
       }
     }
-
-    // 2. 文本与代码文件解析
-    try {
-      let content = fs.readFileSync(filePath, 'utf-8');
-      const isTruncated = content.length > 30000;
-      if (isTruncated) {
-        content = content.slice(0, 30000) + '\n\n...[由于内容过长，已截取前 30,000 字符]...';
-      }
-
-      const parsedContent = `【文件附件: ${fileName}】\n\`\`\`${ext.replace(/^\./, '') || 'plaintext'}\n${content}\n\`\`\``;
-      const summaryText = `文本文件 (${(fileSize / 1024).toFixed(1)} KB)${isTruncated ? ' [已截断前30K字符]' : ''}`;
-
-      return {
-        id: fileId,
-        name: fileName,
-        fullPath: filePath,
-        size: fileSize,
-        mimeType: 'text/plain',
-        parsedContent,
-        summaryText,
-      };
-    } catch (e: any) {
-      return {
-        id: fileId,
-        name: fileName,
-        fullPath: filePath,
-        size: fileSize,
-        mimeType: 'application/octet-stream',
-        parsedContent: `【文件: ${fileName} 读取异常】: ${e.message}`,
-        summaryText: `读取失败: ${e.message}`,
-      };
-    }
+    const parsed = await documentService.read({ file_path: fullPath, limit: 100, max_chars: 12000 });
+    const summaryText = `${ext.toUpperCase() || '文本'} · ${parsed.sectionCount} 个分段${parsed.truncated ? ' · 预览，支持继续读取' : ''}`;
+    const sectionList = parsed.sections.slice(0, 30).map(s => `${s.id}: ${s.title}`).join('；');
+    return {
+      id: `file_${randomUUID()}`, name, fullPath, size: stats.size, mimeType: MIME[ext] || 'text/plain',
+      parsedContent: `【文件附件: ${name}】\n分段: ${sectionList}${parsed.sectionCount > 30 ? '（其余分段可通过工具查看）' : ''}\n${parsed.warnings.map(w => `提示: ${w}`).join('\n')}\n\n${parsed.content}\n${parsed.truncated ? `\n[仅为预览，尚未读取全部内容。调用 read_document({ file_path: ${JSON.stringify(fullPath)}, offset: ${parsed.nextOffset} }) 继续；可用 section 选择工作表、PDF 页或幻灯片。]` : ''}`,
+      summaryText, documentFormat: isOfficeDocument(name) ? parsed.format : undefined,
+      previewTruncated: parsed.truncated, parseWarnings: parsed.warnings,
+      contentKind: 'text',
+    };
   }
 
-  /**
-   * 解析前端直接上传的文件 Buffer (用于拖拽上传)
-   */
-  public parseBuffer(fileName: string, buffer: Buffer): AiFileAttachment {
-    const ext = path.extname(fileName).toLowerCase();
-    const fileSize = buffer.length;
-    const fileId = `file_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-
-    if (['.xlsx', '.xls', '.csv'].includes(ext)) {
-      try {
-        const workbook = XLSX.read(buffer, { type: 'buffer' });
-        const sheetNames = workbook.SheetNames;
-        const mainSheet = workbook.Sheets[sheetNames[0]];
-
-        const rawJson: Record<string, any>[] = XLSX.utils.sheet_to_json(mainSheet, { defval: '' });
-        const totalRows = rawJson.length;
-        const previewRows = rawJson.slice(0, 50);
-
-        let tableMarkdown = '';
-        if (previewRows.length > 0) {
-          const headers = Object.keys(previewRows[0]);
-          tableMarkdown += `| ${headers.join(' | ')} |\n`;
-          tableMarkdown += `| ${headers.map(() => '---').join(' | ')} |\n`;
-          for (const row of previewRows) {
-            tableMarkdown += `| ${headers.map((h) => String(row[h] ?? '').replace(/\|/g, '\\|').slice(0, 50)).join(' | ')} |\n`;
-          }
-        }
-
-        const parsedContent = `【文件附件: ${fileName}】\n- 工作表: ${sheetNames.join(', ')}\n- 当前展示工作表: [${sheetNames[0]}] (总数据行数: ${totalRows} 行)\n\n数据表格预览:\n${tableMarkdown}`;
-        const summaryText = `Excel 表格: ${totalRows} 行数据`;
-
-        return {
-          id: fileId,
-          name: fileName,
-          size: fileSize,
-          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          parsedContent,
-          summaryText,
-        };
-      } catch (e: any) {
-        return {
-          id: fileId,
-          name: fileName,
-          size: fileSize,
-          mimeType: 'application/octet-stream',
-          parsedContent: `【文件解析异常】: ${e.message}`,
-          summaryText: `解析失败`,
-        };
-      }
-    }
-
+  // Persist drag-and-drop uploads so every preview can be followed by a real tool read.
+  public async parseBuffer(fileName: string, buffer: Buffer): Promise<AiFileAttachment> {
+    if (buffer.length > MAX_DOCUMENT_BYTES) throw new Error('文件超过 50 MB，请拆分后上传');
+    const safeName = path.win32.basename(path.basename(fileName)).replace(/[\u0000-\u001f]/g, '_');
+    if (!safeName || safeName === '.' || safeName === '..') throw new Error('文件名无效');
+    const directory = path.join(app.getPath('userData'), 'ai-attachments', randomUUID());
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const filename = path.join(directory, safeName);
     try {
-      let content = buffer.toString('utf-8');
-      if (content.length > 30000) {
-        content = content.slice(0, 30000) + '\n\n...[已截取前 30,000 字符]...';
-      }
-
-      return {
-        id: fileId,
-        name: fileName,
-        size: fileSize,
-        mimeType: 'text/plain',
-        parsedContent: `【文件附件: ${fileName}】\n\`\`\`\n${content}\n\`\`\``,
-        summaryText: `文本文件 (${(fileSize / 1024).toFixed(1)} KB)`,
-      };
-    } catch (e: any) {
-      return {
-        id: fileId,
-        name: fileName,
-        size: fileSize,
-        mimeType: 'application/octet-stream',
-        parsedContent: `【文件无法按文本读取】`,
-        summaryText: `二进制文件`,
-      };
+      await fs.writeFile(filename, buffer, { mode: 0o600 });
+      return await this.parseLocalFile(filename);
+    } catch (error) {
+      await fs.rm(directory, { recursive: true, force: true });
+      throw error;
     }
   }
 }

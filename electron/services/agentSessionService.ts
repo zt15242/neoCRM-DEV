@@ -103,12 +103,16 @@ export class AgentSessionService {
       if (!parent) throw new Error('当前主会话不存在，请先保存会话');
       this.reserveDispatch(context);
       const now = Date.now();
+      const attachments = [...new Map(context.params.messages.filter(message => message.role === 'user').flatMap(message => message.attachments || [])
+        .filter(file => file.fullPath).map(file => [file.fullPath, { ...file,
+          parsedContent: '(主会话已授权读取此附件，使用 read_document 获取真实内容。)', previewTruncated: true }])).values()];
       const session: AiChatSession = {
         id: `sess_agent_${randomUUID()}`, title, projectId: parent.projectId,
         presetId: parent.presetId, providerId: context.params.providerId, modelId: context.params.modelId,
         activeSkillIds: [...(context.params.activeSkillIds || parent.activeSkillIds || [])],
         mode: context.params.mode || parent.mode || 'standard',
-        messages: [{ id: `msg_u_${randomUUID()}`, role: 'user', content: task, createdAt: now }],
+        messages: [{ id: `msg_u_${randomUUID()}`, role: 'user', content: task, createdAt: now,
+          ...(attachments.length ? { attachments } : {}) }],
         createdAt: now, updatedAt: now,
         agentRun: { kind: name === 'spawn_agent' ? 'subagent' : 'autonomous',
           createdBySessionId: parent.id, parentSessionId: name === 'spawn_agent' ? parent.id : undefined,

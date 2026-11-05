@@ -160,7 +160,7 @@ try {
   const toolResponse = (name, args) => sse({ tool_calls: [{ index: 0, id: `call_${++calls}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
-    const user = body.messages.find(item => item.role === 'user')?.content;
+    const user = body.messages.findLast(item => item.role === 'user')?.content?.split('\n').at(-1);
     const toolMessages = body.messages.filter(item => item.role === 'tool');
     if (process.env.DEBUG_AGENT_TEST) console.log('Model fixture:', user, toolMessages.length);
     if (user === 'coordinate-standard') {
@@ -194,7 +194,9 @@ try {
   fs.writeFileSync(path.join(fixture, 'source.txt'), 'source evidence');
   for (const mode of ['standard', 'ptc']) {
     const main = { ...parent, id: `sess_${mode}`, mode, activeSkillIds: [],
-      messages: [{ id: 'u', role: 'user', content: `coordinate-${mode}`, createdAt: 1 }] };
+      messages: [{ id: 'u', role: 'user', content: `coordinate-${mode}`, createdAt: 1,
+        attachments: [{ id: 'source-attachment', name: 'source.txt', fullPath: path.join(fixture, 'source.txt'),
+          mimeType: 'text/plain', size: 15, parsedContent: 'source evidence' }] }] };
     ai.saveSession(main);
     const events = [];
     await ai.startChatStream({ requestId: `req_${mode}`, sessionId: main.id, messageId: 'answer', providerId: 'fixture',
@@ -204,7 +206,9 @@ try {
     const agents = ai.getSessions().filter(item => item.agentRun?.createdBySessionId === main.id);
     assert.equal(agents.length, 1);
     assert.equal(agents[0].agentRun.status, 'completed');
-    assert.equal(agents[0].messages.at(-1).toolCalls[0].name, 'read');
+    assert.ok(agents[0].messages.at(-1).toolCalls.some(tool => tool.name === 'read'));
+    assert.equal(agents[0].messages[0].attachments[0].fullPath, path.join(fixture, 'source.txt'));
+    assert.equal(agents[0].messages[0].attachments[0].previewTruncated, true);
     assert.equal(agents[0].messages.at(-1).content, 'verified worker result');
     console.log(`PASS real ${mode} model loop: spawn → project file tool → persist → wait → parent summary`);
   }
