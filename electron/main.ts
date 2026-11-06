@@ -19,6 +19,8 @@ import { configureWindowLifecycle } from './services/windowLifecycle';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
+import { readMessagePreview } from './services/messagePreviewService';
+import type { MessagePreviewRequest } from '../shared/messagePreview';
 import { getClipboardFilePaths } from './services/clipboardFiles';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
@@ -669,6 +671,14 @@ ipcMain.handle('file:selectAndParse', async () => fileService.selectAndParseFile
 ipcMain.handle('clipboard:readFilePaths', async () => getClipboardFilePaths(await clipboard.read()));
 ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: ArrayBuffer) => {
   return fileService.parseBuffer(fileName, Buffer.from(bufferData));
+});
+ipcMain.handle('file:previewMessage', async (_, request: MessagePreviewRequest) => {
+  const session = visibleSessions(aiService.getSessions()).find(item => item.id === request.sessionId);
+  const projects = projectService.getProjects();
+  const project = session?.projectId ? projects.find(item => item.id === session.projectId) : undefined;
+  const root = project?.localPath || projects.find(item => path.resolve(item.localPath) === path.resolve(request.projectPath || '.'))?.localPath;
+  const allowedFiles = session?.messages.flatMap(message => message.attachments || []).map(file => file.fullPath).filter((file): file is string => !!file) || [];
+  return readMessagePreview(request.source, { projectPath: root, allowedFiles });
 });
 
 // ================= MCP 与 Skill 技能管理 =================

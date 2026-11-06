@@ -10,7 +10,7 @@ export const DOCUMENT_TOOLS_SPEC = [{
   type: 'function',
   function: {
     name: 'read_document',
-    description: '本地读取 Excel/XLS/XLSX/CSV/ODS、Word/DOC/DOCX、PDF、PPT/PPTX 和文本文件。先用 mode=info 查看分段目录，再按工作表、PDF 页或幻灯片读取，支持继续分页；不会执行宏、公式或外部链接。只允许当前项目和用户主动添加的附件。',
+    description: '本地读取 Excel/XLS/XLSX/CSV/ODS、Word/DOC/DOCX、PDF、PPT/PPTX、XMind 思维导图和文本文件。先用 mode=info 查看分段目录，再按工作表、PDF 页、幻灯片或思维导图画布读取，支持继续分页；不会执行宏、公式或外部链接。只允许当前项目和用户主动添加的附件。',
     parameters: {
       type: 'object',
       properties: {

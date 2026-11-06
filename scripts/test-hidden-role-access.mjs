@@ -51,7 +51,8 @@ try {
   licenseService.getDeviceFingerprintHash = () => 'fixture-device';
   licenseService.getMachineCode = () => 'fixture-machine';
   const aliases = ['neobi-architect','preset-neobi-architect','skill-neobi-architect',
-    'autoflow-architect','preset-autoflow-architect','skill-autoflow-architect'];
+    'autoflow-architect','preset-autoflow-architect','skill-autoflow-architect',
+    ...['manage-neocrm-permissions', 'configure-neocrm-mobile'].flatMap(id => [id, `skill-${id}`, `preset-${id}`])];
   assert.deepEqual(access.getStatus(), { visible:false });
   for (const alias of aliases) { assert(isProtectedBuiltinSkill(alias)); assert.equal(readSkill(alias),null); }
   assert(readSkill('preset-nex-architect')?.length > 100);
@@ -208,6 +209,7 @@ try {
         for(const visible of [false,true]){
           await run('window.testRender("skills",'+visible+')');await pause();const body=await text();
           assert.equal(body.includes('BI 分析部署规范'),visible);assert.equal(body.includes('自动流程架构与部署规范'),visible);
+          assert.equal(body.includes('销售易用户及权限管理'),visible);assert.equal(body.includes('销售易移动端配置'),visible);
         }
         console.log('PASS renderer: both menus/history/skills hidden despite active license; cancel/wrong key stay hidden; valid masked verification reveals; lock hides immediately');
         await run('window.testRender("composer",false)');await pause();await fill('textarea','/');await pause();

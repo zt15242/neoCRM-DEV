@@ -17,7 +17,6 @@ import {
   WorkflowLicenseStatus
 } from '../../../shared/types';
 import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI_SKILLS } from '../../../shared/constants';
-import { AiSidebar } from './AiSidebar';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
 import { mergeSavedChatSessions, AGENT_STATUS_LABELS } from './chatSessionState';
@@ -26,9 +25,7 @@ import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
 import { ConfirmDeployWorkflowModal } from "./ConfirmDeployWorkflowModal";
 import { ConfirmDeployApprovalModal } from "./ConfirmDeployApprovalModal";
-import { FlowManagerModal } from "./FlowManagerModal";
 import { WorkspaceProject } from "../../../shared/types";
-import { PrintTemplateManagerModal } from "./PrintTemplateManagerModal";
 import { CodexTerminalPanel } from "./CodexTerminalPanel";
 import { ApprovalDeployPlan } from "../../../shared/types";
 import { WorkflowLicenseModal } from './WorkflowLicenseModal';
@@ -51,8 +48,6 @@ import {
   Lock,
   Unlock,
   Layers,
-  Printer,
-  Workflow,
   PanelRight,
   PanelLeftOpen,
   MoreHorizontal,
@@ -78,8 +73,6 @@ interface AiHarnessStudioProps {
   onSelectPreset?: (presetId: string) => void;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   activeProject?: WorkspaceProject;
-  onOpenFlowManager?: () => void;
-  onOpenPrintManager?: () => void;
   onOpenLicenseModal?: () => void;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
@@ -147,8 +140,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   onSelectPreset: propOnSelectPreset,
   workflowLicenseStatus: propWorkflowLicenseStatus,
   activeProject,
-  onOpenFlowManager,
-  onOpenPrintManager,
   onOpenLicenseModal,
   sidebarCollapsed = false,
   onToggleSidebar,
@@ -270,8 +261,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const [pendingSchemaPlan, setPendingSchemaPlan] = useState<SchemaPlanPayload | null>(null);
   const [pendingWorkflowPlan, setPendingWorkflowPlan] = useState<WorkflowDeployPlan | null>(null);
   const [pendingApprovalPlan, setPendingApprovalPlan] = useState<ApprovalDeployPlan | null>(null);
-  const [isFlowManagerOpen, setIsFlowManagerOpen] = useState<boolean>(false);
-  const [isPrintManagerOpen, setIsPrintManagerOpen] = useState<boolean>(false);
 
   // 流程引擎 (自动流程 & 审批流) 本地离线设备锁状态
   const [internalLicenseStatus, setInternalLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
@@ -1000,27 +989,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             )}
           </div>
 
-          {/* 右侧动作控制区 (流程库、模板库、更多选项、分栏展开切换) */}
+          {/* 右侧动作控制区 */}
           <div className="flex items-center space-x-1.5 shrink-0 window-no-drag">
-            <button
-              type="button"
-              onClick={() => onOpenFlowManager ? onOpenFlowManager() : setIsFlowManagerOpen(true)}
-              className="text-[11px] px-2 py-0.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 flex items-center space-x-1 transition-all cursor-pointer font-medium"
-              title="查看与管理租户现有工作流和审批流资产"
-            >
-              <Workflow className="w-3 h-3 text-teal-600" />
-              <span>流程库</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onOpenPrintManager ? onOpenPrintManager() : setIsPrintManagerOpen(true)}
-              className="text-[11px] px-2 py-0.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 flex items-center space-x-1 transition-all cursor-pointer font-medium"
-              title="查看与管理租户已配置的 Word/Excel 打印模板资产"
-            >
-              <Printer className="w-3 h-3 text-amber-600" />
-              <span>模板库</span>
-            </button>
-
             {/* 更多操作菜单 */}
             <div className="relative">
               <button
@@ -1164,16 +1134,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
           {/* 空会话欢迎引导页 */}
           {(!activeSession || activeSession.messages.length === 0) ? (
-            <div className="max-w-4xl mx-auto py-10 px-2 space-y-8 animate-in fade-in duration-200">
+            <div className="ai-welcome max-w-4xl mx-auto py-10 px-2 space-y-8">
               {/* 居中品牌标语与状态徽标 (对齐 DSH Codex UI 核心美学) */}
               <div className="text-center space-y-3">
-                <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-slate-100/90 border border-slate-200/80 text-[11px] font-mono text-slate-600 mb-1 shadow-2xs">
-                  <Sparkles className="w-3.5 h-3.5 text-sky-600" />
-                  <span>NeoCRM AI Studio · 探索未至之境</span>
-                  <span className="px-1.5 py-0.2 rounded bg-sky-100 text-sky-800 text-[9px] font-bold">预览版</span>
-                </div>
-
-                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900">
+                <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-slate-900">
                   {currentPreset.name.split(" (")[0]}
                 </h1>
                 <p className="text-xs text-slate-500 max-w-xl mx-auto leading-relaxed">
@@ -1195,18 +1159,18 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               <div className="space-y-3">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    推荐业务场景 (Suggestions)
+                    推荐业务场景
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">点击直接发起分析</span>
+                  <span className="text-[10px] text-slate-400 font-mono">选择任务开始对话</span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {SUGGESTION_CATEGORIES.map((cat) => {
                     const CatIcon = cat.Icon;
                     return (
                       <div
                         key={cat.id}
-                        className="p-4 rounded-2xl bg-white hover:bg-slate-50/80 border border-slate-200/90 hover:border-slate-300 transition-all shadow-2xs flex flex-col justify-between space-y-3"
+                        className="ai-welcome__category p-4 rounded-xl bg-white border border-slate-200/90 flex flex-col justify-between space-y-3"
                       >
                         <div className="space-y-1.5">
                           <div className="flex items-center space-x-2">
@@ -1215,7 +1179,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                             </div>
                             <span className="font-bold text-xs text-slate-800">{cat.title}</span>
                           </div>
-                          <p className="text-[11px] text-slate-500 leading-normal line-clamp-2">
+                          <p className="text-xs text-slate-500 leading-relaxed">
                             {cat.desc}
                           </p>
                         </div>
@@ -1226,10 +1190,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                               key={tIdx}
                               type="button"
                               onClick={() => handleSendMessage(task.prompt, entityRefs)}
-                              className="w-full text-left px-2 py-1.5 rounded-lg bg-slate-50/80 hover:bg-sky-50 text-[11px] text-slate-700 hover:text-sky-800 font-medium transition-colors truncate block cursor-pointer border border-slate-200/60 hover:border-sky-200"
+                              className="w-full text-left px-2.5 py-2 rounded-lg bg-slate-50/80 hover:bg-sky-50 text-xs text-slate-700 hover:text-sky-800 font-medium transition-colors block cursor-pointer border border-slate-200/60 hover:border-sky-200"
                               title={task.prompt}
                             >
-                              • {task.label}
+                              {task.label}
                             </button>
                           ))}
                         </div>
@@ -1295,6 +1259,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   isStreamingCurrent={streamingMessageId === msg.id}
                   isLastMessage={idx === activeSession.messages.length - 1}
                   projectPath={activeProject?.localPath}
+                  sessionId={activeSession.id}
                   onOpenCreateSchema={(plan) => setPendingSchemaPlan(plan)}
                   onOpenDeployWorkflow={async (plan) => {
                     const latestLic = window.neoApi?.workflowGetLicenseStatus
@@ -1375,8 +1340,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               onClearSession={activeSession ? () => handleDeleteSession(activeSession.id) : undefined}
               onCompactSession={handleCompactSession}
               onSelectPreset={setSelectedPresetId}
-              onOpenFlowManager={onOpenFlowManager}
-              onOpenPrintManager={onOpenPrintManager}
               externalAttachmentToAdd={pendingComposerAttachment}
               workflowLicenseStatus={workflowLicenseStatus}
               onOpenLicenseModal={onOpenLicenseModal || (() => setIsLicenseModalOpen(true))}
@@ -1436,25 +1399,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           showToast={showToast}
         />
       )}
-
-      {/* 租户流程资产管理中心 (自动流程 & 新版审批流) */}
-      <FlowManagerModal
-        isOpen={isFlowManagerOpen}
-        crmSession={crmSession}
-        licenseStatus={workflowLicenseStatus}
-        onClose={() => setIsFlowManagerOpen(false)}
-        onSendToAiPrompt={(promptText) => handleSendMessage(promptText)}
-        showToast={showToast}
-      />
-
-      {/* 租户打印模板资产管理中心 (免锁开放) */}
-      <PrintTemplateManagerModal
-        isOpen={isPrintManagerOpen}
-        crmSession={crmSession}
-        onClose={() => setIsPrintManagerOpen(false)}
-        onSendToAiPrompt={(promptText) => handleSendMessage(promptText)}
-        showToast={showToast}
-      />
 
       {/* 自动流程配置方案核对与代码部署弹窗 */}
       {pendingWorkflowPlan && (

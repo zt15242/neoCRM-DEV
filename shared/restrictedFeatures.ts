@@ -5,14 +5,20 @@ export interface RestrictedFeatureStatus {
 
 export type AccessCommand = 'unlock' | 'lock' | 'status' | 'invalid';
 
+export const RESTRICTED_PACKAGE_SKILL_IDS = ['manage-neocrm-permissions', 'configure-neocrm-mobile'] as const;
+
+export function normalizeBuiltinSkillId(id: string): string {
+  return id.replace(/^(?:preset-|skill-)/, '');
+}
+
 export function isRestrictedRole(id?: string): boolean {
   return id === 'neobi-architect' || id === 'autoflow-architect';
 }
 
 export function isRestrictedSkill(id?: string): boolean {
   if (!id) return false;
-  const normalized = id.replace(/^(?:preset-|skill-)/, '');
-  return isRestrictedRole(normalized);
+  const normalized = normalizeBuiltinSkillId(id);
+  return isRestrictedRole(normalized) || RESTRICTED_PACKAGE_SKILL_IDS.some(skill => skill === normalized);
 }
 
 // Deliberately absent from slash completion, help, settings and model prompts.

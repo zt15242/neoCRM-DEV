@@ -390,7 +390,7 @@ export const MailFolderNav: React.FC<MailFolderNavProps> = ({
         )}
 
         <div className="pt-3 pb-1 px-2 text-[10px] uppercase tracking-wider font-mono text-slate-400 font-bold">
-          AI 智能增效 (Intelligence)
+          AI 工具
         </div>
 
         {/* 联系人全景画像库 */}
@@ -403,13 +403,10 @@ export const MailFolderNav: React.FC<MailFolderNavProps> = ({
               : 'hover:bg-slate-800 text-slate-300 hover:text-white'
           }`}
         >
-          <div className="flex items-center space-x-2.5">
+          <div className="flex min-w-0 items-center space-x-2.5">
             <UserCheck className="w-4 h-4 text-indigo-400 shrink-0" />
-            <span>联系人画像中心</span>
+            <span className="truncate">联系人画像中心</span>
           </div>
-          <span className="px-1.5 py-0.2 rounded text-[9px] bg-indigo-500/30 text-indigo-300 font-mono">
-            360°
-          </span>
         </button>
       </div>
 

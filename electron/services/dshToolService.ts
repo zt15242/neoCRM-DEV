@@ -1057,7 +1057,8 @@ export class DshToolService {
     params: { code: string; description?: string },
     toolsContext: Record<string, Function>,
     timeoutMs = 60000,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    isProtectedOutput?: () => boolean
   ): Promise<{ value: any; logs: string[]; executionTimeMs: number; error?: string }> {
     if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
     const startTime = Date.now();
@@ -1140,7 +1141,7 @@ export class DshToolService {
       ptcJob.status = 'completed';
       ptcJob.exitCode = 0;
       ptcJob.endTime = Date.now();
-      ptcJob.outputBuffer = logs.join('\n');
+      ptcJob.outputBuffer = isProtectedOutput?.() ? '内置技能处理结果已保护' : logs.join('\n');
 
       return {
         value: result !== undefined ? result : null,
@@ -1152,7 +1153,7 @@ export class DshToolService {
       ptcJob.status = wasAborted ? 'killed' : 'error';
       ptcJob.exitCode = wasAborted ? 130 : 1;
       ptcJob.endTime = Date.now();
-      ptcJob.outputBuffer = logs.join('\n') + `\n[${wasAborted ? 'Stopped' : 'Error'}]: ${err.message}`;
+      ptcJob.outputBuffer = isProtectedOutput?.() ? '内置技能处理结果已保护' : logs.join('\n') + `\n[${wasAborted ? 'Stopped' : 'Error'}]: ${err.message}`;
 
       if (wasAborted) {
         throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });

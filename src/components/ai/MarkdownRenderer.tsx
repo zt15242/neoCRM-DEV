@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Check, Copy, Play, Workflow } from 'lucide-react';
 import { WorkflowDeployPlan } from '../../../shared/types';
 import { extractWorkflowPlanFromText } from './workflowPlanHelper';
@@ -6,17 +6,23 @@ import { WorkflowPlanCard } from "./WorkflowPlanCard";
 import { ApprovalPlanCard } from "./ApprovalPlanCard";
 import { extractApprovalPlanFromText } from "./approvalPlanHelper";
 import { ApprovalDeployPlan } from "../../../shared/types";
+import { MessageMediaContext, MessageMediaLink, MermaidPreview } from './MessageMedia';
+import { findMarkdownLink } from './messageMediaModel';
 
 interface MarkdownRendererProps {
   content: string;
+  projectPath?: string;
+  sessionId?: string;
+  isStreaming?: boolean;
   onExecuteSql?: (sql: string) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
   suppressDeploymentCards?: boolean;
 }
 
-const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
+const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, projectPath, sessionId, isStreaming, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const mediaContext = useMemo(() => ({ projectPath, sessionId }), [projectPath, sessionId]);
 
   const handleCopy = async (copyText: string, id: string) => {
     let ok = false;
@@ -53,7 +59,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
   if (!content) return null;
 
   // 将文本分割为代码块与普通文本块
-  const parts: Array<{ type: 'text' | 'code'; content: string; lang?: string }> = [];
+  const parts: Array<{ type: 'text' | 'code'; content: string; lang?: string; closed?: boolean }> = [];
   const codeBlockRegex = /```([a-zA-Z0-9_:.-]*)[ \t]*\r?\n([\s\S]*?)(?:```|$)/g;
   let lastIndex = 0;
   let match;
@@ -69,6 +75,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
       type: 'code',
       lang: match[1] || 'plaintext',
       content: match[2],
+      closed: match[0].endsWith('```'),
     });
     lastIndex = match.index + match[0].length;
   }
@@ -98,11 +105,16 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
   }
 
   return (
-    <div className="space-y-3 text-slate-800 text-[13px] leading-relaxed break-words select-text">
+    <MessageMediaContext.Provider value={mediaContext}>
+    <div className="space-y-3 min-w-0 text-slate-800 text-[13px] leading-relaxed break-words select-text">
       {parts.map((part, index) => {
         if (part.type === 'code') {
           const codeId = `code_${index}`;
           const isCopied = copiedId === codeId;
+          if (['mermaid', 'mmd', 'mindmap'].includes(part.lang?.toLowerCase() || '')) {
+            const source = part.lang?.toLowerCase() === 'mindmap' && !/^\s*mindmap\b/.test(part.content) ? `mindmap\n${part.content}` : part.content;
+            return <MermaidPreview key={index} source={source} pending={isStreaming && !part.closed} />;
+          }
           if (
             part.lang?.toLowerCase() === "json:decision-request" ||
             part.lang?.toLowerCase() === "decision-request"
@@ -246,6 +258,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, o
         return <TextBlock key={index} text={part.content} />;
       })}
     </div>
+    </MessageMediaContext.Provider>
   );
 };
 
@@ -459,9 +472,9 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
 
     // 8. 普通段落
     elements.push(
-      <p key={i} className="py-0.5">
+      <div key={i} className="py-0.5">
         {parseInline(rawLine)}
-      </p>
+      </div>
     );
   }
 
@@ -487,10 +500,17 @@ function parseInline(text: string): React.ReactNode[] {
     const boldMatch = remaining.match(/^([\s\S]*?)\*\*(.+?)\*\*([\s\S]*)$/);
     // 3. 行内代码 `...`
     const codeMatch = remaining.match(/^([\s\S]*?)`([^`]+)`([\s\S]*)$/);
-    // 4. 超链接 [text](url)
-    const linkMatch = remaining.match(/^([\s\S]*?)\[([^\]]+)\]\(([^)]+)\)([\s\S]*)$/);
+    // Images and links share a balanced destination parser (spaces, titles and parentheses).
+    const link = findMarkdownLink(remaining);
+    const linkMatch = link ? ['', remaining.slice(0, link.start), link.label, link.source, remaining.slice(link.end)] as unknown as RegExpMatchArray : null;
+    const rawUrl = remaining.match(/https?:\/\/[^\s<>"'\u3000-\u303f\uff00-\uffef]+/i);
+    const rawSource = rawUrl?.[0].replace(/[.,;!?]+$/, '').replace(/\)+$/, tail => {
+      const value = rawUrl[0];
+      const extra = (value.match(/\)/g)?.length || 0) - (value.match(/\(/g)?.length || 0);
+      return extra > 0 ? tail.slice(0, Math.max(0, tail.length - extra)) : tail;
+    });
 
-    let matchType: 'br' | 'bold' | 'code' | 'link' | null = null;
+    let matchType: 'br' | 'bold' | 'code' | 'link' | 'url' | null = null;
     let minPos = Infinity;
     let chosenMatch: RegExpMatchArray | null = null;
 
@@ -513,6 +533,11 @@ function parseInline(text: string): React.ReactNode[] {
       minPos = linkMatch[1].length;
       matchType = 'link';
       chosenMatch = linkMatch;
+    }
+    if (rawUrl && rawSource && rawUrl.index! < minPos) {
+      minPos = rawUrl.index!;
+      matchType = 'url';
+      chosenMatch = ['', remaining.slice(0, minPos), rawSource, rawSource, remaining.slice(minPos + rawSource.length)] as unknown as RegExpMatchArray;
     }
 
     if (!chosenMatch || !matchType) {
@@ -546,17 +571,14 @@ function parseInline(text: string): React.ReactNode[] {
         </code>
       );
       remaining = chosenMatch[3] || '';
-    } else if (matchType === 'link') {
+    } else if (matchType === 'link' || matchType === 'url') {
       parts.push(
-        <a
+        <MessageMediaLink
           key={`a_${keyIndex++}`}
-          href={chosenMatch[3]}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sky-600 hover:text-sky-700 underline mx-0.5 font-medium inline-flex items-center space-x-0.5"
-        >
-          <span>{chosenMatch[2]}</span>
-        </a>
+          source={chosenMatch[3]}
+          label={chosenMatch[2]}
+          image={matchType === 'link' && link?.image}
+        />
       );
       remaining = chosenMatch[4] || '';
     }
@@ -565,6 +587,4 @@ function parseInline(text: string): React.ReactNode[] {
   return parts;
 }
 
-export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps, nextProps) => {
-  return prevProps.content === nextProps.content && prevProps.suppressDeploymentCards === nextProps.suppressDeploymentCards;
-});
+export const MarkdownRenderer = React.memo(MarkdownRendererComponent);

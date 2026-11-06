@@ -76,8 +76,6 @@ interface ComposerContext {
   onClearSession?: () => void;
   onCompactSession?: () => void;
   onSelectPreset?: (presetId: string) => void;
-  onOpenFlowManager?: () => void;
-  onOpenPrintManager?: () => void;
   externalAttachmentToAdd?: AiFileAttachment | null;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
@@ -127,8 +125,6 @@ interface AiInputComposerProps {
   onClearSession?: () => void;
   onCompactSession?: () => void;
   onSelectPreset?: (presetId: string) => void;
-  onOpenFlowManager?: () => void;
-  onOpenPrintManager?: () => void;
   externalAttachmentToAdd?: AiFileAttachment | null;
   workflowLicenseStatus?: WorkflowLicenseStatus | null;
   onOpenLicenseModal?: () => void;
@@ -156,7 +152,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   activeMcpServerIds = [],
   onToggleMcpServer,
   onOpenMcpSettings,
-  placeholder = 'Ask anything, type / for commands, @ for files and entities...',
+  placeholder = '输入问题或任务，使用 / 调用指令，使用 @ 添加上下文…',
   quickPrompts = [],
   showToast,
   configuredProviders = [],
@@ -171,8 +167,6 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   onClearSession,
   onCompactSession,
   onSelectPreset,
-  onOpenFlowManager,
-  onOpenPrintManager,
   externalAttachmentToAdd,
   workflowLicenseStatus,
   onOpenLicenseModal,
@@ -260,8 +254,6 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     onClearSession,
     onCompactSession,
     onSelectPreset,
-    onOpenFlowManager,
-    onOpenPrintManager,
     mode,
     onToggleMode,
     onSwitchPanelTab,
@@ -982,7 +974,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           focusTextarea();
         }
       }}
-      className={`bg-white/95 backdrop-blur-md rounded-2xl border shadow-md transition-all p-3 space-y-2 relative cursor-text glass-card ${isDraggingFiles ? 'border-sky-400 ring-2 ring-sky-100' : 'border-slate-200/90 hover:border-slate-300'}`}
+      className={`ai-composer bg-white rounded-2xl border transition-all p-3 space-y-2 relative cursor-text ${isDraggingFiles ? 'border-sky-400 ring-2 ring-sky-100' : 'border-slate-200/90 hover:border-slate-300'}`}
     >
       {isDraggingFiles && (
         <div className="absolute inset-0 z-60 rounded-2xl bg-sky-50/95 border-2 border-dashed border-sky-400 flex items-center justify-center text-sky-700 text-sm pointer-events-none">
@@ -1184,6 +1176,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       {/* 主输入文本域 (强约束 min-h-[36px] 与 minHeight 样式，确保永远可见可点) */}
       <textarea
         ref={textareaRef}
+        aria-label="输入消息"
         value={text}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}

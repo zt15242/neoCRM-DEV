@@ -15,6 +15,7 @@ const MIME: Record<string, string> = {
   doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pdf: 'application/pdf', ppt: 'application/vnd.ms-powerpoint',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xmind: 'application/x-xmind',
 };
 
 export class FileService {
@@ -23,7 +24,7 @@ export class FileService {
       title: '选择要添加的文件', properties: ['openFile'],
       filters: [
         { name: '所有文件', extensions: ['*'] },
-        { name: '文档与文本 (Excel、Word、PDF、PPT)', extensions: [...DOCUMENT_EXTENSIONS, 'txt', 'md', 'json', 'sql', 'js', 'ts', 'java', 'xml', 'yaml', 'yml'] },
+        { name: '文档与文本 (Excel、Word、PDF、PPT、XMind)', extensions: [...DOCUMENT_EXTENSIONS, 'txt', 'md', 'json', 'sql', 'js', 'ts', 'java', 'xml', 'yaml', 'yml'] },
       ],
     };
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);

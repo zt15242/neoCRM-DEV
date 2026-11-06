@@ -46,8 +46,6 @@ interface AiSidebarProps {
   onUpdateSessionTitle: (sessionId: string, title: string) => void;
   onClearSessions: () => void;
   onSelectPreset: (presetId: string) => void;
-  onOpenFlowManager?: () => void;
-  onOpenPrintManager?: () => void;
   onOpenMetadata?: () => void;
   onOpenData?: () => void;
   onOpenSettings?: () => void;
@@ -67,8 +65,6 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
   onUpdateSessionTitle,
   onClearSessions,
   onSelectPreset,
-  onOpenFlowManager,
-  onOpenPrintManager,
   onOpenMetadata,
   onOpenData,
   onOpenSettings,
@@ -215,7 +211,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
         </div>
       )}
 
-      {/* 3. Codex 快捷导航条目 (New Chat / 流程库 / 模板库 / 插件 / 探索) */}
+      {/* 3. Codex 快捷导航条目 */}
       <div className="px-2 py-2 space-y-0.5 border-b border-slate-200/60">
         <button
           onClick={onNewChatDraft}
@@ -224,36 +220,6 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
           <SquarePen className="w-4 h-4 text-slate-600 group-hover:text-slate-900" />
           <span>New chat</span>
         </button>
-
-        {onOpenFlowManager && (
-          <button
-            onClick={onOpenFlowManager}
-            className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-200/60 hover:text-slate-900 transition-colors flex items-center justify-between cursor-pointer"
-          >
-            <div className="flex items-center space-x-2.5">
-              <Workflow className="w-4 h-4 text-teal-600" />
-              <span>流程资产库</span>
-            </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200">
-              Flows
-            </span>
-          </button>
-        )}
-
-        {onOpenPrintManager && (
-          <button
-            onClick={onOpenPrintManager}
-            className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-200/60 hover:text-slate-900 transition-colors flex items-center justify-between cursor-pointer"
-          >
-            <div className="flex items-center space-x-2.5">
-              <Printer className="w-4 h-4 text-amber-600" />
-              <span>打印模板库</span>
-            </div>
-            <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200">
-              Print
-            </span>
-          </button>
-        )}
 
         {onOpenMetadata && (
           <button

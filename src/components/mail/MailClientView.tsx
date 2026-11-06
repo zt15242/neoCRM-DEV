@@ -49,7 +49,7 @@ const MAIL_PANEL_LAYOUT_KEY = 'neo-mail-panel-layout-v1';
 const DEFAULT_MAIL_PANEL_LAYOUT: MailPanelLayout = {
   foldersCollapsed: false,
   listCollapsed: false,
-  copilotOpen: true,
+  copilotOpen: false,
   foldersWidth: 240,
   listWidth: 360,
   copilotWidth: 360,
@@ -64,8 +64,8 @@ const readMailPanelLayout = (): MailPanelLayout => {
       foldersCollapsed: parsed.foldersCollapsed ?? DEFAULT_MAIL_PANEL_LAYOUT.foldersCollapsed,
       listCollapsed: parsed.listCollapsed ?? DEFAULT_MAIL_PANEL_LAYOUT.listCollapsed,
       copilotOpen: parsed.copilotOpen ?? DEFAULT_MAIL_PANEL_LAYOUT.copilotOpen,
-      foldersWidth: Math.min(360, Math.max(200, parsed.foldersWidth || DEFAULT_MAIL_PANEL_LAYOUT.foldersWidth)),
-      listWidth: Math.min(520, Math.max(280, parsed.listWidth || DEFAULT_MAIL_PANEL_LAYOUT.listWidth)),
+      foldersWidth: Math.min(360, Math.max(160, parsed.foldersWidth || DEFAULT_MAIL_PANEL_LAYOUT.foldersWidth)),
+      listWidth: Math.min(520, Math.max(220, parsed.listWidth || DEFAULT_MAIL_PANEL_LAYOUT.listWidth)),
       copilotWidth: Math.min(520, Math.max(280, parsed.copilotWidth || DEFAULT_MAIL_PANEL_LAYOUT.copilotWidth)),
     };
   } catch {
@@ -83,9 +83,21 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
   const [panelLayout, setPanelLayout] = useState<MailPanelLayout>(readMailPanelLayout);
   const isCopilotOpen = panelLayout.copilotOpen;
   const panelContainerRef = useRef<HTMLDivElement>(null);
+  const [panelContainerWidth, setPanelContainerWidth] = useState(0);
+  const [detailPaneElement, setDetailPaneElement] = useState<HTMLDivElement | null>(null);
+  const [detailPaneWidth, setDetailPaneWidth] = useState(0);
+  const copilotOverlay = panelContainerWidth > 0 && panelContainerWidth < 1160;
+  const narrowPanels = panelContainerWidth > 0 && panelContainerWidth < 860;
   const foldersPaneRef = useRef<HTMLDivElement>(null);
   const listPaneRef = useRef<HTMLDivElement>(null);
   const copilotPaneRef = useRef<HTMLDivElement>(null);
+  const minimumFoldersWidth = panelLayout.foldersCollapsed ? 44 : narrowPanels ? 160 : 200;
+  const minimumListWidth = panelLayout.listCollapsed ? 44 : narrowPanels ? 220 : 280;
+  const copilotAlongside = isCopilotOpen && !copilotOverlay;
+  const panelHandlesWidth = 8 * (Number(!panelLayout.foldersCollapsed) + Number(!panelLayout.listCollapsed) + Number(copilotAlongside));
+  const detailMinWidth = Math.min(440, Math.max(320,
+    panelContainerWidth - minimumFoldersWidth - minimumListWidth - (copilotAlongside ? 280 : 0) - panelHandlesWidth,
+  ));
   const activeResizeRef = useRef<{
     panel: ResizablePanel;
     pointerId: number;
@@ -93,6 +105,25 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
     startWidth: number;
     direction: 1 | -1;
   } | null>(null);
+
+  useEffect(() => {
+    const container = panelContainerRef.current;
+    if (!container) return;
+    const updateWidth = () => setPanelContainerWidth(container.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!detailPaneElement) return;
+    const updateWidth = () => setDetailPaneWidth(detailPaneElement.clientWidth);
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(detailPaneElement);
+    return () => observer.disconnect();
+  }, [detailPaneElement]);
 
   useEffect(() => {
     try {
@@ -107,7 +138,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
   };
 
   const getPanelBounds = (panel: ResizablePanel) => {
-    const minimum = panel === 'folders' ? 200 : 280;
+    const minimum = panel === 'folders' ? (narrowPanels ? 160 : 200) : panel === 'list' && narrowPanels ? 220 : 280;
     const maximum = panel === 'folders' ? 360 : 520;
     const containerWidth = panelContainerRef.current?.clientWidth || window.innerWidth;
     const otherWidths = (['folders', 'list', 'copilot'] as ResizablePanel[])
@@ -115,7 +146,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
       .reduce((sum, other) => {
         if (other === 'folders' && panelLayout.foldersCollapsed) return sum + 44;
         if (other === 'list' && panelLayout.listCollapsed) return sum + 44;
-        if (other === 'copilot' && !panelLayout.copilotOpen) return sum;
+        if (other === 'copilot' && (!panelLayout.copilotOpen || copilotOverlay)) return sum;
         const element = getPanelElement(other);
         const measuredWidth = element?.getBoundingClientRect().width;
         const savedWidth = other === 'folders'
@@ -127,8 +158,8 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
       }, 0);
     const handleCount = Number(!panelLayout.foldersCollapsed)
       + Number(!panelLayout.listCollapsed)
-      + Number(panelLayout.copilotOpen);
-    const availableMax = containerWidth - 360 - otherWidths - handleCount * 8;
+      + Number(panelLayout.copilotOpen && !copilotOverlay);
+    const availableMax = containerWidth - detailMinWidth - otherWidths - handleCount * 8;
     return { minimum, maximum: Math.max(minimum, Math.min(maximum, availableMax)) };
   };
 
@@ -506,16 +537,9 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
   return (
     <div className="h-full w-full flex flex-col bg-white overflow-hidden font-sans select-none">
       {/* 1. 顶部全功能快捷栏 (Foxmail 标志性顶栏) */}
-      <div className="h-10 px-4 bg-slate-900 border-b border-slate-800 text-slate-200 flex items-center justify-between shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse shadow-[0_0_8px_#38bdf8]" />
-            <span className="font-bold text-xs tracking-wider text-white uppercase font-mono">
-              Foxmail 企业级智能邮件客户端 · AI 人物画像
-            </span>
-          </div>
-
-          <span className="text-slate-600">|</span>
+      <div className="mail-workspace__toolbar px-3 bg-slate-900 border-b border-slate-800 text-slate-200 flex items-center justify-between gap-3 shrink-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="mail-workspace__title text-sm font-semibold text-white whitespace-nowrap">智能邮件</span>
 
           {/* 自动获取状态与频率设置下拉 */}
           <div className="relative">
@@ -527,7 +551,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             >
               <Clock className="w-3 h-3 text-sky-400" />
               <span>
-                {autoSyncInterval > 0 ? `自动获取: 每${autoSyncInterval / 60}分钟` : '自动获取: 已暂停'}
+                {autoSyncInterval > 0 ? `自动收取 · ${autoSyncInterval / 60}分钟` : '自动收取 · 已暂停'}
               </span>
               <ChevronDown className="w-2.5 h-2.5 opacity-60" />
             </button>
@@ -572,7 +596,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             title="通过 IMAP 全量扫描收件箱所有邮件信头并对齐入库"
           >
             <DownloadCloud className={`w-3.5 h-3.5 text-sky-300 ${isSyncing ? 'animate-bounce' : ''}`} />
-            <span>{isSyncing ? '正在同步全量邮件...' : '同步收件箱全部所有邮件'}</span>
+            <span>{isSyncing ? '同步中…' : '同步全部'}</span>
           </button>
 
           {/* 快捷添加真实邮箱 */}
@@ -583,7 +607,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             title="添加 QQ/163/企业邮/M365/Gmail 真实邮箱账号"
           >
             <Plus className="w-3.5 h-3.5 text-sky-400" />
-            <span>添加邮箱账号</span>
+            <span>添加邮箱</span>
           </button>
 
           {/* 快捷入口: 全景人物画像中心 */}
@@ -593,14 +617,14 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             className="px-2.5 py-0.8 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-400/30 text-xs font-semibold flex items-center space-x-1.5 transition-all cursor-pointer active:scale-95"
           >
             <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
-            <span>联系人人物画像库</span>
+            <span>联系人</span>
           </button>
         </div>
 
         {/* 右侧副驾驶切换开关 */}
         <div className="flex items-center space-x-2">
           {syncProgressText && (
-            <span className="text-[11px] text-sky-400 font-mono animate-pulse mr-2">
+            <span className="max-w-32 truncate text-[11px] text-sky-400 mr-2">
               {syncProgressText}
             </span>
           )}
@@ -614,16 +638,18 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
             title="折叠/展开 AI 邮件智能副驾驶"
+            aria-expanded={isCopilotOpen}
+            aria-controls="mail-copilot-panel"
           >
             <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-            <span>AI 智能副驾驶</span>
+            <span>AI 助手</span>
             {isCopilotOpen ? <PanelRightClose className="w-3.5 h-3.5 ml-0.5" /> : <PanelRightOpen className="w-3.5 h-3.5 ml-0.5" />}
           </button>
         </div>
       </div>
 
       {/* 2. 核心三栏/四栏布局 */}
-      <div ref={panelContainerRef} className="flex-1 flex min-h-0 overflow-hidden">
+      <div ref={panelContainerRef} className="mail-workspace__panels relative flex-1 flex min-h-0 min-w-0 overflow-hidden">
         {/* 栏 1: 左侧文件夹树 (Foxmail 风格，多账号管理) */}
         {panelLayout.foldersCollapsed ? (
           <div className="flex h-full w-11 shrink-0 flex-col items-center border-r border-slate-800 bg-[#0f172a] pt-2">
@@ -640,8 +666,8 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
         ) : (
           <div
             ref={foldersPaneRef}
-            className="h-full min-w-[200px] shrink overflow-hidden"
-            style={{ width: panelLayout.foldersWidth, flexBasis: panelLayout.foldersWidth }}
+            className="h-full shrink overflow-hidden"
+            style={{ width: panelLayout.foldersWidth, flexBasis: panelLayout.foldersWidth, minWidth: narrowPanels ? 160 : 200 }}
           >
             <MailFolderNav
               currentFolder={currentFolder}
@@ -717,8 +743,8 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             ) : (
               <div
                 ref={listPaneRef}
-                className="h-full min-w-[280px] shrink overflow-hidden"
-                style={{ width: panelLayout.listWidth, flexBasis: panelLayout.listWidth }}
+                className="h-full shrink overflow-hidden"
+                style={{ width: panelLayout.listWidth, flexBasis: panelLayout.listWidth, minWidth: narrowPanels ? 220 : 280 }}
               >
                 <MailListPane
                   emails={activeAccountId === 'all' ? emails : emails.filter((e) => e.accountId === activeAccountId)}
@@ -735,7 +761,7 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             {!panelLayout.listCollapsed && renderResizeHandle('list', '调整邮件列表宽度', 1)}
 
             {/* 栏 3: 右侧邮件正文查看器 */}
-            <div className="flex-1 h-full min-w-[360px] flex flex-col overflow-hidden">
+            <div ref={setDetailPaneElement} className="flex-1 h-full flex flex-col overflow-hidden" style={{ minWidth: detailMinWidth }}>
               <MailDetailPane
                 email={selectedEmail}
                 currentUserEmail={accounts.find((a) => a.id === (selectedEmail?.accountId || activeAccountId))?.email || accounts[0]?.email}
@@ -751,12 +777,21 @@ export const MailClientView: React.FC<MailClientViewProps> = ({ showToast }) => 
             {/* 栏 4: 右侧展开的 AI 智能副驾驶协同栏 (需求分析 / 智能回复 / 人物画像) */}
             {isCopilotOpen && (
               <>
-                {renderResizeHandle('copilot', '调整 AI 副驾驶宽度', -1)}
+                {!copilotOverlay && renderResizeHandle('copilot', '调整 AI 副驾驶宽度', -1)}
                 <div
+                  id="mail-copilot-panel"
                   ref={copilotPaneRef}
-                  className="h-full min-w-[280px] shrink overflow-hidden animate-in slide-in-from-right-4 duration-200"
-                  style={{ width: panelLayout.copilotWidth, flexBasis: panelLayout.copilotWidth }}
+                  className={copilotOverlay ? 'mail-copilot-overlay flex flex-col' : 'h-full min-w-[280px] shrink overflow-hidden'}
+                  style={copilotOverlay ? { width: Math.min(400, detailPaneWidth || 400) } : { width: panelLayout.copilotWidth, flexBasis: panelLayout.copilotWidth }}
                 >
+                {copilotOverlay && (
+                  <div className="mail-copilot-overlay__header">
+                    <span>AI 助手</span>
+                    <button type="button" onClick={() => setPanelLayout((current) => ({ ...current, copilotOpen: false }))}>
+                      返回邮件
+                    </button>
+                  </div>
+                )}
                 <MailAiCopilot
                   email={selectedEmail}
                   onOpenReplyCompose={(replyData) => handleOpenCompose(replyData)}

@@ -44,6 +44,7 @@ export const neoApi = {
   projectOpenFolder: (folderPath: string) => ipcRenderer.invoke('project:openFolder', folderPath),
   projectListFiles: (params?: { folderPath?: string; query?: string; maxFiles?: number }) => ipcRenderer.invoke('project:listFiles', params),
   fileParseLocalPath: (filePath: string) => ipcRenderer.invoke('file:parseLocalPath', filePath),
+  filePreviewMessage: (request: import('../shared/messagePreview').MessagePreviewRequest) => ipcRenderer.invoke('file:previewMessage', request),
   fileGetPath: (file: File) => webUtils.getPathForFile(file),
   clipboardReadFilePaths: () => ipcRenderer.invoke('clipboard:readFilePaths'),
   clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text),

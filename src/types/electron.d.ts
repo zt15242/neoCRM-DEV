@@ -99,6 +99,7 @@ declare global {
         size: number;
       }>>;
       fileParseLocalPath: (filePath: string) => Promise<AiFileAttachment>;
+      filePreviewMessage: (request: import('../../shared/messagePreview').MessagePreviewRequest) => Promise<import('../../shared/messagePreview').MessageFilePreview>;
       fileGetPath: (file: File) => string;
       clipboardReadFilePaths: () => Promise<string[]>;
       clipboardWriteText: (text: string) => Promise<boolean>;

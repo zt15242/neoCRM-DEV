@@ -142,39 +142,28 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="connector-hub space-y-6">
       {/* 1. 顶部标题栏与全局操作 */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center space-x-2.5">
-            <div className="p-1.5 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 text-white shadow-xs">
-              <Server className="w-4 h-4" />
-            </div>
-            <h2 className="text-base font-bold text-slate-800 tracking-wide">
-              CRM 环境连接器中心 (Connectors Hub)
-            </h2>
-            <span className="text-xs text-slate-400 font-mono">
-              (共 {environments.length} 个配置连接器)
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            支持集中管理销售易、Salesforce、纷享销客等多套 CRM 环境连接器，点击卡片即可在多环境间秒级无缝切换
-          </p>
+      <div className="connector-hub__header flex flex-col sm:flex-row sm:items-end justify-between gap-5">
+        <div className="min-w-0">
+          <h1 className="connector-hub__title">CRM 连接器</h1>
+          <p className="connector-hub__description">管理销售易、Salesforce 和纷享销客的连接环境。</p>
         </div>
-
         <button
+          type="button"
           onClick={() => onAddCustom()}
-          className="flex items-center space-x-1.5 text-xs text-white font-semibold px-4 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 transition-all shadow-xs cursor-pointer shrink-0 self-start sm:self-auto"
+          className="connector-hub__primary inline-flex items-center justify-center gap-2 shrink-0 self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
-          <span>新建 CRM 连接器</span>
+          <span>新建连接器</span>
         </button>
       </div>
 
       {/* 2. 品牌与产品分类切换过滤器 (Product Tabs) */}
-      <div className="flex items-center space-x-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80 text-xs select-none overflow-x-auto">
+      <div className="connector-hub__filters flex items-center gap-1 overflow-x-auto" role="group" aria-label="筛选连接器类型">
         <button
           onClick={() => setActiveFilter('all')}
+          aria-pressed={activeFilter === 'all'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
             activeFilter === 'all'
               ? 'bg-white text-slate-900 shadow-2xs font-bold'
@@ -186,6 +175,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
 
         <button
           onClick={() => setActiveFilter('neocrm')}
+          aria-pressed={activeFilter === 'neocrm'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'neocrm'
               ? 'bg-white text-sky-700 shadow-2xs font-bold'
@@ -198,6 +188,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
 
         <button
           onClick={() => setActiveFilter('salesforce')}
+          aria-pressed={activeFilter === 'salesforce'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'salesforce'
               ? 'bg-white text-cyan-700 shadow-2xs font-bold'
@@ -210,6 +201,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
 
         <button
           onClick={() => setActiveFilter('fxiaoke')}
+          aria-pressed={activeFilter === 'fxiaoke'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'fxiaoke'
               ? 'bg-white text-orange-700 shadow-2xs font-bold'
@@ -222,57 +214,58 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
 
         <button
           onClick={() => setActiveFilter('custom')}
+          aria-pressed={activeFilter === 'custom'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'custom'
-              ? 'bg-white text-purple-700 shadow-2xs font-bold'
+              ? 'bg-white text-slate-900 shadow-2xs font-bold'
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
-          <Plug className="w-3.5 h-3.5 text-purple-600" />
+          <Plug className="w-3.5 h-3.5 text-slate-600" />
           <span>自定义 CRM ({counts.custom})</span>
         </button>
       </div>
 
       {/* 3. 连接器卡片网格布局与空状态 */}
       {filteredEnvironments.length === 0 ? (
-        <div className="py-12 px-6 bg-slate-50/70 border border-dashed border-slate-200 rounded-3xl text-center space-y-4">
-          <div className="w-12 h-12 bg-white rounded-2xl shadow-xs border border-slate-200 mx-auto flex items-center justify-center text-slate-400">
+        <div className="connector-hub__empty">
+          <div className="connector-hub__empty-icon">
             <Server className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-sm font-bold text-slate-800">暂无配置的 CRM 连接器</h3>
-            <p className="text-xs text-slate-400 max-w-md mx-auto">
-              您可以点击右上角【+ 新建 CRM 连接器】自由配置环境，或点击下方官方模板卡片快速一键初始化
+            <h2 className="connector-hub__empty-title">{activeFilter === 'all' ? '添加第一个连接器' : '此分类暂无连接器'}</h2>
+            <p className="connector-hub__empty-description">
+              {activeFilter === 'all' ? '选择 CRM 类型开始配置，或新建自定义连接器。' : '切换分类查看其他连接器，或新建一个连接器。'}
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5 max-w-3xl mx-auto pt-2">
+          <div className="connector-hub__quick grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
             <button
               onClick={() => onAddCustom({ productType: 'neocrm', name: '销售易 - 专属沙盒环境', neoBaseURL: 'https://crm-sandbox.xiaoshouyi.com' })}
               className="p-3 bg-white hover:bg-sky-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
             >
               <Layers className="w-4 h-4 text-sky-600 shrink-0" />
-              <span className="truncate">+ 销售易 NeoCRM</span>
+              <span className="truncate">销售易 NeoCRM</span>
             </button>
             <button
               onClick={() => onAddCustom({ productType: 'salesforce', name: 'Salesforce 阿里中国 - 沙盒环境', neoBaseURL: 'https://test.sfcrmproducts.cn' })}
               className="p-3 bg-white hover:bg-cyan-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
             >
               <Cloud className="w-4 h-4 text-cyan-600 shrink-0" />
-              <span className="truncate">+ Salesforce 阿里中国</span>
+              <span className="truncate">Salesforce 阿里中国</span>
             </button>
             <button
               onClick={() => onAddCustom({ productType: 'salesforce', name: 'Salesforce 全球版 - 沙盒环境', neoBaseURL: 'https://test.salesforce.com' })}
               className="p-3 bg-white hover:bg-cyan-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
             >
               <Cloud className="w-4 h-4 text-cyan-600 shrink-0" />
-              <span className="truncate">+ Salesforce 全球版</span>
+              <span className="truncate">Salesforce 全球版</span>
             </button>
             <button
               onClick={() => onAddCustom({ productType: 'fxiaoke', name: '纷享销客 - 开放平台连接器', neoBaseURL: 'https://open.fxiaoke.com' })}
               className="p-3 bg-white hover:bg-orange-50/60 rounded-xl border border-slate-200 text-left transition-colors flex items-center space-x-2 text-xs font-medium text-slate-700 cursor-pointer"
             >
               <Flame className="w-4 h-4 text-orange-600 shrink-0" />
-              <span className="truncate">+ 纷享销客 OpenAPI</span>
+              <span className="truncate">纷享销客 OpenAPI</span>
             </button>
           </div>
         </div>
@@ -290,7 +283,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
             <div
               key={env.id}
               onClick={() => onOpenDetail(env.id)}
-              className={`group relative p-4 rounded-2xl border text-left cursor-pointer transition-all duration-200 select-none flex flex-col justify-between ${
+              className={`connector-hub__card group relative p-4 rounded-2xl border text-left cursor-pointer transition-all duration-200 select-none flex flex-col justify-between ${
                 isSelected
                   ? 'bg-gradient-to-br from-sky-50/80 via-white to-slate-50 dark:from-slate-900/90 dark:via-slate-900/80 dark:to-slate-900/90 border-sky-400 dark:border-sky-500 shadow-md ring-2 ring-sky-400/40 dark:ring-sky-400/20'
                   : 'bg-white dark:bg-slate-900/50 border-slate-200/90 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 hover:shadow-sm'
@@ -501,10 +494,15 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
                 </button>
 
                 {/* 查看详情与连接 */}
-                <div className="flex items-center space-x-1 text-[11px] font-semibold text-slate-600 group-hover:text-sky-600 group-hover:translate-x-0.5 transition-all">
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); onOpenDetail(env.id); }}
+                  aria-label={`查看连接器 ${env.name} 的详情`}
+                  className="flex items-center space-x-1 text-xs font-semibold text-slate-600 hover:text-sky-600 transition-colors"
+                >
                   <span>查看详情 / 登录连接</span>
                   <ArrowRight className="w-3 h-3" />
-                </div>
+                </button>
               </div>
             </div>
           );

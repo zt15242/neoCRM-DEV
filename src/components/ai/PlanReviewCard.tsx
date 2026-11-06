@@ -4,6 +4,8 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface PlanReviewCardProps {
   plan: string;
+  projectPath?: string;
+  sessionId?: string;
   isAnswered?: boolean;
   onApprove: () => void;
   onReject?: (feedback: string) => void;
@@ -11,6 +13,8 @@ interface PlanReviewCardProps {
 
 export const PlanReviewCard: React.FC<PlanReviewCardProps> = ({
   plan,
+  projectPath,
+  sessionId,
   isAnswered = false,
   onApprove,
   onReject,
@@ -65,7 +69,7 @@ export const PlanReviewCard: React.FC<PlanReviewCardProps> = ({
       {/* 方案全文展示区 */}
       {expanded && (
         <div className="p-3 bg-white/90 rounded-xl border border-indigo-100 text-xs text-slate-700 max-h-96 overflow-y-auto leading-relaxed select-text">
-          <MarkdownRenderer content={plan} />
+          <MarkdownRenderer content={plan} projectPath={projectPath} sessionId={sessionId} />
         </div>
       )}
 

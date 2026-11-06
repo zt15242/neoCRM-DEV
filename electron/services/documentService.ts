@@ -6,8 +6,9 @@ import { SaxesParser } from 'saxes';
 import * as CFB from 'cfb';
 import { createRequire } from 'node:module';
 import DOMMatrix from '@thednp/dommatrix';
+import { parseXMind } from './messagePreviewService';
 
-export const DOCUMENT_EXTENSIONS = ['xlsx', 'xls', 'xlsm', 'csv', 'tsv', 'ods', 'doc', 'docx', 'pdf', 'ppt', 'pptx'];
+export const DOCUMENT_EXTENSIONS = ['xlsx', 'xls', 'xlsm', 'csv', 'tsv', 'ods', 'doc', 'docx', 'pdf', 'ppt', 'pptx', 'xmind'];
 export const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 const MAX_TEXT = 8_000_000;
 const MAX_SECTIONS = 2000;
@@ -175,6 +176,12 @@ async function pdfDocument(buffer: Buffer): Promise<ParsedDocument> {
 
 async function parseDocument(filename: string, buffer: Buffer): Promise<ParsedDocument> {
   const format = path.extname(filename).slice(1).toLowerCase();
+  if (format === 'xmind') {
+    const map = await parseXMind(buffer);
+    const lines = (node: import('../../shared/messagePreview').MindMapTopic, depth = 0): string[] =>
+      [`${'  '.repeat(depth)}- ${node.title}`, ...node.children.flatMap(child => lines(child, depth + 1))];
+    return { format, sections: map.sheets.map(sheet => ({ id: sheet.id, title: sheet.title, kind: 'mindmap', lines: linesOf(lines(sheet.root).join('\n')) })), warnings: map.warnings };
+  }
   const warnings: string[] = [];
   let zip: JSZip | undefined;
   if (buffer[0] === 0x50 && buffer[1] === 0x4b) zip = await checkedZip(buffer);

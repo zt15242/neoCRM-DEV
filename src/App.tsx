@@ -16,8 +16,6 @@ import { CustomEnvModal } from './components/CustomEnvModal';
 import { AccountHistoryModal } from './components/AccountHistoryModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { UpdateModal } from './components/UpdateModal';
-import { FlowManagerModal } from './components/ai/FlowManagerModal';
-import { PrintTemplateManagerModal } from './components/ai/PrintTemplateManagerModal';
 import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
@@ -81,8 +79,6 @@ export const App: React.FC = () => {
   const [selectedPresetId, setSelectedPresetId] = useState<string>('harness-agent');
   const [workflowLicenseStatus, setWorkflowLicenseStatus] = useState<WorkflowLicenseStatus | null>(null);
   const [isLicenseModalOpen, setIsLicenseModalOpen] = useState(false);
-  const [isFlowManagerOpen, setIsFlowManagerOpen] = useState(false);
-  const [isPrintManagerOpen, setIsPrintManagerOpen] = useState(false);
 
   // 系统与 AI 设置弹窗状态 (整体以弹窗展示)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -559,8 +555,6 @@ export const App: React.FC = () => {
         onOpenDocs={() => window.neoApi.openExternal('https://crm.xiaoshouyi.com')}
         hasUpdate={!!updateInfo?.hasUpdate}
         onCheckUpdate={() => handleCheckUpdate(true)}
-        onOpenFlowManager={() => setIsFlowManagerOpen(true)}
-        onOpenPrintManager={() => setIsPrintManagerOpen(true)}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={(id) => {
@@ -775,8 +769,6 @@ export const App: React.FC = () => {
             workflowLicenseStatus={workflowLicenseStatus}
             onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
             activeProject={projects.find((p) => p.id === activeProjectId) || projects[0]}
-            onOpenFlowManager={() => setIsFlowManagerOpen(true)}
-            onOpenPrintManager={() => setIsPrintManagerOpen(true)}
             onNavigateToSettings={(tab) => handleOpenSettings((tab as SettingsSubTab) || 'models')}
             onNavigateToMetadata={() => setActiveTab('metadata')}
             onNavigateToData={() => setActiveTab('data')}
@@ -833,31 +825,6 @@ export const App: React.FC = () => {
         onClose={() => setIsHistoryOpen(false)}
         onSwitch={handleSwitchAccount}
         onDelete={handleDeleteHistoryRecord}
-      />
-
-      {/* 租户流程资产管理中心 (自动流程 & 新版审批流) */}
-      <FlowManagerModal
-        isOpen={isFlowManagerOpen}
-        crmSession={session}
-        licenseStatus={workflowLicenseStatus}
-        onClose={() => setIsFlowManagerOpen(false)}
-        onSendToAiPrompt={() => {
-          setIsFlowManagerOpen(false);
-          setActiveTab('ai');
-        }}
-        showToast={showToast}
-      />
-
-      {/* 租户打印模板资产管理中心 (免锁开放) */}
-      <PrintTemplateManagerModal
-        isOpen={isPrintManagerOpen}
-        crmSession={session}
-        onClose={() => setIsPrintManagerOpen(false)}
-        onSendToAiPrompt={() => {
-          setIsPrintManagerOpen(false);
-          setActiveTab('ai');
-        }}
-        showToast={showToast}
       />
 
       {/* 创建 / 编辑本地项目工作区弹窗 */}

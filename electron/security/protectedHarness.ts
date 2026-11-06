@@ -5,6 +5,7 @@ import { decryptBuiltinSkillAsset } from './protectedSkillAssets';
 import { NEO_CLI_SKILLS_INSTRUCTIONS } from './neoCliSkills';
 import { getNeoCliConversationSkill } from './neoCliConversation';
 import { DOCUMENT_TOOLS_SPEC, getDocumentReadingSkill } from './documentTools';
+import { getRestrictedPackageInstruction, isRestrictedSkillPackage } from './restrictedSkillPackages';
 /**
  * NeoCRM Desktop 内核受保护的私有资产与安全规范
  * 注意: 本文件包含深度封装的系统技能与内部 Harness 工具定义，受内核混淆保护，禁止导出与反向破解。
@@ -152,6 +153,7 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 
 
 export function getProtectedSkillInstruction(skillId: string): string | null {
+  if (isRestrictedSkillPackage(skillId)) return getRestrictedPackageInstruction(skillId);
   const documentSkill = getDocumentReadingSkill(skillId);
   if (documentSkill) return documentSkill;
   if (isRestrictedSkill(skillId)) {
@@ -397,15 +399,17 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'execute_open_api',
-      description: '通过当前销售易连接器执行接口请求。仅限销售易。url 可传相对路径或 API 文档完整 URL；宿主始终替换原域名为当前连接器环境。/rest/ 接口使用连接器 OAuth Bearer Token，/admin/ 后台接口使用当前后台会话 Cookie，两类凭证由宿主按路径选择并注入；不要读取或提供令牌/Cookie、不要用 bash/curl。支持 GET/POST/PUT/PATCH/DELETE 和 JSON 请求体；fileUpload.action 虽然属于 /admin/ Cookie 鉴权接口，但需 multipart 文件请求，当前工具不支持其文件上传请求体。写请求须先展示租户、方法、最终路径、查询参数和请求体，取得用户明确确认后设置 confirm=true。',
+      description: '通过当前销售易连接器执行接口请求。url 的域名始终替换为当前连接器环境。/rest/ 使用连接器 OAuth Token，/admin/ 使用后台 Cookie，宿主按路径注入；不要读取或提供凭据，不用 bash/curl。支持 JSON 和 URL 编码表单，bodyEncoding 指定格式；已编码表单字符串原样发送。fileUpload.action 所需 multipart 文件上传尚不支持。写操作（含有副作用 GET）先展示租户、方法、路径和参数，在用户明确授权范围内设 confirm=true；已有同一范围授权无需重复询问。',
       parameters: {
         type: 'object',
         properties: {
           method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
           url: { type: 'string', description: 'Open API 路径（如 /rest/metadata/v2.0/...）或文档完整 URL；原域名会被替换为当前连接器实例。' },
           queryParams: { type: 'object', description: '可选 URL 查询参数。' },
-          body: { type: 'object', description: '可选 JSON 对象请求体；GET 不发送请求体。' },
-          confirm: { type: 'boolean', description: 'POST/PUT/PATCH/DELETE 必须在用户明确确认展示的目标租户、方法、路径和请求体后设为 true。' },
+          body: { description: '可选 JSON 值；表单模式传字段对象或已编码字符串，保留空字段与 JSON 字符串；GET 不发送请求体。', anyOf: [{ type: 'object' }, { type: 'array', items: {} }, { type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }] },
+          bodyEncoding: { type: 'string', enum: ['json', 'form'], description: '默认 json；后台表单合同使用 form，不能将表单字段错误地作为 JSON 发送。' },
+          mutates: { type: 'boolean', description: '接口有副作用时设 true，尤其发布、保存、复制、启停等 GET。' },
+          confirm: { type: 'boolean', description: '所有写操作（含有副作用的 GET）在用户明确授权展示的目标租户、方法、路径和参数后设为 true；沿用同一目标范围的已有授权。' },
         },
         required: ['method', 'url'],
       },
@@ -1530,7 +1534,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'skill',
-      description: '按需加载特定技能的完整执行指令与专业知识规范。当用户的任务明确匹配可用技能列表 (<available_skills>) 时，请在采取行动前调用此工具。',
+      description: '按需加载技能规范。具有配套资源的技能返回资源目录，可用 resource 按行读取；用 script、exportName、args 调用包内同步离线请求构造或校验函数，不访问网络、不写入文件。实际接口执行仍使用当前连接器。',
       parameters: {
         type: 'object',
         properties: {
@@ -1538,6 +1542,12 @@ export const CRM_HARNESS_TOOLS_SPEC = [
             type: 'string',
             description: '技能的准确 API 名称标识 (如 skill-process-implementation-perspective, skill-salesforce-cli, skill-fxiaoke-crm-cli 等)',
           },
+          resource: { type: 'string', description: '入口返回的配套资源相对路径，与 script 互斥。' },
+          offset: { type: 'integer', description: '资源起始行，默认 1。' },
+          limit: { type: 'integer', description: '读取行数，默认 160，最大 400；有 nextOffset 时继续读取。' },
+          script: { type: 'string', description: '包内 scripts/*.mjs 路径。只运行内置的离线构造和校验函数。' },
+          exportName: { type: 'string', description: '脚本导出函数名；读取该脚本资源可获得 exports 列表。' },
+          args: { type: 'array', items: {}, description: '函数参数数组，例如单个对象参数使用 [{...}]。' },
         },
         required: ['name'],
       },

@@ -1,5 +1,6 @@
 import { restrictedFeatureService } from '../security/restrictedFeatureService';
 import { isRestrictedRole, isRestrictedSkill } from '../../shared/restrictedFeatures';
+import { getRestrictedSkillDiscovery, readRestrictedSkillPackage } from '../security/restrictedSkillPackages';
 import { requiresFlowLicense } from '../../shared/licensePolicy';
 import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
@@ -274,7 +275,7 @@ export class AiService {
     canceled?: boolean;
   }> {
     const config = this.getAiConfig();
-    let candidates = (config.skills || []).filter((s) => s.category === "personal");
+    let candidates = (config.skills || []).filter((s) => s.category === "personal" && !isProtectedBuiltinSkill(s.id));
     if (skillIds && skillIds.length > 0) {
       candidates = candidates.filter((s) => skillIds.includes(s.id));
     }
@@ -389,7 +390,7 @@ export class AiService {
       }
       // (2) 个人技能：保留用户自定义指令
       for (const ps of rawPersonalSkills) {
-        mergedSkills.push(ps);
+        if (!isProtectedBuiltinSkill(ps.id)) mergedSkills.push(ps);
       }
 
       return {
@@ -412,7 +413,7 @@ export class AiService {
   public saveAiConfig(config: AiConfigData): boolean {
     try {
       // 1. 过滤只保留纯个人自定义技能，绝不落盘任何系统内置技能的 Prompt 指令
-      const personalSkills = (config.skills || []).filter((s) => s.category === "personal");
+      const personalSkills = (config.skills || []).filter((s) => s.category === "personal" && !isProtectedBuiltinSkill(s.id));
 
       // 2. 提取内置技能的开关状态字典
       const builtinSkillStates: Record<string, boolean> = {};
@@ -1001,17 +1002,20 @@ export class AiService {
     sendEvent = (event) => {
       const call = event.toolCall;
       const skillName = call?.arguments?.name;
-      if (call?.name === 'skill' && typeof skillName === 'string' && isProtectedBuiltinSkill(skillName)) {
+      const builtinId = BUILTIN_AI_SKILLS.find(skill => skill.name === skillName)?.id;
+      if ((call?.name === 'skill' && typeof skillName === 'string' && isProtectedBuiltinSkill(builtinId || skillName)) ||
+          (call?.name === 'run_code' && call.resultData?.protectedBuiltin)) {
         emitToRenderer({
           ...event,
           toolCall: {
             ...call,
             resultData: call.resultData ? { name: skillName, protectedBuiltin: true } : undefined,
+            resultSummary: call.name === 'run_code' ? (call.resultData?.error ? '内置技能处理失败，详细信息仅供模型诊断' : '已完成内置技能处理') : call.resultSummary,
           },
         });
         return;
       }
-      emitToRenderer(event);
+      emitToRenderer(call ? { ...event, toolCall: { ...call } } : event);
     };
 
     // 必须在任何压缩、MCP 探测或模型校验前注册控制器，否则用户在准备阶段点击停止时没有可取消句柄。
@@ -1177,6 +1181,7 @@ export class AiService {
 
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
       const systemParts: string[] = [];
+      systemParts.push('【回复中的图片与图表】展示图片请用 ![图片说明](真实图片 URL 或当前项目文件路径)。流程图、时序图、ER 图和思维导图请使用 mermaid 代码块，客户端会直接渲染；不要输出需要执行脚本的 HTML 或图表配置指令。已存在的 XMind 文件请使用 [文件名](真实 .xmind 路径) 链接，客户端可预览主题层级，也可用 read_document 按画布读取。不要虚构图片链接或文件路径。');
       if (this.agentContext.getStore()?.managed) {
         systemParts.push('你是主会话派发的执行代理。完成本会话的明确任务，汇报真实结果、文件路径、验证和未完成事项。不得再创建或调度代理。需要用户确认时说明具体问题并等待，不能自行扩大授权。');
       } else if (mode !== 'minimal' && enableTools !== false && config.settings.enableCrmTools) systemParts.push(AGENT_ROUTING_INSTRUCTION);
@@ -1188,7 +1193,7 @@ export class AiService {
       const isStandardMode = sessionMode === 'standard' || sessionMode === 'default';
 
       const documentTask = messages.some(message => message.role === 'user' && message.attachments?.length)
-        || /excel|word|pdf|ppt|幻灯片|读取文件|文档|表格|\.(?:xlsx?|docx?|pptx?)\b/i.test([...messages].reverse().find(m => m.role === 'user')?.content || '');
+        || /excel|word|pdf|ppt|xmind|思维导图|幻灯片|读取文件|文档|表格|\.(?:xlsx?|docx?|pptx?)\b/i.test([...messages].reverse().find(m => m.role === 'user')?.content || '');
       if (!isMinimalMode && documentTask && config.skills?.find(skill => skill.id === DOCUMENT_SKILL_ID)?.enabled !== false) {
         const instruction = getDocumentReadingSkill(DOCUMENT_SKILL_ID)!;
         systemParts.push(`【已加载技能 document-reader】\n${instruction}`);
@@ -1256,11 +1261,13 @@ declare const tools: {
   str_replace_editor(args: { command: 'view'|'create'|'str_replace'|'insert'; path: string; file_text?: string; old_str?: string; new_str?: string; insert_line?: number; view_range?: [number, number] }): Promise<any>;
   glob(args: { pattern: string; path?: string }): Promise<{ matches: string[]; count: number }>;
   grep(args: { pattern: string; path?: string; glob?: string; case_sensitive?: boolean }): Promise<{ matches: Array<{ file: string; line: number; text: string }>; totalMatches: number }>;
+  skill(args: { name: string; resource?: string; offset?: number; limit?: number; script?: string; exportName?: string; args?: any[] }): Promise<any>;
   
   // CRM 实时数据与元数据操作 (当前已连接环境: ${currentSession.environment?.name || 'CRM'})
   list_entities(args?: { keyword?: string; isCustomOnly?: boolean }): Promise<{ totalCount: number; entities: Array<{ apiKey: string; label: string }> }>;
   get_entity_fields(args: { entityApiKey: string }): Promise<{ entityApiKey: string; totalFields: number; fields: any[] }>;
   list_business_types(args: { entityApiKey: string }): Promise<any>;
+  execute_open_api(args: { method: 'GET'|'POST'|'PUT'|'PATCH'|'DELETE'; url: string; queryParams?: Record<string, any>; body?: any; bodyEncoding?: 'json'|'form'; mutates?: boolean; confirm?: boolean }): Promise<any>;
   deploy_business_type(args: { entityApiKey: string; apiKey?: string; label?: string; description?: string; active?: boolean; sourceFile?: string; dryRun?: boolean; confirm?: boolean }): Promise<any>;
   create_print_template(args: { file_path: string; entityApiKey: string; objectId?: number; name: string; printFileName?: string; description?: string; outputType: 0|1|2; confirm: boolean }): Promise<any>;
   execute_sql_query(args: { sql: string }): Promise<{ records: any[]; totalSize: number; fields: string[] }>;
@@ -1308,7 +1315,7 @@ declare const tools: {
 
       if (!isMinimalMode) {
         systemParts.push(`<available_skills>
-- document-reader: Excel、Word、PDF、PPT 和文本阅读；通过 read_document 按工作表、页码、幻灯片与行号读取，核对来源、公式缓存及扫描件限制。
+- document-reader: Excel、Word、PDF、PPT、XMind 和文本阅读；通过 read_document 按工作表、页码、幻灯片、思维导图画布与行号读取，核对来源、公式缓存及扫描件限制。
 - salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
 - salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
 - fxiaoke-crm-cli: 纷享销客 OpenAPI v2 接口与 CLI 数据操作规范，支持对象元数据探测、SQL数据查询与大批量分页对账。
@@ -1318,6 +1325,7 @@ declare const tools: {
 - neo-frontend-dev: 销售易前端自定义组件开发 (React 16 + TypeScript)。
 - neo-cli-usage: NeoCRM CLI 1.0.8 项目配置、共享登录与命令用法。
 - neo-nex-dev: NEX 标准页面扩展；通过 neo list nex 查询、neo retrieve nex 拉取源码。
+${getRestrictedSkillDiscovery(config.skills || [])}
 </available_skills>
 若当前任务属于上述专业领域，你可以在采取行动前调用 skill({ name: "..." }) 工具获取该领域的专业实战指导规范。`);
 
@@ -3103,7 +3111,15 @@ ${currentCompactionSummary.summary}
     // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
     if (env && (env.productType || 'neocrm') === 'neocrm') assertNeoConnectorToolAccess(name, args);
     if (name === "run_code") {
+      let usedProtectedSkill = false;
       const toolsContext: Record<string, Function> = {
+        skill: async (params: any) => {
+          const builtinId = BUILTIN_AI_SKILLS.find(skill => skill.name === params?.name)?.id;
+          if (typeof params?.name === 'string' && isProtectedBuiltinSkill(builtinId || params.name)) usedProtectedSkill = true;
+          const result = await this.executeUnifiedTool('skill', params || {}, [], env, tokenData,
+            projectPath, projectId, sessionAllowedFiles, signal);
+          return result.data;
+        },
         web_search: async (params: any) => this.dshToolService.webSearch(params),
         web_fetch: async (params: any) => this.dshToolService.webFetch(params),
         todo_write: async (params: any) => this.dshToolService.writeTodos(params),
@@ -3224,10 +3240,10 @@ ${currentCompactionSummary.summary}
         };
       }
 
-      const res = await this.dshToolService.executePtcCode(args, toolsContext, 60000, signal);
+      const res = await this.dshToolService.executePtcCode(args, toolsContext, 60000, signal, () => usedProtectedSkill);
       const logSummary = res.logs.length > 0 ? ` (输出了 ${res.logs.length} 行日志)` : '';
       return {
-        data: res,
+        data: { ...res, ...(usedProtectedSkill ? { protectedBuiltin: true } : {}) },
         summary: res.error ? `PTC 执行失败: ${res.error}` : `PTC 脚本运行完成${logSummary}，耗时 ${res.executionTimeMs}ms`,
       };
     }
@@ -3391,14 +3407,24 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "skill") {
-      const skillName = args.name;
-      let instruction = getProtectedSkillInstruction(skillName);
+      const skillName = args?.name;
+      if (typeof skillName !== 'string' || !skillName) throw new Error('缺少技能名称');
+      const builtin = BUILTIN_AI_SKILLS.find(skill => skill.id === skillName || skill.name === skillName);
+      const resolvedName = builtin?.id || skillName;
+      if (!restrictedFeatureService.canUseSkill(resolvedName)) throw new Error(`未找到名为 "${skillName}" 的技能规范`);
+      const packaged = readRestrictedSkillPackage(resolvedName, args);
+      if (packaged) return { data: packaged, summary: args.script ? '已完成内置技能离线构造或校验'
+        : args.resource ? '已按需读取内置技能参考资料' : `已加载内置技能 [${skillName}] 及资源目录` };
+      if (args.resource !== undefined || args.script !== undefined) throw new Error('该技能没有可读取的配套资源');
+      let instruction = getProtectedSkillInstruction(resolvedName);
       let desc = '';
       if (!instruction) {
         const config = this.getAiConfig();
         const found = (config.skills || []).find((s) => s.id === skillName || s.name === skillName);
         if (found) {
-          instruction = found.systemInstruction || getProtectedSkillInstruction(found.id);
+          if (!restrictedFeatureService.canUseSkill(found.id)) throw new Error(`未找到名为 "${skillName}" 的技能规范`);
+          instruction = isProtectedBuiltinSkill(found.id) ? getProtectedSkillInstruction(found.id)
+            : found.systemInstruction || getProtectedSkillInstruction(found.id);
           desc = found.description;
         }
       }

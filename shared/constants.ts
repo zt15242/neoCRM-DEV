@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.40';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.41';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -747,6 +747,18 @@ export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
     id: 'skill-autoflow-architect', name: '自动流程架构与部署规范',
     description: '自动流程节点、变量和部署验证规范。',
     category: 'builtin', iconName: 'Workflow', triggerKeywords: [], enabled: true,
+  },
+  {
+    id: 'skill-manage-neocrm-permissions', name: '销售易用户及权限管理',
+    description: '配置用户生命周期、角色、职能、许可、公共组、共享范围与权限审计，构造请求并核对实际权限效果。',
+    category: 'builtin', iconName: 'ShieldCheck', enabled: true,
+    triggerKeywords: ['用户管理', '权限管理', '角色权限', '职能', '许可分配', '公共组', '共享规则'],
+  },
+  {
+    id: 'skill-configure-neocrm-mobile', name: '销售易移动端配置',
+    description: '配置移动 APP、导航、首页、详情和列表布局、职能分配、外观与离线包，区分后台回读和真机验证。',
+    category: 'builtin', iconName: 'Smartphone', enabled: true,
+    triggerKeywords: ['移动端配置', '移动APP', '移动导航', 'NeoH5', '移动布局', '离线包'],
   },
   // 1. 审批流与 NEX 核心替换技能 (官方 neo CLI 最新技能包)
   {

@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan, ApprovalDeployPlan } from '../../../shared/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { MessageMediaContext, MessageMediaLink } from './MessageMedia';
+import { mediaKind } from './messageMediaModel';
 import { ReasoningBox } from './ReasoningBox';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolCallsGroup } from './ToolCallsGroup';
@@ -20,6 +22,7 @@ interface AiMessageItemProps {
   isStreamingCurrent?: boolean;
   isLastMessage?: boolean;
   projectPath?: string;
+  sessionId?: string;
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
@@ -33,6 +36,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
   isStreamingCurrent = false,
   isLastMessage = false,
   projectPath,
+  sessionId,
   onOpenCreateSchema,
   onOpenDeployWorkflow,
   onOpenDeployApproval,
@@ -108,6 +112,12 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
               ))}
             </div>
           )}
+
+          <MessageMediaContext.Provider value={{ projectPath, sessionId }}>
+            {message.attachments?.filter(file => file.fullPath && mediaKind(file.fullPath)).map(file => (
+              <MessageMediaLink key={file.id} source={file.fullPath!} label={file.name} />
+            ))}
+          </MessageMediaContext.Provider>
 
           <div className="relative group/bubble flex items-center justify-end space-x-1.5">
             {/* 气泡左侧悬停复制按钮 */}
@@ -246,6 +256,9 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
             <>
               <MarkdownRenderer
                 content={message.content}
+                projectPath={projectPath}
+                sessionId={sessionId}
+                isStreaming={isStreamingCurrent}
                 onExecuteSql={(sql) => setActiveExecutedSql(sql)}
                 onOpenDeployWorkflow={onOpenDeployWorkflow}
                 onOpenDeployApproval={onOpenDeployApproval}
@@ -264,6 +277,8 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
               {planMarkdown && !isActivelyWorking && (
                 <PlanReviewCard
                   plan={planMarkdown}
+                  projectPath={projectPath}
+                  sessionId={sessionId}
                   isAnswered={!isLastMessage}
                   onApprove={() => onSendMessage?.('我已审核并批准该方案，请严格按照上述实施方案开始自动执行并部署！')}
                   onReject={(feedback) => onSendMessage?.(feedback ? `我对方案有修改意见：${feedback}` : '我对方案有修改要求，请根据我的最新意图调整规划')}
@@ -352,6 +367,8 @@ export const AiMessageItem = React.memo(AiMessageItemComponent, (prevProps, next
   if (nextProps.isStreamingCurrent || prevProps.isStreamingCurrent) return false;
   // 关键渲染优化：历史已完成消息，只要核心内容与状态不变，彻底跳过无谓重绘
   if (prevProps.isLastMessage !== nextProps.isLastMessage) return false;
+  if (prevProps.projectPath !== nextProps.projectPath || prevProps.sessionId !== nextProps.sessionId) return false;
+  if (prevProps.message.attachments !== nextProps.message.attachments) return false;
   if (prevProps.message.id !== nextProps.message.id) return false;
   if (prevProps.message.content !== nextProps.message.content) return false;
   if (prevProps.message.reasoningContent !== nextProps.message.reasoningContent) return false;

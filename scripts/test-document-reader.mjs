@@ -126,6 +126,19 @@ try {
   assert.match((await read(write('old.ppt', CFB.write(compound, { type: 'buffer' })))).content, /旧版 PPT 中文文本/);
   console.log('PASS PowerPoint: presentation order, slide selection, notes and legacy PPT text records');
 
+  const mindmap = new JSZip();
+  mindmap.file('content.json', JSON.stringify([{ title: '交付计划', rootTopic: { title: '客户上线', children: { attached: [{ title: '验收确认' }] } } }]));
+  const mindmapBuffer = await mindmap.generateAsync({ type: 'nodebuffer' });
+  const mindmapPath = write('plan.xmind', mindmapBuffer);
+  const mindmapPreview = await fileService.parseLocalFile(mindmapPath);
+  assert.equal(mindmapPreview.contentKind, 'text');
+  assert.equal(mindmapPreview.documentFormat, 'xmind');
+  assert.match(mindmapPreview.parsedContent, /客户上线[\s\S]*验收确认/);
+  const mindmapUpload = await fileService.parseBuffer('plan.xmind', mindmapBuffer);
+  assert.match((await tools.readDocument({ file_path: mindmapUpload.fullPath }, project, [mindmapUpload.fullPath])).content, /验收确认/);
+  assert.throws(() => tools.editFile({ file_path: mindmapPath, old_string: 'a', new_string: 'b' }, project), /文本替换/);
+  console.log('PASS XMind: file uploads retain originals, readable topic sections and binary edits rejected');
+
   const pdfPath = write('two-pages.pdf', pdf(['First page source', 'Second page evidence']));
   assert.equal((await read(pdfPath, { mode: 'info' })).sectionCount, 2);
   assert.match((await read(pdfPath, { section: 'page-2' })).content, /Second page evidence/);

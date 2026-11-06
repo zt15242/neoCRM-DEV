@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Sparkles, 
@@ -51,6 +51,41 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const getFocusable = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ) || []).filter((element) => element.getClientRects().length > 0);
+    const frame = requestAnimationFrame(() => getFocusable()[0]?.focus());
+    const handleDialogKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+      } else if (event.key === 'Tab') {
+        const focusable = getFocusable();
+        if (!focusable.length) return;
+        const current = focusable.indexOf(document.activeElement as HTMLElement);
+        if (event.shiftKey && current <= 0) {
+          event.preventDefault();
+          focusable[focusable.length - 1].focus();
+        } else if (!event.shiftKey && (current === -1 || current === focusable.length - 1)) {
+          event.preventDefault();
+          focusable[0].focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', handleDialogKey);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', handleDialogKey);
+      previousFocus?.focus();
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (initialEnv) {
@@ -257,21 +292,21 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs select-none animate-in fade-in duration-150">
-      <div className="w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 select-none">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="connector-dialog-title" className="connector-dialog w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* 头部 */}
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 text-white shadow-xs">
+            <div className="p-2 rounded-xl bg-sky-600 text-white">
               <Server className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-800">
+              <h2 id="connector-dialog-title" className="text-base font-semibold text-slate-800">
                 {initialEnv?.isPreset 
                   ? `配置预置连接器凭据: ${initialEnv.name}` 
-                  : (initialEnv ? '编辑 CRM 环境连接器' : '新建 CRM 环境连接器 (New Connector)')}
-              </h3>
-              <p className="text-[11px] text-slate-500 mt-0.5">
+                  : (initialEnv ? '编辑连接器' : '新建连接器')}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
                 {productType === 'fxiaoke'
                   ? '配置纷享销客自建应用 appId、appSecret 与企业永久授权码 (permanentCode)'
                   : '支持连接销售易、Salesforce、纷享销客等多品牌 CRM 实例与演练沙盒'}
@@ -279,7 +314,9 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="关闭"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 cursor-pointer"
           >
             <X className="w-4 h-4" />
@@ -297,6 +334,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleProductTypeChange('neocrm')}
+                aria-pressed={productType === 'neocrm'}
                 className={`p-2.5 rounded-xl border text-left flex flex-col space-y-1 transition-all cursor-pointer ${
                   productType === 'neocrm'
                     ? 'bg-sky-50 border-sky-400 text-sky-900 shadow-2xs font-bold ring-1 ring-sky-400'
@@ -313,6 +351,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleProductTypeChange('salesforce')}
+                aria-pressed={productType === 'salesforce'}
                 className={`p-2.5 rounded-xl border text-left flex flex-col space-y-1 transition-all cursor-pointer ${
                   productType === 'salesforce'
                     ? 'bg-cyan-50 border-cyan-400 text-cyan-900 shadow-2xs font-bold ring-1 ring-cyan-400'
@@ -329,6 +368,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleProductTypeChange('fxiaoke')}
+                aria-pressed={productType === 'fxiaoke'}
                 className={`p-2.5 rounded-xl border text-left flex flex-col space-y-1 transition-all cursor-pointer ${
                   productType === 'fxiaoke'
                     ? 'bg-orange-50 border-orange-400 text-orange-900 shadow-2xs font-bold ring-1 ring-orange-400'
@@ -345,6 +385,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleProductTypeChange('custom')}
+                aria-pressed={productType === 'custom'}
                 className={`p-2.5 rounded-xl border text-left flex flex-col space-y-1 transition-all cursor-pointer ${
                   productType === 'custom'
                     ? 'bg-purple-50 border-purple-400 text-purple-900 shadow-2xs font-bold ring-1 ring-purple-400'
@@ -363,10 +404,11 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
           {/* 2. 连接器名称与环境类型 */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="block text-xs font-semibold text-slate-700">
+              <label htmlFor="connector-name" className="block text-xs font-semibold text-slate-700">
                 连接器名称 *
               </label>
               <input
+                id="connector-name"
                 type="text"
                 required
                 value={name}
@@ -377,10 +419,11 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </div>
 
             <div className="space-y-1">
-              <label className="block text-xs font-semibold text-slate-700">
+              <label htmlFor="connector-env-type" className="block text-xs font-semibold text-slate-700">
                 环境类型
               </label>
               <select
+                id="connector-env-type"
                 value={envType}
                 onChange={(e) => setEnvType(e.target.value as any)}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-sky-500 focus:bg-white cursor-pointer"
@@ -856,7 +899,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-semibold rounded-xl shadow-xs cursor-pointer"
+              className="connector-hub__primary cursor-pointer"
             >
               {initialEnv?.isPreset ? '保存凭据配置' : (initialEnv ? '保存修改' : '确认创建连接器')}
             </button>

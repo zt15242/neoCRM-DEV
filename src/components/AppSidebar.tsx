@@ -61,8 +61,6 @@ interface AppSidebarProps {
   onOpenDocs: () => void;
   hasUpdate?: boolean;
   onCheckUpdate: () => void;
-  onOpenFlowManager: () => void;
-  onOpenPrintManager: () => void;
   sessions: AiChatSession[];
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
@@ -113,8 +111,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onOpenDocs,
   hasUpdate = false,
   onCheckUpdate,
-  onOpenFlowManager,
-  onOpenPrintManager,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -326,24 +322,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             <LayoutDashboard className="w-4 h-4 text-sky-600" />
           </button>
 
-          {/* 流程资产库 */}
-          <button
-            onClick={onOpenFlowManager}
-            title="流程资产库 (自动流程 & 审批流)"
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-200/60 hover:text-slate-900 transition-colors cursor-pointer"
-          >
-            <Workflow className="w-4 h-4 text-teal-600" />
-          </button>
-
-          {/* 打印模板库 */}
-          <button
-            onClick={onOpenPrintManager}
-            title="Word/Excel 打印模板库"
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-600 hover:bg-slate-200/60 hover:text-slate-900 transition-colors cursor-pointer"
-          >
-            <Printer className="w-4 h-4 text-amber-600" />
-          </button>
-
           {/* 对象与字段 */}
           <button
             onClick={() => onSelectTab('metadata')}
@@ -421,7 +399,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   // 2. 展开态: 260px 沉浸式模块化侧栏 (含项目树与会话历史、星标、时间标签)
   // =========================================================================
   return (
-    <aside className="w-64 opacity-100 translate-x-0 transition-all duration-200 ease-in-out bg-slate-50/95 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative">
+    <aside className="app-sidebar w-64 opacity-100 translate-x-0 transition-all duration-200 ease-in-out bg-slate-50/95 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative">
       {/* 1. 顶部 Header (Codex 样式红绿灯安全边距、品牌下拉与搜索) */}
       <div className={`border-b border-slate-200/60 flex items-center justify-between shrink-0 px-3 ${
         isMac ? 'pt-8 pb-2.5 window-drag' : 'py-2.5'
@@ -570,7 +548,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       )}
 
       {/* 3. Codex 快捷导航条目 */}
-      <div className="px-2 py-2 space-y-0.5 border-b border-slate-200/60">
+      <nav className="app-sidebar__navigation px-2 py-2 space-y-0.5 border-b border-slate-200/60" aria-label="主导航">
         {/* New chat */}
         <button
           onClick={onNewChatDraft}
@@ -582,7 +560,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         >
           <div className="flex items-center space-x-2.5">
             <SquarePen className="w-4 h-4 text-slate-600" />
-            <span>New chat</span>
+            <span>新建对话</span>
           </div>
           <span className="text-[10px] text-slate-400 font-mono">
             {isMac ? '⌥⌘N' : 'Ctrl+Alt+N'}
@@ -592,6 +570,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {/* 会议助手 (类似飞书妙计) */}
         <button
           onClick={() => onSelectTab('meeting')}
+          aria-current={activeTab === 'meeting' ? 'page' : undefined}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
             activeTab === 'meeting'
               ? 'bg-slate-200 text-slate-900 font-bold'
@@ -610,6 +589,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {/* Foxmail 智能邮件与人物画像 */}
         <button
           onClick={() => onSelectTab('mail')}
+          aria-current={activeTab === 'mail' ? 'page' : undefined}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
             activeTab === 'mail'
               ? 'bg-slate-200 text-slate-900 font-bold'
@@ -628,6 +608,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {/* 自定义工作台 */}
         <button
           onClick={() => onSelectTab('workspace')}
+          aria-current={activeTab === 'workspace' ? 'page' : undefined}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center space-x-2.5 cursor-pointer ${
             activeTab === 'workspace' ? 'bg-slate-200 text-slate-900 font-bold' : 'text-slate-700 hover:bg-slate-200/60 hover:text-slate-900'
           }`}
@@ -639,6 +620,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {/* 控制台 & 会话 */}
         <button
           onClick={() => onSelectTab('dashboard')}
+          aria-current={activeTab === 'dashboard' ? 'page' : undefined}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
             activeTab === 'dashboard'
               ? 'bg-slate-200 text-slate-900 font-bold'
@@ -654,37 +636,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           )}
         </button>
 
-        {/* 流程资产库 */}
-        <button
-          onClick={onOpenFlowManager}
-          className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-200/60 hover:text-slate-900 transition-colors flex items-center justify-between cursor-pointer"
-        >
-          <div className="flex items-center space-x-2.5">
-            <Workflow className="w-4 h-4 text-teal-600" />
-            <span>流程资产库</span>
-          </div>
-          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200">
-            Flows
-          </span>
-        </button>
-
-        {/* 打印模板库 */}
-        <button
-          onClick={onOpenPrintManager}
-          className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-200/60 hover:text-slate-900 transition-colors flex items-center justify-between cursor-pointer"
-        >
-          <div className="flex items-center space-x-2.5">
-            <Printer className="w-4 h-4 text-amber-600" />
-            <span>打印模板库</span>
-          </div>
-          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200">
-            Print
-          </span>
-        </button>
-
         {/* 对象与字段元数据 */}
         <button
           onClick={() => onSelectTab('metadata')}
+          aria-current={activeTab === 'metadata' ? 'page' : undefined}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center space-x-2.5 cursor-pointer ${
             activeTab === 'metadata'
               ? 'bg-slate-200 text-slate-900 font-bold'
@@ -698,6 +653,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {/* 数据中心 (XOQL) */}
         <button
           onClick={() => onSelectTab('data')}
+          aria-current={activeTab === 'data' ? 'page' : undefined}
           className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center space-x-2.5 cursor-pointer ${
             activeTab === 'data'
               ? 'bg-slate-200 text-slate-900 font-bold'
@@ -707,13 +663,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           <Database className="w-4 h-4 text-sky-600" />
           <span>数据中心 (DML/SQL)</span>
         </button>
-      </div>
+      </nav>
 
       {/* 4. Projects 本地项目工作区文件夹列表 (对齐 Codex 多项目目录树与会话历史) */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         <div className="px-2 pt-1 pb-1 flex items-center justify-between text-[11px] font-semibold text-slate-400">
           <div className="flex items-center space-x-1">
-            <span>Projects</span>
+            <span>项目</span>
             <span className="font-mono text-[10px] text-slate-400">({projects.length})</span>
           </div>
           {onOpenCreateProject && (
@@ -730,7 +686,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         {/* 渲染所有关联的本地项目文件夹 */}
         {projects.length === 0 ? (
           <div className="py-6 text-center text-[11px] text-slate-400">
-            暂无项目，点击右上角「+」关联本地文件夹
+            关联本地文件夹后，即可按项目管理对话
           </div>
         ) : (
           projects.map((proj) => {
@@ -931,13 +887,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       </div>
 
       {/* 5. 底部账号与系统设置栏 (Codex 底栏胶囊) */}
-      <div className="p-2 border-t border-slate-200/70 bg-slate-100/60 flex items-center justify-between text-xs text-slate-600">
+      <div className="app-sidebar__footer p-2 border-t border-slate-200/70 bg-slate-100/60 flex items-center justify-between text-xs text-slate-600">
         <div className="flex items-center space-x-2 truncate min-w-0">
           <div className={`w-2 h-2 rounded-full shrink-0 ${session.isLoggedIn ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
-          <span className="font-semibold text-slate-800 truncate text-[11px]">{activeUserName}</span>
-          <span className="text-[10px] font-mono text-slate-400 truncate max-w-[70px]">
-            {session.tokenData?.tenant_id ? String(session.tokenData.tenant_id).slice(-4) : 'dev'}
-          </span>
+          <span className="font-semibold text-slate-800 truncate text-xs">{session.isLoggedIn ? activeUserName : '未连接'}</span>
+          {session.isLoggedIn && <span className="text-[11px] text-slate-500 truncate">{activeTenantName}</span>}
         </div>
 
         <div className="flex items-center space-x-0.5 shrink-0">
