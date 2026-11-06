@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { Check, Copy, ChevronDown, ChevronRight, Code2, ExternalLink, ImageOff, Loader2, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Copy, ChevronDown, ChevronRight, Code2, Download, ExternalLink, ImageOff, Loader2, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { MessageFilePreview, MessagePreviewRequest, MindMapSheet, MindMapTopic } from '../../../shared/messagePreview';
 import { isLocalSource, mediaKind, safeRemoteUrl } from './messageMediaModel';
 import './messageMedia.css';
+import { exportSvgDiagram, matchesDiagramSource, prepareSvgDiagram, type SvgDiagram } from './svgDiagram';
 
 export const MessageMediaContext = createContext<Omit<MessagePreviewRequest, 'source'>>({});
 
@@ -12,7 +13,7 @@ function Status({ children, error = false }: { children: React.ReactNode; error?
   </span>;
 }
 
-function MediaFrame({ title, source, children }: { title: string; source?: string; children: (zoom: number) => React.ReactNode }) {
+function MediaFrame({ title, source, actions, children }: { title: string; source?: string; actions?: React.ReactNode; children: (zoom: number) => React.ReactNode }) {
   const [showSource, setShowSource] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [expanded, setExpanded] = useState(false);
@@ -25,6 +26,7 @@ function MediaFrame({ title, source, children }: { title: string; source?: strin
   const controls = (large: boolean) => <span className="message-media__toolbar">
     <span className="message-media__title" title={title}>{title}</span>
     <span className="message-media__actions">
+      {actions}
       {source && <button type="button" onClick={() => setShowSource(!showSource)} aria-pressed={showSource} title={showSource ? '查看图形' : '查看源码'}><Code2 size={14} /><span>{showSource ? '图形' : '源码'}</span></button>}
       {source && <button type="button" title="复制图表源码" onClick={async () => {
         try {
@@ -101,6 +103,92 @@ export function MermaidPreview({ source, pending = false, title = '流程图 · 
   </MediaFrame>;
 }
 
+export function SvgDiagramPreview({ source, pending = false, html = false, fileSource, recoverySources }: {
+  source: string; pending?: boolean; html?: boolean; fileSource?: string; recoverySources?: string[];
+}) {
+  const context = useContext(MessageMediaContext);
+  const [attempt, setAttempt] = useState(0);
+  const inlineResult = useMemo(() => {
+    if (pending || fileSource) return {};
+    try { return { diagram: prepareSvgDiagram(source, html) }; }
+    catch (error) { return { error: error instanceof Error ? error.message : '图表格式无效' }; }
+  }, [source, pending, html, fileSource]);
+  const sourcesKey = JSON.stringify(fileSource ? [fileSource] : inlineResult.error ? recoverySources || [] : []);
+  const loadKey = JSON.stringify([source, html, sourcesKey, context.projectPath, context.sessionId, attempt]);
+  const [loaded, setLoaded] = useState<{ key: string; diagram?: SvgDiagram; content?: string; name?: string; error?: string }>();
+  const current = loaded?.key === loadKey ? loaded : undefined;
+  const loading = !pending && sourcesKey !== '[]' && !current;
+  useEffect(() => {
+    if (pending || sourcesKey === '[]') return;
+    let canceled = false;
+    const load = async () => {
+      if (!window.neoApi?.filePreviewMessage) throw new Error('当前客户端暂不支持文件预览，请更新客户端');
+      let lastError: unknown;
+      for (const candidate of JSON.parse(sourcesKey) as string[]) {
+        if (canceled) return;
+        try {
+          const data = await window.neoApi.filePreviewMessage({ ...context, source: candidate, diagram: true });
+          if (canceled) return;
+          if (data.kind !== 'diagram') throw new Error('此文件不包含可预览的图表');
+          const diagram = prepareSvgDiagram(data.content, data.format === 'html');
+          if (!fileSource && !matchesDiagramSource(source, diagram)) continue;
+          setLoaded({ key: loadKey, diagram, content: data.content, name: data.name });
+          return;
+        } catch (error) { lastError = error; }
+      }
+      throw lastError || new Error('未找到与回复匹配的完整图表文件');
+    };
+    void load().catch(error => {
+      if (!canceled) setLoaded({ key: loadKey, error: error instanceof Error ? error.message : '图表文件读取失败' });
+    });
+    return () => { canceled = true; };
+  }, [loadKey, pending]);
+  const diagram = current?.diagram || inlineResult.diagram;
+  const error = fileSource ? current?.error : inlineResult.error;
+  const previewSource = current?.content ?? source;
+  const [image, setImage] = useState<{ svg: string; url: string }>();
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [imageError, setImageError] = useState(false);
+  useEffect(() => {
+    setExportError(''); setImageError(false);
+    if (!diagram) { setImage(undefined); return; }
+    const url = URL.createObjectURL(new Blob([diagram.svg], { type: 'image/svg+xml' }));
+    setImage({ svg: diagram.svg, url });
+    return () => URL.revokeObjectURL(url);
+  }, [diagram]);
+  const currentImage = image?.svg === diagram?.svg ? image : undefined;
+  const download = async (format: 'svg' | 'png') => {
+    if (!diagram || exporting) return;
+    setExporting(true); setExportError('');
+    let url: string | undefined;
+    try {
+      const blob = await exportSvgDiagram(diagram, format);
+      url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = `diagram.${format}`;
+      document.body.appendChild(link); link.click(); link.remove();
+    } catch (error) { setExportError(error instanceof Error ? error.message : '导出失败，请重试'); }
+    finally {
+      setExporting(false);
+      if (url) { const completed = url; setTimeout(() => URL.revokeObjectURL(completed), 1000); }
+    }
+  };
+  return <MediaFrame title="图表 · Diagram Design" source={previewSource} actions={!pending && diagram && <>
+    <button type="button" onClick={() => void download('svg')} disabled={exporting} title="导出 SVG"><Download size={14} /><span>SVG</span></button>
+    <button type="button" onClick={() => void download('png')} disabled={exporting} title="导出 PNG"><Download size={14} /><span>PNG</span></button>
+  </>}>{zoom => <>
+    {pending ? <Status>图表正在生成，完成后自动展示…</Status> : loading ? <Status>{fileSource ? '正在读取图表文件…' : '正在从已保存文件恢复图表…'}</Status> : (!diagram && error) || imageError ?
+      <span className="message-media__fallback"><Status error>图表暂时无法显示，请查看源码。</Status><span className="message-media__error-detail">{error || 'SVG 图片加载失败'}</span>
+        {fileSource && <button type="button" onClick={() => setAttempt(value => value + 1)}>重新读取</button>}
+      </span> : currentImage && diagram ?
+      <img src={currentImage.url} alt={diagram.title || 'Diagram Design 图表'} className="message-media__diagram" style={{ width: `${Math.min(diagram.width + 32, 50000) * zoom}px` }} onError={() => setImageError(true)} /> : <Status>正在绘制图表…</Status>}
+    {!pending && current?.diagram && <span className="message-media__note">{fileSource ? `图表文件：${current.name}` : `已从 ${current.name} 读取完整图表。`}</span>}
+    {exporting && <Status>正在导出图表…</Status>}
+    {exportError && <Status error>{exportError}</Status>}
+  </>}</MediaFrame>;
+}
+
 function MindMapNode({ node, depth = 0 }: { node: MindMapTopic; depth?: number }) {
   const [open, setOpen] = useState(depth < 3);
   return <li className="message-mindmap__node">
@@ -140,6 +228,7 @@ function LocalFilePreview({ source, label }: { source: string; label: string }) 
   if (!state.data) return <span className="message-media"><Status>正在读取 {label}…</Status></span>;
   if (state.data.kind === 'image') return <ImagePreview source={state.data.dataUrl} title={label} />;
   if (state.data.kind === 'mermaid') return <MermaidPreview source={state.data.content} title={label} />;
+  if (state.data.kind === 'diagram') return <SvgDiagramPreview source={state.data.content} html={state.data.format === 'html'} />;
   return <MindMapPreview {...state.data} />;
 }
 

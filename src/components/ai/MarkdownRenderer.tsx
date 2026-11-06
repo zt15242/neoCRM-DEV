@@ -1,16 +1,17 @@
 import React, { useMemo, useState } from 'react';
 import { Check, Copy, Play, Workflow } from 'lucide-react';
-import { WorkflowDeployPlan } from '../../../shared/types';
+import { WorkflowDeployPlan, type AiToolCallRecord } from '../../../shared/types';
 import { extractWorkflowPlanFromText } from './workflowPlanHelper';
 import { WorkflowPlanCard } from "./WorkflowPlanCard";
 import { ApprovalPlanCard } from "./ApprovalPlanCard";
 import { extractApprovalPlanFromText } from "./approvalPlanHelper";
 import { ApprovalDeployPlan } from "../../../shared/types";
-import { MessageMediaContext, MessageMediaLink, MermaidPreview } from './MessageMedia';
-import { findMarkdownLink } from './messageMediaModel';
+import { MessageMediaContext, MessageMediaLink, MermaidPreview, SvgDiagramPreview } from './MessageMedia';
+import { diagramFileSource, diagramRecoverySources, findMarkdownLink } from './messageMediaModel';
 
 interface MarkdownRendererProps {
   content: string;
+  toolCalls?: AiToolCallRecord[];
   projectPath?: string;
   sessionId?: string;
   isStreaming?: boolean;
@@ -20,9 +21,10 @@ interface MarkdownRendererProps {
   suppressDeploymentCards?: boolean;
 }
 
-const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, projectPath, sessionId, isStreaming, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
+const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, toolCalls, projectPath, sessionId, isStreaming, onExecuteSql, onOpenDeployWorkflow, onOpenDeployApproval, suppressDeploymentCards }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const mediaContext = useMemo(() => ({ projectPath, sessionId }), [projectPath, sessionId]);
+  const recoverySources = useMemo(() => diagramRecoverySources(toolCalls), [toolCalls]);
 
   const handleCopy = async (copyText: string, id: string) => {
     let ok = false;
@@ -111,6 +113,12 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, p
         if (part.type === 'code') {
           const codeId = `code_${index}`;
           const isCopied = copiedId === codeId;
+          if (['svg', 'diagram', 'html:diagram', 'diagram:html'].includes(part.lang?.toLowerCase() || '')) {
+            return <SvgDiagramPreview key={index} source={part.content}
+              fileSource={part.lang?.toLowerCase() === 'diagram' ? diagramFileSource(part.content) : undefined}
+              html={['html:diagram', 'diagram:html'].includes(part.lang?.toLowerCase() || '')}
+              pending={Boolean(isStreaming && !part.closed)} recoverySources={isStreaming ? undefined : recoverySources} />;
+          }
           if (['mermaid', 'mmd', 'mindmap'].includes(part.lang?.toLowerCase() || '')) {
             const source = part.lang?.toLowerCase() === 'mindmap' && !/^\s*mindmap\b/.test(part.content) ? `mindmap\n${part.content}` : part.content;
             return <MermaidPreview key={index} source={source} pending={isStreaming && !part.closed} />;

@@ -57,6 +57,7 @@ import axios, { AxiosRequestConfig } from 'axios';
 import { execSync } from 'node:child_process';
 import { NeoEnvironment, TokenData, EntityMetadata, FieldMetadata, QueryResultData } from '../../shared/types';
 import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
+import { getSalesforceUsername } from './salesforceIdentity';
 
 export class SalesforceService {
   private tokenRefreshCallback?: (env: NeoEnvironment, newToken: TokenData) => void;
@@ -171,7 +172,7 @@ export class SalesforceService {
       const cmd = getSalesforceCliCommand();
 
       // 1. 尝试直接从本地磁盘 ~/.sfdx/*.json 读取（0ms 极速无开销）
-      const username = tokenData?.userInfo?.name;
+      const username = getSalesforceUsername(tokenData?.userInfo);
       const diskAuth = this.getAuthFileFromDisk(username, tokenData?.instance_uri || env?.neoBaseURL);
       if (diskAuth?.refreshToken && tokenData) tokenData.refresh_token = diskAuth.refreshToken;
       if (diskAuth?.accessToken && this.normalizeAccessToken(diskAuth.accessToken) !== this.normalizeAccessToken(tokenData?.access_token || '')) {
@@ -240,7 +241,7 @@ export class SalesforceService {
           console.warn('[Salesforce] CLI 返回的 Access Token 与刚被拒绝的 token 相同，继续尝试 OAuth refresh_token。');
         }
 
-        const diskAuth = this.getAuthFileFromDisk(tokenData.userInfo?.name, baseUrl);
+        const diskAuth = this.getAuthFileFromDisk(getSalesforceUsername(tokenData.userInfo), baseUrl);
         if (diskAuth?.refreshToken) tokenData.refresh_token = diskAuth.refreshToken;
         const refreshToken = diskAuth?.refreshToken || tokenData.refresh_token;
         const clientId = env.clientId || diskAuth?.clientId || '3MVG9xXFQGV9F.Wr9Z_1xbGt7Vq63R.tqieb_acTQQGYdprE5n0ogE.JkOqT5E4SoIs1YuRhbZjaXPEYTE3ap';

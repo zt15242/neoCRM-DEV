@@ -498,7 +498,7 @@ export class WorkspaceService {
   }
 
   public async queryConnector(accountId: string, rawQuery: string) {
-    const account = this.getDataSources().crmAccounts.find((item) => item.accountId === accountId);
+    const account = this.getCrmAccount(accountId);
     if (!account) throw new Error('此 CRM 账号不存在或已移除');
     let query = String(rawQuery || '').trim().replace(/;\s*$/, '');
     if (query.length > 20_000) throw new Error('CRM 查询超过 20,000 个字符');
@@ -523,9 +523,9 @@ export class WorkspaceService {
     const context = this.executionContexts.get(executionId);
     if (!context || context.pageId !== pageId || context.widgetId !== widgetId) throw new Error('组件执行上下文已失效，请重新运行组件');
     const widget = this.listPages().find((item) => item.id === pageId)?.widgets.find((item) => item.id === widgetId);
-    if (!widget || widget.accountId !== accountId) throw new Error('查询账号与组件绑定的 CRM 连接器不一致');
+    if (!widget || this.sessionStore.resolveAccountId(widget.accountId || '') !== this.sessionStore.resolveAccountId(accountId)) throw new Error('查询账号与组件绑定的 CRM 连接器不一致');
     const ordinal = this.nextQueryOrdinal(executionId);
-    const connector = this.getDataSources().crmAccounts.find((item) => item.accountId === accountId);
+    const connector = this.getCrmAccount(accountId);
     this.recordComponentLog(pageId, widgetId, 'query', 'info', `动态查询 #${ordinal} 已发起 · ${connector?.connectorName || '未知连接器'} (${connector?.productType || '未知平台'}) · ${this.summarizeReadQuery(query)}`, undefined, context);
     try {
       const result = await this.queryConnector(accountId, query);
@@ -570,7 +570,7 @@ export class WorkspaceService {
     this.executionContexts.set(context.executionId, context);
     if (this.executionContexts.size > 500) this.executionContexts.delete(this.executionContexts.keys().next().value!);
     this.recordComponentLog(page.id, widget.id, 'run', 'info', `运行开始 · ${trigger === 'manual' ? '用户手动刷新' : trigger === 'scheduled' ? '定时订阅任务' : '组件预览加载'}`, undefined, context);
-    const account = widget.accountId ? this.getDataSources().crmAccounts.find((item) => item.accountId === widget.accountId) : undefined;
+    const account = widget.accountId ? this.getCrmAccount(widget.accountId) : undefined;
     this.recordComponentLog(page.id, widget.id, 'config', 'info', `组件类型=${widget.type} · CRM=${account ? `${account.connectorName} (${account.productType})` : '未绑定'} · 初始查询=${widget.query ? '已配置' : '未配置'}`, undefined, context);
     this.recordComponentLog(page.id, widget.id, 'config', 'success', '运行配置读取完成', undefined, context);
     const result = await this.executeWidget(page, widget, projectRoot, context);
@@ -601,7 +601,7 @@ export class WorkspaceService {
       if (widget.type === 'async-apex-dashboard') {
         const query = widget.query || 'SELECT ApexClassId, ApexClass.Name, CompletedDate, CreatedBy.Name, CreatedDate, CronTriggerId, ExtendedStatus, Id, JobItemsProcessed, JobType, MethodName, NumberOfErrors, ParentJobId, Status, TotalJobItems FROM AsyncApexJob WHERE CreatedDate = YESTERDAY ORDER BY CreatedDate DESC';
         const ordinal = this.nextQueryOrdinal(context.executionId);
-        const account = this.getDataSources().crmAccounts.find((item) => item.accountId === widget.accountId);
+        const account = this.getCrmAccount(widget.accountId);
         this.recordComponentLog(page.id, widget.id, 'query', 'info', `预置查询 #${ordinal} 已发起 · ${account?.connectorName || '未知连接器'} (${account?.productType || '未知平台'}) · ${this.summarizeReadQuery(query)}`, undefined, context);
         const queryStartedAt = Date.now();
         try {
@@ -624,7 +624,7 @@ export class WorkspaceService {
         throw error;
       }
       const { query, accountId } = validated;
-      const account = this.getDataSources().crmAccounts.find((item) => item.accountId === accountId);
+      const account = this.getCrmAccount(accountId);
       if (!account) {
         this.recordComponentLog(page.id, widget.id, 'query', 'error', 'CRM 查询无法执行 · 绑定的连接器账号不存在或已移除', undefined, context);
         throw new Error('此组件绑定的 CRM 账号不存在或已移除');
@@ -655,7 +655,13 @@ export class WorkspaceService {
     }
   }
 
+  private getCrmAccount(accountId?: string) {
+    const resolvedId = this.sessionStore.resolveAccountId(accountId || '');
+    return this.getDataSources().crmAccounts.find((item) => item.accountId === resolvedId);
+  }
+
   private getAccountSession(accountId: string): { environment: NeoEnvironment; tokenData: TokenData } {
+    accountId = this.sessionStore.resolveAccountId(accountId);
     const record = this.sessionStore.getAccountHistory().find((item) => item.id === accountId);
     const current = this.sessionStore.getCurrentSession();
     const tokenData = record?.tokenData || (current.activeAccountId === accountId ? current.tokenData : undefined);
@@ -695,7 +701,7 @@ export class WorkspaceService {
     }
     if (normalized.type === 'crm-query') {
       const { accountId } = this.validateCrmQuery(normalized);
-      if (!this.getDataSources().crmAccounts.some((item) => item.accountId === accountId)) throw new Error(`组件“${normalized.title}”绑定的 CRM 账号无效`);
+      if (!this.getCrmAccount(accountId)) throw new Error(`组件“${normalized.title}”绑定的 CRM 账号无效`);
     }
     if (normalized.type === 'mail-list') {
       normalized.limit = this.clampLimit(normalized.limit, 10, 50);
@@ -703,7 +709,7 @@ export class WorkspaceService {
     }
     if (normalized.type === 'async-apex-dashboard') {
       if (!normalized.accountId) throw new Error(`组件“${normalized.title}”需要绑定 Salesforce 账号`);
-      const account = this.getDataSources().crmAccounts.find((item) => item.accountId === normalized.accountId);
+      const account = this.getCrmAccount(normalized.accountId);
       if (account?.productType !== 'salesforce') throw new Error(`组件“${normalized.title}”仅能绑定 Salesforce 账号`);
     }
     if (normalized.type === 'text') normalized.text = String(normalized.text || '').slice(0, 3000);
@@ -1101,7 +1107,7 @@ else throw new Error('TS/JS 入口必须导出 default React 组件，或导出 
       this.recordComponentLog(page.id, widget.id, 'query', 'info', '初始 CRM 查询已跳过 · 未绑定连接器且未配置查询', undefined, context);
       return undefined;
     }
-    const account = this.getDataSources().crmAccounts.find((item) => item.accountId === validated.accountId);
+    const account = this.getCrmAccount(validated.accountId);
     if (!account) {
       this.recordComponentLog(page.id, widget.id, 'query', 'error', '初始 CRM 查询无法执行 · 绑定的连接器账号不存在或已移除', undefined, context);
       throw new Error('自定义组件绑定的 CRM 账号不存在或已移除');
@@ -1144,7 +1150,7 @@ else throw new Error('TS/JS 入口必须导出 default React 组件，或导出 
     const query = String(widget.query || '').trim().replace(/;\s*$/, '');
     if (!accountId && !query) return undefined;
     if (!accountId) throw new Error(`组件“${widget.title}”配置只读查询前必须先绑定 CRM 连接器账号`);
-    if (!this.getDataSources().crmAccounts.some((item) => item.accountId === accountId)) throw new Error(`组件“${widget.title}”绑定的 CRM 账号无效`);
+    if (!this.getCrmAccount(accountId)) throw new Error(`组件“${widget.title}”绑定的 CRM 账号无效`);
     if (!query) return { accountId };
     if (query.length > 20_000) throw new Error(`组件“${widget.title}”查询超过 20,000 个字符`);
     if (!/^SELECT\b/i.test(query) || query.includes(';') || /\b(INSERT|UPDATE|DELETE|UPSERT|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC|CALL)\b/i.test(query)) {

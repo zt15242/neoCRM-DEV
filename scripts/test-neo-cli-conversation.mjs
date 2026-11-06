@@ -181,6 +181,24 @@ try {
     protocol: 'openai', models: [{ id: 'fixture', tools: true, contextWindow: 128000, maxOutputTokens: 8192 }] }],
     settings: { enableCrmTools: true, injectTenantContext: false, maxTokens: 512, contextMessageLimit: 10 }, mcpServers: [], skills: [] };
   ai.getAiConfig = () => fixtureConfig;
+  const diagram = await ai.executeUnifiedTool('skill', { name: 'diagram-design' }, [], undefined, undefined, project);
+  assert.equal(diagram.data.name, 'diagram-design');
+  assert.match(diagram.data.version, /^2\.6\./);
+  assert.match(diagram.data.instruction, /NeoCRM AI 对话适配约定/);
+  assert.match(diagram.data.instruction, /svg 代码块/);
+  for (const resource of ['references/style-guide.md', 'references/type-architecture.md', 'references/import-drawio.md', 'scripts/drawio_extract.py', 'scripts/self_check.py', 'assets/template.html', 'LICENSE']) {
+    assert(diagram.data.resources.some(item => item.resource === resource), resource);
+  }
+  const diagramPage = (await ai.executeUnifiedTool('skill', { name: 'skill-diagram-design', resource: 'references/style-guide.md', offset: 1, limit: 5 }, [], undefined, undefined, project)).data;
+  assert.equal(diagramPage.content.split('\n').length, 5);
+  assert.equal(diagramPage.nextOffset, 6);
+  for (const args of [{ resource: '../LICENSE' }, { resource: '__proto__' }, { resource: 'references/style-guide.md', offset: 0 }, { resource: 'references/style-guide.md', limit: 401 }, { script: 'scripts/self_check.py' }]) {
+    await assert.rejects(() => ai.executeUnifiedTool('skill', { name: 'diagram-design', ...args }, [], undefined, undefined, project));
+  }
+  fixtureConfig.skills = [{ id: 'skill-diagram-design', enabled: false }];
+  await assert.rejects(() => ai.executeUnifiedTool('skill', { name: 'diagram-design' }, [], undefined, undefined, project), /停用/);
+  fixtureConfig.skills = [];
+  console.log('PASS Diagram Design: built-in package and paged resources work without a CRM session; invalid paths/ranges/scripts and disabled skill are rejected');
   assert.equal(resolveNeoOpenApiUrl('https://crm-sandbox.fixture.invalid',
     'https://api.xiaoshouyi.com/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement?controlApiKey=stage__c'),
   'https://crm-sandbox.fixture.invalid/rest/metadata/v2.0/settings/globalPicks/dependencies/actions/dependentOptionsIncrement?controlApiKey=stage__c');
@@ -367,6 +385,9 @@ try {
   assert.match(generalPrompt, /销售易功能统一 CLI 优先路由/);
   assert.match(generalPrompt, /CLI 成功返回空数据是有效结果/);
   assert.match(generalPrompt, /这些操作直接使用现有连接器工具/);
+  assert.match(generalPrompt, /Diagram Design 绘图技能/);
+  assert.match(generalPrompt, /先调用 skill\(\{name:"diagram-design"\}\)/);
+  assert.doesNotMatch(generalPrompt, /Forty-five visual types/);
   assert.equal(generalEvents.filter((event) => event.type === 'tool_start' && event.toolCall.name === 'skill').length, 1);
   console.log('PASS every NeoCRM conversation loads CLI skill and global CLI-first routing, including non-NEX/non-approval requests');
 

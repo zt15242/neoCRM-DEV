@@ -92,7 +92,7 @@ export async function parseXMind(buffer: Buffer): Promise<Extract<MessageFilePre
   return { kind: 'mindmap', name: '', sheets, warnings: ['预览展示主题层级；原文件中的样式、附件、备注及跨主题关联线请在 XMind 中查看。'] };
 }
 
-export async function readMessagePreview(source: string, context: { projectPath?: string; allowedFiles?: string[] }): Promise<MessageFilePreview> {
+export async function readMessagePreview(source: string, context: { projectPath?: string; allowedFiles?: string[]; diagram?: boolean }): Promise<MessageFilePreview> {
   if (typeof source !== 'string' || !source.trim() || source.includes('\0')) throw new Error('预览路径无效');
   let target: string;
   if (/^file:/i.test(source)) target = fileURLToPath(source);
@@ -122,14 +122,16 @@ export async function readMessagePreview(source: string, context: { projectPath?
   }
   if (!allowed) throw new Error('文件不在当前项目或对话附件中，请先将文件添加为附件');
   const ext = path.extname(real).toLowerCase();
-  if (!IMAGE_TYPES[ext] && !['.xmind', '.mmd', '.mermaid'].includes(ext)) throw new Error('此文件类型暂不支持内嵌预览');
+  if (context.diagram ? !['.svg', '.html', '.htm'].includes(ext) : !IMAGE_TYPES[ext] && !['.xmind', '.mmd', '.mermaid'].includes(ext)) {
+    throw new Error('此文件类型暂不支持内嵌预览');
+  }
   const handle = await fs.open(real, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
   let buffer: Buffer;
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error('预览目标不是文件');
-    const limit = ext === '.mmd' || ext === '.mermaid' ? 40000 : MAX_FILE;
-    if (stat.size > limit) throw new Error(`文件超过预览限制（${limit === MAX_FILE ? '20 MB' : '40000 字节'}）`);
+    const limit = context.diagram ? 1_000_000 : ext === '.mmd' || ext === '.mermaid' ? 40000 : MAX_FILE;
+    if (stat.size > limit) throw new Error(`文件超过预览限制（${context.diagram ? '1 MB' : limit === MAX_FILE ? '20 MB' : '40000 字节'}）`);
     const data = Buffer.alloc(stat.size + 1);
     let offset = 0;
     while (offset < data.length) {
@@ -142,6 +144,7 @@ export async function readMessagePreview(source: string, context: { projectPath?
     buffer = data.subarray(0, offset);
   } finally { await handle.close(); }
   const name = path.basename(real);
+  if (context.diagram) return { kind: 'diagram', name, content: buffer.toString('utf8'), format: ext === '.svg' ? 'svg' : 'html' };
   if (ext === '.xmind') return { ...await parseXMind(buffer), name };
   if (ext === '.mmd' || ext === '.mermaid') return { kind: 'mermaid', name, content: buffer.toString('utf8') };
   return { kind: 'image', name, dataUrl: `data:${IMAGE_TYPES[ext]};base64,${buffer.toString('base64')}` };

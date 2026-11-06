@@ -256,6 +256,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
             <>
               <MarkdownRenderer
                 content={message.content}
+                toolCalls={message.toolCalls}
                 projectPath={projectPath}
                 sessionId={sessionId}
                 isStreaming={isStreamingCurrent}

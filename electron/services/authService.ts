@@ -11,6 +11,7 @@ import { BrowserWindow, shell, session } from 'electron';
 import { NeoEnvironment, TokenData, UserInfo } from '../types';
 import { resolveSalesforceAlias } from './salesforceService';
 import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
+import { getSalesforceUsername, getSalesforceUserId, isSameSalesforceAccount, mergeSalesforceUserInfo, normalizeSalesforceId, salesforceUserInfoFromAuth } from './salesforceIdentity';
 
 export class AuthService {
   private activeServer: http.Server | null = null;
@@ -225,14 +226,8 @@ export class AuthService {
       }
 
       const instanceUrl = data.instance_url || rawBaseUrl;
-      const orgId = data.id ? data.id.split('/')[4] : 'salesforce_org';
-
-      let userInfo: UserInfo = {
-        userId: orgId,
-        name: `Salesforce 客户端应用 (${orgId})`,
-        tenant_id: orgId,
-        tenantName: `Salesforce 组织 (${orgId})`,
-      };
+      let userInfo = salesforceUserInfoFromAuth(data);
+      const orgId = userInfo.tenant_id;
 
       if (data.id) {
         try {
@@ -242,7 +237,8 @@ export class AuthService {
           });
           if (idRes.data) {
             userInfo = {
-              userId: idRes.data.user_id || orgId,
+              userId: idRes.data.user_id || userInfo.userId,
+              username: idRes.data.username,
               name: idRes.data.username || idRes.data.display_name || 'Salesforce 用户',
               tenant_id: idRes.data.organization_id || orgId,
               tenantName: `Salesforce (${idRes.data.organization_id || orgId})`,
@@ -472,8 +468,9 @@ export class AuthService {
     // 1. 优先尝试直接从磁盘提取（0ms 瞬间完成，绝不阻塞主进程引起假死）
     const diskData = this.getAuthFromDiskByAlias(alias, env);
     if (diskData && diskData.accessToken) {
-      const orgId = diskData.orgId || 'salesforce_org';
-      const username = diskData.username || 'Salesforce 用户';
+      const userInfo = salesforceUserInfoFromAuth(diskData);
+      const orgId = userInfo.tenant_id;
+      const username = userInfo.username || 'Salesforce 用户';
       const instanceUri = diskData.instanceUrl || env.neoBaseURL;
       if (!env.clientId && diskData.clientId) env.clientId = diskData.clientId;
       if (!env.clientSecret && diskData.clientSecret) env.clientSecret = diskData.clientSecret;
@@ -485,12 +482,7 @@ export class AuthService {
         expires_in: 7200,
         instance_uri: instanceUri,
         tenant_id: orgId,
-        userInfo: {
-          userId: orgId,
-          name: username,
-          tenant_id: orgId,
-          tenantName: `Salesforce 组织 (${orgId})`,
-        },
+        userInfo,
         savedAt: Date.now(),
         expiresAt: Date.now() + 7200 * 1000,
       };
@@ -521,8 +513,9 @@ export class AuthService {
       }
 
       const instanceUri = res.instanceUrl || env.neoBaseURL;
-      const orgId = res.id || 'salesforce_org';
-      const username = res.username || 'Salesforce 用户';
+      const userInfo = salesforceUserInfoFromAuth(res);
+      const orgId = userInfo.tenant_id;
+      const username = userInfo.username || 'Salesforce 用户';
 
       let refreshToken = '';
       try {
@@ -546,12 +539,7 @@ export class AuthService {
         expires_in: 7200,
         instance_uri: instanceUri,
         tenant_id: orgId,
-        userInfo: {
-          userId: orgId,
-          name: username,
-          tenant_id: orgId,
-          tenantName: `Salesforce 组织 (${orgId})`,
-        },
+        userInfo,
         savedAt: Date.now(),
         expiresAt: Date.now() + 7200 * 1000,
       };
@@ -595,7 +583,7 @@ export class AuthService {
           console.log(`[Salesforce] 从本地 CLI (${alias}) 成功获取有效凭据`);
 
           let refreshToken = currentTokenData?.refresh_token || '';
-          const username = res.username || currentTokenData?.userInfo?.name;
+          const username = res.username || getSalesforceUsername(currentTokenData?.userInfo);
           if (username) {
             try {
               const uPath = path.join(os.homedir(), '.sfdx', `${username}.json`);
@@ -616,12 +604,7 @@ export class AuthService {
             expires_in: 7200,
             instance_uri: res.instanceUrl || env.neoBaseURL,
             tenant_id: res.id || currentTokenData?.tenant_id || 'salesforce_org',
-            userInfo: {
-              userId: res.id || currentTokenData?.userInfo?.userId || 'salesforce_org',
-              name: res.username || currentTokenData?.userInfo?.name || 'Salesforce 用户',
-              tenant_id: res.id || currentTokenData?.tenant_id || 'salesforce_org',
-              tenantName: `Salesforce 组织 (${res.id || 'salesforce_org'})`,
-            },
+            userInfo: salesforceUserInfoFromAuth(res, currentTokenData?.userInfo),
             savedAt: Date.now(),
             expiresAt: Date.now() + 7200 * 1000,
           };
@@ -632,7 +615,7 @@ export class AuthService {
 
     // 2. 若 CLI display 未能刷新，尝试直接从本地磁盘 ~/.sfdx/*.json 中提取是否有刚刷新的 token
     try {
-      const username = currentTokenData?.userInfo?.name;
+      const username = getSalesforceUsername(currentTokenData?.userInfo);
       if (username) {
         const uPath = path.join(os.homedir(), '.sfdx', `${username}.json`);
         if (fs.existsSync(uPath)) {
@@ -645,12 +628,7 @@ export class AuthService {
               expires_in: 7200,
               instance_uri: uData.instanceUrl || env.neoBaseURL,
               tenant_id: uData.orgId || currentTokenData?.tenant_id || 'salesforce_org',
-              userInfo: currentTokenData?.userInfo || {
-                userId: uData.orgId,
-                name: uData.username,
-                tenant_id: uData.orgId,
-                tenantName: `Salesforce 组织 (${uData.orgId})`,
-              },
+              userInfo: salesforceUserInfoFromAuth(uData, currentTokenData?.userInfo),
               savedAt: Date.now(),
               expiresAt: Date.now() + 7200 * 1000,
             };
@@ -1141,7 +1119,7 @@ export class AuthService {
    */
   public async renewToken(env: NeoEnvironment, currentTokenData?: TokenData): Promise<TokenData> {
     // 1. 纷享销客：客户端凭证模式直接重新获取 7200s 有效 Token
-    if (env.productType === 'fxiaoke' || env.authMode === 'client_credentials' || env.permanentCode) {
+    if (env.productType === 'fxiaoke') {
       if (env.clientId && env.clientSecret && env.permanentCode) {
         return await this.loginWithFxiaoKeClientCredentials(env);
       }
@@ -1153,20 +1131,29 @@ export class AuthService {
 
     // 2. Salesforce 续期 (支持 OAuth2 refresh_token 换新与本地 sf CLI 双向同步)
     if (env.productType === 'salesforce') {
+      const preserveIdentity = (fresh: TokenData): TokenData => {
+        if (!currentTokenData) return fresh;
+        const sameOrg = normalizeSalesforceId(fresh.tenant_id) === normalizeSalesforceId(currentTokenData.tenant_id);
+        const hasIdentity = getSalesforceUserId(fresh.userInfo) || getSalesforceUsername(fresh.userInfo);
+        if (sameOrg && (!hasIdentity || isSameSalesforceAccount(fresh, currentTokenData))) {
+          return { ...fresh, userInfo: mergeSalesforceUserInfo(fresh.userInfo, currentTokenData.userInfo) };
+        }
+        return fresh;
+      };
       if (env.authMode === 'client_credentials' || (env.clientId && env.clientSecret && !currentTokenData?.refresh_token)) {
-        return await this.loginWithSalesforceClientCredentials(env);
+        return preserveIdentity(await this.loginWithSalesforceClientCredentials(env));
       }
       // 优先尝试使用 refresh_token 走云端 OAuth 续期
       if (currentTokenData?.refresh_token) {
         try {
-          return await this.refreshToken(env, currentTokenData.refresh_token);
+          return preserveIdentity(await this.refreshToken(env, currentTokenData.refresh_token));
         } catch (rErr: any) {
           console.warn('[Salesforce] OAuth2 refresh_token 换新失败，自动回退至本地 sf CLI 刷新:', rErr.message);
         }
       }
       // 若无 refresh_token 或云端 OAuth 换新异常，自动回退走本地 sf CLI 静默换新
       try {
-        return await this.refreshSalesforceTokenViaCli(env, currentTokenData, false);
+        return preserveIdentity(await this.refreshSalesforceTokenViaCli(env, currentTokenData, false));
       } catch (cliErr: any) {
         throw new Error(`Salesforce 自动续期未成功: ${cliErr.message}，请在连接器详情中重新登录`);
       }
@@ -1224,12 +1211,7 @@ export class AuthService {
 
       const instanceUrl = data.instance_url || env.neoBaseURL;
       const rawOrgId = data.access_token ? data.access_token.split('!')[0] : 'salesforce_org';
-      let userInfo: UserInfo = {
-        userId: rawOrgId,
-        name: 'Salesforce 用户',
-        tenant_id: rawOrgId,
-        tenantName: `Salesforce 组织 (${rawOrgId})`,
-      };
+      let userInfo = salesforceUserInfoFromAuth({ ...data, orgId: data.id?.split('/')[4] || rawOrgId });
 
       try {
         const userinfoEndpoint = `${instanceUrl.replace(/\/+$/, '')}/services/oauth2/userinfo`;
@@ -1248,7 +1230,8 @@ export class AuthService {
             orgName = `${companyName} (${orgId})`;
           }
           userInfo = {
-            userId: uData.user_id || rawOrgId,
+            userId: uData.user_id || userInfo.userId,
+            username: uData.preferred_username,
             name: `${uData.name || '用户'} (${uname})`,
             tenant_id: orgId,
             tenantName: orgName,
@@ -1447,12 +1430,7 @@ export class AuthService {
     if (env.productType === 'salesforce') {
       const instanceUrl = data.instance_url || env.neoBaseURL;
       const rawOrgId = data.access_token ? data.access_token.split('!')[0] : 'salesforce_org';
-      let userInfo: UserInfo = {
-        userId: rawOrgId,
-        name: 'Salesforce 用户',
-        tenant_id: rawOrgId,
-        tenantName: `Salesforce 组织 (${rawOrgId})`,
-      };
+      let userInfo = salesforceUserInfoFromAuth({ ...data, orgId: data.id?.split('/')[4] || rawOrgId });
 
       try {
         const userinfoEndpoint = `${instanceUrl.replace(/\/+$/, '')}/services/oauth2/userinfo`;
@@ -1471,7 +1449,8 @@ export class AuthService {
             orgName = `${companyName} (${orgId})`;
           }
           userInfo = {
-            userId: uData.user_id || rawOrgId,
+            userId: uData.user_id || userInfo.userId,
+            username: uData.preferred_username,
             name: `${uData.name || '用户'} (${uname})`,
             tenant_id: orgId,
             tenantName: orgName,

@@ -12,6 +12,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { AgentSessionService, type AgentRunContext, type ChatRunParams } from './agentSessionService';
 import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '../security/agentTools';
 import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../security/documentTools';
+import { DIAGRAM_SKILL_ID, DIAGRAM_ROUTING_INSTRUCTION, isDiagramDesignSkill, readDiagramDesignSkill } from '../security/diagramDesignSkill';
 import { formatAttachmentContext } from './attachmentContext';
 const connectorKey = (session: any) => JSON.stringify([session.environment?.id, session.environment?.productType,
   session.tokenData?.tenant_id, session.tokenData?.userInfo?.userId,
@@ -1181,7 +1182,12 @@ export class AiService {
 
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
       const systemParts: string[] = [];
-      systemParts.push('【回复中的图片与图表】展示图片请用 ![图片说明](真实图片 URL 或当前项目文件路径)。流程图、时序图、ER 图和思维导图请使用 mermaid 代码块，客户端会直接渲染；不要输出需要执行脚本的 HTML 或图表配置指令。已存在的 XMind 文件请使用 [文件名](真实 .xmind 路径) 链接，客户端可预览主题层级，也可用 read_document 按画布读取。不要虚构图片链接或文件路径。');
+      const diagramSkillAvailable = config.skills?.find(skill => skill.id === DIAGRAM_SKILL_ID)?.enabled !== false
+        && mode !== 'minimal' && enableTools !== false && config.settings.enableCrmTools && builtinMcpEnabled;
+      systemParts.push('【回复中的图片与图表】展示图片请用 ![图片说明](真实图片 URL 或当前项目文件路径)。复杂图表先保存并校验当前项目内的完整 .svg/.html 文件，再在 diagram 代码块中只输出真实文件路径；不要重复长源码，以免回复截断导致图表无法预览。简短图可直接用 mermaid 与 svg 代码块，简短 HTML 图表用 html:diagram 代码块；客户端仅静态预览 SVG，不执行脚本。已存在的 XMind 文件请使用 [文件名](真实 .xmind 路径) 链接，客户端可预览主题层级，也可用 read_document 按画布读取。不要虚构图片链接或文件路径。');
+      if (diagramSkillAvailable) {
+        systemParts.push(DIAGRAM_ROUTING_INSTRUCTION);
+      }
       if (this.agentContext.getStore()?.managed) {
         systemParts.push('你是主会话派发的执行代理。完成本会话的明确任务，汇报真实结果、文件路径、验证和未完成事项。不得再创建或调度代理。需要用户确认时说明具体问题并等待，不能自行扩大授权。');
       } else if (mode !== 'minimal' && enableTools !== false && config.settings.enableCrmTools) systemParts.push(AGENT_ROUTING_INSTRUCTION);
@@ -1315,6 +1321,7 @@ declare const tools: {
 
       if (!isMinimalMode) {
         systemParts.push(`<available_skills>
+${diagramSkillAvailable ? '- diagram-design: 架构图、流程图、时序图、ER 图等设计与 SVG 交付；绘图前调用 skill({ name: "diagram-design" })，再按 resource 读取类型参考。' : ''}
 - document-reader: Excel、Word、PDF、PPT、XMind 和文本阅读；通过 read_document 按工作表、页码、幻灯片、思维导图画布与行号读取，核对来源、公式缓存及扫描件限制。
 - salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
 - salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
@@ -3411,6 +3418,11 @@ ${currentCompactionSummary.summary}
       if (typeof skillName !== 'string' || !skillName) throw new Error('缺少技能名称');
       const builtin = BUILTIN_AI_SKILLS.find(skill => skill.id === skillName || skill.name === skillName);
       const resolvedName = builtin?.id || skillName;
+      if (isDiagramDesignSkill(resolvedName)) {
+        if (this.getAiConfig().skills?.find(skill => skill.id === DIAGRAM_SKILL_ID)?.enabled === false) throw new Error('Diagram Design 技能已停用，请在技能设置中启用');
+        const packaged = readDiagramDesignSkill(resolvedName, args)!;
+        return { data: packaged, summary: args.resource ? '已读取 Diagram Design 图表参考资料' : '已加载 Diagram Design 图表设计技能及资源目录' };
+      }
       if (!restrictedFeatureService.canUseSkill(resolvedName)) throw new Error(`未找到名为 "${skillName}" 的技能规范`);
       const packaged = readRestrictedSkillPackage(resolvedName, args);
       if (packaged) return { data: packaged, summary: args.script ? '已完成内置技能离线构造或校验'

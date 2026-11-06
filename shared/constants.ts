@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.41';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.42';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -732,6 +732,12 @@ export const BUILTIN_MCP_SERVERS: McpServerConfig[] = [
  * 注意: 核心系统指令已移入桌面内核安全沙箱混淆保护，绝不向渲染进程或配置文件明文暴露
  */
 export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
+  {
+    id: 'skill-diagram-design', name: 'Diagram Design 图表设计',
+    description: '基于 Diagram Design 生成架构图、流程图、时序图、ER 图、泳道图等 SVG 图表，按需读取设计参考，支持重绘 draw.io、Mermaid 和 Excalidraw。',
+    category: 'builtin', iconName: 'Workflow', enabled: true,
+    triggerKeywords: ['diagram', '架构图', '流程图', '时序图', '泳道图', 'ER图', 'draw.io', 'Excalidraw', '图表设计'],
+  },
   {
     id: 'skill-document-reader', name: '文档阅读与核对',
     description: '读取 Excel、Word、PDF、PPT 和文本资料，按工作表、页码或幻灯片分段核对，保留来源及解析限制。',

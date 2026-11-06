@@ -2,10 +2,12 @@ import { exec, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { AccountRecord, CliSyncResult, NeoEnvironment, SalesforceCliSyncResult, SessionState, TokenData } from '../types';
 import { getSalesforceCliCommand, getSalesforceCliEnvironment } from './salesforceCliRuntime';
 import { resolveSalesforceAlias } from './salesforceService';
+import { getSalesforceUsername, getSalesforceUserId, isSameSalesforceAccount, mergeSalesforceUserInfo, normalizeSalesforceId } from './salesforceIdentity';
 import { deleteNeoCliAuth, ensureNeoCliProject, getNeoCliAuthLocation, readNeoCliAuth, syncSessionToNeoCli, toDesktopSession, NeoCliAuth } from './neocrmCliSession';
 
 export class SessionStore {
@@ -148,16 +150,40 @@ export class SessionStore {
   }
 
   private deduplicateAccountHistory(records: AccountRecord[], preferredId?: string): AccountRecord[] {
-    const unique = new Map<string, AccountRecord>();
+    const unique: AccountRecord[] = [];
     for (const record of records) {
-      const key = this.accountIdentity(record);
-      const existing = unique.get(key);
-      if (!existing || record.id === preferredId ||
-          (existing.id !== preferredId && record.lastLoginAt > existing.lastLoginAt)) {
-        unique.set(key, record);
-      }
+      const index = unique.findIndex((existing) => this.isSameAccount(existing, record));
+      if (index < 0) { unique.push(record); continue; }
+      const existing = unique[index];
+      const preferRecord = record.id === preferredId ||
+        (existing.id !== preferredId && record.lastLoginAt > existing.lastLoginAt);
+      const winner = preferRecord ? record : existing;
+      const other = preferRecord ? existing : record;
+      const userInfo = winner.environment?.productType === 'salesforce'
+        ? mergeSalesforceUserInfo(winner.tokenData.userInfo, other.tokenData.userInfo)
+        : winner.tokenData.userInfo;
+      unique[index] = {
+        ...winner,
+        previousAccountIds: [...new Set([...(winner.previousAccountIds || []), other.id,
+          ...(other.previousAccountIds || [])])].filter((id) => id !== winner.id),
+        tokenData: { ...winner.tokenData, userInfo },
+        tenantName: userInfo?.tenantName || winner.tenantName,
+        userName: userInfo?.name || winner.userName,
+      };
     }
-    return [...unique.values()].sort((a, b) => b.lastLoginAt - a.lastLoginAt);
+    return unique.sort((a, b) => b.lastLoginAt - a.lastLoginAt);
+  }
+
+  private isSameAccount(left: AccountRecord, right: AccountRecord): boolean {
+    if (left.environment?.productType === 'salesforce' && right.environment?.productType === 'salesforce') {
+      return left.id === right.id || isSameSalesforceAccount(left.tokenData, right.tokenData);
+    }
+    return this.accountIdentity(left) === this.accountIdentity(right);
+  }
+
+  public resolveAccountId(accountId: string): string {
+    return this.getAccountHistory().find((record) => record.id === accountId ||
+      record.previousAccountIds?.includes(accountId))?.id || accountId;
   }
 
   public getCurrentSession(): SessionState {
@@ -206,6 +232,7 @@ export class SessionStore {
       const existing = data.history.find((item) => item.id === session.activeAccountId);
       const historyRecord: AccountRecord = {
         id: session.activeAccountId,
+        previousAccountIds: existing?.previousAccountIds,
         environmentId: session.environment?.id || 'custom',
         environmentName: session.environment?.name || '销售易',
         tenantId: session.tokenData.tenant_id,
@@ -220,6 +247,7 @@ export class SessionStore {
         [historyRecord, ...data.history.filter((item) => item.id !== historyRecord.id)],
         session.activeAccountId,
       ).slice(0, 20);
+      session.tokenData = data.history.find((record) => record.id === session.activeAccountId)?.tokenData || session.tokenData;
     }
     this.writeStorage(data);
   }
@@ -238,8 +266,10 @@ export class SessionStore {
   public getAccountHistory(): AccountRecord[] {
     const data = this.readStorage();
     const history = this.deduplicateAccountHistory(data.history || [], data.current?.activeAccountId);
-    if (history.length !== (data.history || []).length) {
+    if (JSON.stringify(history) !== JSON.stringify(data.history || [])) {
       data.history = history;
+      const active = history.find((record) => record.id === data.current?.activeAccountId);
+      if (active && data.current?.tokenData) data.current.tokenData.userInfo = active.tokenData.userInfo;
       this.writeStorage(data);
     }
     return history;
@@ -251,7 +281,19 @@ export class SessionStore {
     options: { deferSalesforceCliSync?: boolean } = {}
   ): SessionState {
     const data = this.readStorage();
-    const accountId = `${env.id}_${tokenData.tenant_id || 'unknown'}_${tokenData.userInfo?.userId || 'u'}`;
+    const userKey = env.productType === 'salesforce'
+      ? getSalesforceUserId(tokenData.userInfo) || getSalesforceUsername(tokenData.userInfo) || randomUUID()
+      : tokenData.userInfo?.userId || 'u';
+    let accountId = `${env.id}_${tokenData.tenant_id || 'unknown'}_${userKey}`;
+    const matching = env.productType === 'salesforce' ? data.history.find((record) =>
+      record.id === data.current?.activeAccountId && record.environment?.productType === 'salesforce' &&
+      isSameSalesforceAccount(record.tokenData, tokenData)) || data.history.find((record) =>
+      record.environment?.productType === 'salesforce' && isSameSalesforceAccount(record.tokenData, tokenData)) : undefined;
+    if (matching) {
+      accountId = matching.id;
+      tokenData = { ...tokenData, refresh_token: tokenData.refresh_token || matching.tokenData.refresh_token,
+        userInfo: mergeSalesforceUserInfo(tokenData.userInfo, matching.tokenData.userInfo) };
+    }
 
     const session: SessionState = {
       isLoggedIn: true,
@@ -261,6 +303,7 @@ export class SessionStore {
     };
     const historyRecord: AccountRecord = {
       id: accountId,
+      previousAccountIds: matching?.previousAccountIds,
       environmentId: env.id,
       environmentName: env.name,
       tenantId: tokenData.tenant_id,
@@ -278,6 +321,7 @@ export class SessionStore {
 
     data.current = session;
     data.history = history.slice(0, 20); // 最多保留20条历史
+    session.tokenData = data.history.find((record) => record.id === accountId)?.tokenData || tokenData;
     this.writeStorage(data);
 
     // 后台 Token 更新保持非阻塞；交互式登录由调用方等待并展示实际 CLI 同步结果。
@@ -294,6 +338,40 @@ export class SessionStore {
       if (!sync.success) console.warn(`[NeoCRM CLI] ${sync.message}`);
     }
 
+    return this.getCurrentSession();
+  }
+
+  // A token renewal updates the existing login; it must never create or activate another account.
+  public updateRefreshedSession(env: NeoEnvironment, tokenData: TokenData, expected?: SessionState,
+    options: { deferSalesforceCliSync?: boolean } = {}): SessionState | null {
+    const current = this.getCurrentSession();
+    if (!current.isLoggedIn || current.environment?.id !== env.id || !current.tokenData) return null;
+    if (expected && (current.activeAccountId !== expected.activeAccountId ||
+        current.tokenData.access_token !== expected.tokenData?.access_token ||
+        current.tokenData.savedAt !== expected.tokenData?.savedAt)) return null;
+    if (env.productType === 'salesforce') {
+      const org = normalizeSalesforceId(tokenData.tenant_id);
+      if (org && org !== 'salesforce_org' && org !== normalizeSalesforceId(current.tokenData.tenant_id)) return null;
+      const hasUser = getSalesforceUserId(tokenData.userInfo) || getSalesforceUsername(tokenData.userInfo);
+      if (!hasUser && !expected) return null;
+      if (hasUser && !isSameSalesforceAccount(current.tokenData, tokenData)) return null;
+      tokenData = { ...tokenData, tenant_id: current.tokenData.tenant_id,
+        userInfo: mergeSalesforceUserInfo(tokenData.userInfo, current.tokenData.userInfo) };
+    } else if (String(tokenData.tenant_id) !== String(current.tokenData.tenant_id) ||
+      String(tokenData.userInfo?.userId) !== String(current.tokenData.userInfo?.userId)) return null;
+    const updated: SessionState = { ...current, environment: env, tokenData: {
+      ...current.tokenData, ...tokenData,
+      refresh_token: tokenData.refresh_token || current.tokenData.refresh_token,
+      cookieString: tokenData.cookieString || current.tokenData.cookieString,
+      cookies: tokenData.cookies || current.tokenData.cookies,
+      cookieSavedAt: tokenData.cookieSavedAt || current.tokenData.cookieSavedAt,
+    } };
+    this.persistCurrentSession(updated);
+    if (env.productType === 'salesforce' && !options.deferSalesforceCliSync) {
+      void this.syncToSalesforceCli(env, updated.tokenData!).then((result) => {
+        if (!result.success) console.warn('[Salesforce CLI 同步失败]:', result.message);
+      }).catch((error: any) => console.warn('[Salesforce CLI 同步异常]:', error.message));
+    } else if ((env.productType || 'neocrm') === 'neocrm') this.syncToNeoCli();
     return this.getCurrentSession();
   }
 
@@ -331,6 +409,7 @@ export class SessionStore {
   }
 
   public async switchAccount(accountId: string): Promise<SessionState | null> {
+    accountId = this.resolveAccountId(accountId);
     const data = this.readStorage();
     const target = data.history.find((h) => h.id === accountId);
     if (!target) return null;
@@ -405,6 +484,7 @@ export class SessionStore {
   }
 
   public deleteAccountRecord(accountId: string): boolean {
+    accountId = this.resolveAccountId(accountId);
     const data = this.readStorage();
     data.history = data.history.filter((h) => h.id !== accountId);
     if (data.current?.activeAccountId === accountId) {
@@ -453,13 +533,15 @@ export class SessionStore {
   }
 
   private persistSalesforceRefreshToken(env: NeoEnvironment, tokenData: TokenData, refreshToken: string): void {
-    const accountId = `${env.id}_${tokenData.tenant_id || 'unknown'}_${tokenData.userInfo?.userId || 'u'}`;
     tokenData.refresh_token = refreshToken;
     const storage = this.readStorage();
-    if (storage.current?.activeAccountId === accountId && storage.current.tokenData) {
+    const matches = (entry?: { environment?: NeoEnvironment; tokenData?: TokenData }) =>
+      entry?.environment?.id === env.id && entry.tokenData?.access_token === tokenData.access_token &&
+      isSameSalesforceAccount(entry.tokenData, tokenData);
+    if (matches(storage.current) && storage.current?.tokenData) {
       storage.current.tokenData.refresh_token = refreshToken;
     }
-    const historyEntry = storage.history.find((entry) => entry.id === accountId);
+    const historyEntry = storage.history.find(matches);
     if (historyEntry?.tokenData) historyEntry.tokenData.refresh_token = refreshToken;
     this.writeStorage(storage);
   }

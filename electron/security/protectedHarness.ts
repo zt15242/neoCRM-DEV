@@ -6,6 +6,7 @@ import { NEO_CLI_SKILLS_INSTRUCTIONS } from './neoCliSkills';
 import { getNeoCliConversationSkill } from './neoCliConversation';
 import { DOCUMENT_TOOLS_SPEC, getDocumentReadingSkill } from './documentTools';
 import { getRestrictedPackageInstruction, isRestrictedSkillPackage } from './restrictedSkillPackages';
+import { getDiagramDesignInstruction, isDiagramDesignSkill } from './diagramDesignSkill';
 /**
  * NeoCRM Desktop 内核受保护的私有资产与安全规范
  * 注意: 本文件包含深度封装的系统技能与内部 Harness 工具定义，受内核混淆保护，禁止导出与反向破解。
@@ -153,6 +154,7 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 
 
 export function getProtectedSkillInstruction(skillId: string): string | null {
+  if (isDiagramDesignSkill(skillId)) return getDiagramDesignInstruction(skillId);
   if (isRestrictedSkillPackage(skillId)) return getRestrictedPackageInstruction(skillId);
   const documentSkill = getDocumentReadingSkill(skillId);
   if (documentSkill) return documentSkill;
@@ -289,6 +291,7 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
  * 判断是否为受保护的系统级内置技能
  */
 export function isProtectedBuiltinSkill(skillId: string): boolean {
+  if (isDiagramDesignSkill(skillId)) return true;
   if (skillId === 'skill-document-reader' || skillId === 'document-reader') return true;
   const norm = skillId.replace(/^skill-/, "");
   if (NEO_CLI_SKILLS_INSTRUCTIONS[norm]) return true;

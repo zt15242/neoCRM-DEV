@@ -33,6 +33,7 @@ export type NeoEnvironment = CrmConnector;
 
 export interface UserInfo {
   userId?: string | number;
+  username?: string;
   name?: string;
   tenant_id?: string | number;
   tenantName?: string;
@@ -68,6 +69,7 @@ export interface SessionState {
 
 export interface AccountRecord {
   id: string;
+  previousAccountIds?: string[];
   environmentId: string;
   environmentName: string;
   tenantId?: string | number;

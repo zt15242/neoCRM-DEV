@@ -65,7 +65,8 @@ sessionStore.onSharedSessionChanged((session) => {
 // 当底层服务检测到 Token 失效 (401) 并通过本地 CLI 或端点自动完成静默换新时，统一自动持久化并通知前端
 const handleTokenRefresh = (env: any, newToken: any) => {
   try {
-    const saved = sessionStore.saveSession(env, newToken);
+    const saved = sessionStore.updateRefreshedSession(env, newToken);
+    if (!saved) return;
     win?.webContents.send('session:updated', saved);
     console.log(`[${env.name || 'CRM'}] Access Token 已在底层自动续期并同步更新会话`);
   } catch (err: any) {
@@ -329,18 +330,20 @@ ipcMain.handle('auth:refreshToken', async () => {
   }
 
   const tokenData = await authService.renewToken(fullEnv, current.tokenData);
-  if (current.tokenData?.cookieString && !tokenData.cookieString) {
-    tokenData.cookieString = current.tokenData.cookieString;
-    tokenData.cookies = current.tokenData.cookies;
-    tokenData.cookieSavedAt = current.tokenData.cookieSavedAt;
+  const saved = sessionStore.updateRefreshedSession(fullEnv, tokenData, current, { deferSalesforceCliSync: true });
+  if (!saved) return sessionStore.getCurrentSession();
+  if (fullEnv.productType === 'salesforce' && saved.tokenData) {
+    saved.salesforceCliSync = await sessionStore.syncToSalesforceCli(fullEnv, saved.tokenData);
   }
-  const saved = await sessionStore.saveSessionAndSyncSalesforceCli(fullEnv, tokenData);
   win?.webContents.send('session:updated', saved);
   return saved;
 });
 
 // 后台定时自动续期引擎 (每 30 秒执行一次过期预检)
+let tokenRenewalInProgress = false;
 setInterval(async () => {
+  if (tokenRenewalInProgress) return;
+  tokenRenewalInProgress = true;
   try {
     const current = sessionStore.getCurrentSession();
     if (!current.isLoggedIn || !current.environment || !current.tokenData?.expiresAt) {
@@ -356,17 +359,15 @@ setInterval(async () => {
         if (found) fullEnv = { ...found, ...fullEnv };
       }
       const tokenData = await authService.renewToken(fullEnv, current.tokenData);
-      if (current.tokenData.cookieString && !tokenData.cookieString) {
-        tokenData.cookieString = current.tokenData.cookieString;
-        tokenData.cookies = current.tokenData.cookies;
-        tokenData.cookieSavedAt = current.tokenData.cookieSavedAt;
-      }
-      const saved = sessionStore.saveSession(fullEnv, tokenData);
+      const saved = sessionStore.updateRefreshedSession(fullEnv, tokenData, current);
+      if (!saved) return;
       win?.webContents.send('session:updated', saved);
       console.log(`[自动续期] 租户 ${fullEnv.name} Token 自动续期成功，新有效期至: ${new Date(tokenData.expiresAt).toLocaleTimeString()}`);
     }
   } catch (err: any) {
     console.warn('[自动续期] 静默续期异常:', err.message);
+  } finally {
+    tokenRenewalInProgress = false;
   }
 }, 30000);
 
@@ -678,7 +679,7 @@ ipcMain.handle('file:previewMessage', async (_, request: MessagePreviewRequest) 
   const project = session?.projectId ? projects.find(item => item.id === session.projectId) : undefined;
   const root = project?.localPath || projects.find(item => path.resolve(item.localPath) === path.resolve(request.projectPath || '.'))?.localPath;
   const allowedFiles = session?.messages.flatMap(message => message.attachments || []).map(file => file.fullPath).filter((file): file is string => !!file) || [];
-  return readMessagePreview(request.source, { projectPath: root, allowedFiles });
+  return readMessagePreview(request.source, { projectPath: root, allowedFiles, diagram: request.diagram === true });
 });
 
 // ================= MCP 与 Skill 技能管理 =================
