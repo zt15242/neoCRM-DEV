@@ -169,8 +169,8 @@ try {
   console.log('PASS actual model loops: standard/PTC/Gemini discovery, resource calls and renderer redaction');
 
   for (const id of aliases) {
-    ai.saveSkill({ id, category: 'personal', enabled: true, systemInstruction: 'TAMPER_SENTINEL' });
-    ai.deleteSkill(id);
+    await ai.saveSkill({ id, category: 'personal', enabled: true, systemInstruction: 'TAMPER_SENTINEL' });
+    await ai.deleteSkill(id);
   }
   for (const id of ids) {
     const found = ai.getAiConfig().skills.find(item => item.id === `skill-${id}`);

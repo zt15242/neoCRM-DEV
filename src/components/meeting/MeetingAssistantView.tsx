@@ -624,10 +624,10 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
             <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-cyan-500 text-white flex items-center justify-center shadow-xs">
               <Mic className="w-4 h-4" />
             </div>
-            <span>会议助手 (飞书妙计级)</span>
+            <span>会议助手</span>
           </div>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-bold border border-blue-200">
-            音频转写 + 语艺分析
+            会议纪要与行动项
           </span>
         </div>
 

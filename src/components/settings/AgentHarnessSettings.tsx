@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AiHarnessSettings, AiProviderConfig } from '../../../shared/types';
+import { ModelOptions } from './ModelOptions';
 import { 
   Sparkles, 
   Wrench, 
@@ -116,11 +117,7 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
               onChange={(e) => setForm({ ...form, defaultModelId: e.target.value })}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:border-sky-500"
             >
-              {selectedProvider?.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} ({m.id})
-                </option>
-              ))}
+              {selectedProvider && <ModelOptions models={selectedProvider.models} showId />}
             </select>
           </div>
         </div>

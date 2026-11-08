@@ -66,6 +66,7 @@ try {
       fileGetPath: file => file.physical || '',
       fileParseLocalPath: async fullPath => attachment(fullPath.split('/').pop(), fullPath),
       clipboardReadFilePaths: async () => window.results.nativePaths,
+      projectListFiles: async () => [],
       aiParseFileBuffer: async (name, buffer) => {
         if (name === 'slow.txt') await new Promise(resolve => { window.results.pending = resolve; });
         if (name === 'broken.docx') throw new Error('文件损坏');
@@ -77,6 +78,11 @@ try {
       onSend={(...args) => window.results.sent.push(args)} onStop={() => {}}
       entityRefs={[]} onRemoveEntityRef={() => {}} onOpenEntityPicker={() => {}}
       enableTools={true} onToggleTools={() => {}}
+      mentionSkills={[
+        {id:'skill-diagram-design',name:'Diagram Design 图表设计',description:'绘制图表',category:'builtin',enabled:true},
+        {id:'personal-check',name:'个人检查',description:'核查',category:'personal',enabled:true},
+        {id:'disabled-skill',name:'已停用技能',description:'停用',category:'builtin',enabled:false},
+      ]}
       showToast={(type, message) => window.results.toasts.push([type, message])}
     />));
     window.ready = true;
@@ -126,6 +132,21 @@ try {
         send().click(); await wait(() => window.results.sent.length === 1);
         check(window.results.sent[0][2].length === 5, 'Expected five successful attachments in send payload');
         await wait(() => !document.body.textContent.includes('first.txt'));
+        const type = value => {Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
+        type('@diagram'); await wait(() => document.querySelector('[data-testid=skill-mention-option]'));
+        check(document.body.textContent.includes('Diagram Design'), 'Skill search result missing');
+        input.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',bubbles:true,cancelable:true}));
+        await wait(() => document.querySelector('[data-testid=skill-mention-chip]'));
+        type('请绘制架构图'); await wait(() => send() && !send().disabled); send().click();
+        await wait(() => window.results.sent.length === 2);
+        check(window.results.sent[1][5].join(',') === 'skill-diagram-design', 'Selected skill must be included in this request');
+        await wait(() => !document.querySelector('[data-testid=skill-mention-chip]'));
+        type('@个人'); await wait(() => document.querySelector('[data-testid=skill-mention-option]'));
+        document.querySelector('[data-testid=skill-mention-option]').click();await wait(() => document.querySelector('[data-testid=skill-mention-chip]'));
+        document.querySelector('[aria-label="移除技能 个人检查"]').click();await wait(() => !document.querySelector('[data-testid=skill-mention-chip]'));
+        type('继续');await wait(() => send() && !send().disabled);send().click();await wait(() => window.results.sent.length === 3);
+        check(window.results.sent[2][5].length === 0, 'Removed skills must not leak to later messages');
+        type('@已停用');await new Promise(resolve => setTimeout(resolve,30));check(!document.querySelector('[data-testid=skill-mention-option]'), 'Disabled skills must not be selectable');
         return true;
       }).toString() + ')()');
       assert.equal(result, true);

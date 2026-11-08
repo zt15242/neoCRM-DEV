@@ -29,11 +29,13 @@ try {
     }
     createRoot(document.getElementById('root')).render(<Harness />);
   ` }, bundle: true, platform: 'browser', format: 'iife', outfile: path.join(fixture, 'renderer.js'), logLevel: 'silent' });
-  await fs.writeFile(path.join(fixture, 'index.html'), '<!doctype html><div id="root"></div><script src="renderer.js"></script>');
+  const styles = (await fs.readdir(path.join(root, 'dist/assets'))).filter(name => name.endsWith('.css'));
+  await fs.writeFile(path.join(fixture, 'index.html'), `<!doctype html><html lang="zh"><head><meta name="viewport" content="width=device-width,initial-scale=1">${styles.map(name => `<link rel="stylesheet" href="${path.join(root, 'dist/assets', name)}">`).join('')}</head><body><div id="root"></div><script src="renderer.js"></script></body></html>`);
   const host = path.join(fixture, 'host.cjs');
   await fs.writeFile(host, `
     const { app, BrowserWindow } = require('electron');
     const assert = require('node:assert/strict');
+    const fs = require('node:fs');
     app.setPath('userData', ${JSON.stringify(path.join(fixture, 'browser-data'))});
     app.whenReady().then(async () => {
       const win = new BrowserWindow({show: false, webPreferences: {backgroundThrottling: false}});
@@ -72,17 +74,27 @@ try {
           assert.equal(await run('window.toasts.at(-1).type'), 'error');
           assert.equal(await run('window.saved.length'), 1);
         }
+        await change('模型上下文容量', '1000000', true); await change('模型最大输出', '1000000', true);
+        await save(); await wait('document.querySelector("#context-output-error")?.textContent.includes("最大输出必须小于")');
+        if (process.env.NEO_CONTEXT_SCREENSHOT) { await new Promise(resolve => setTimeout(resolve, 100)); fs.writeFileSync(process.env.NEO_CONTEXT_SCREENSHOT, (await win.webContents.capturePage()).toPNG()); }
+        assert.equal(await run('document.querySelector("[aria-label=模型最大输出]").getAttribute("aria-invalid")'),'true');
+        assert.equal(await run('window.saved.length'),1);
+        await change('模型最大输出','',true);
+        assert.equal(await run('Boolean(document.querySelector("#context-output-error"))'),false);
+        await save(); await wait('window.saved.length === 2');
+        assert.equal(await run('window.saved[1].models[1].contextWindow'),1000000);
+        assert.equal(await run('window.saved[1].models[1].maxOutputTokens'),undefined);
         await change('上下文容量供应商', 'b');
         assert.equal(await value('上下文容量模型'), 'b1');
         assert.equal(await value('模型上下文容量'), '');
         await change('模型上下文容量', '65536', true); await save();
-        await wait('window.saved.length === 2');
-        assert.equal(await run('window.saved[1].models[0].contextWindow'), 65536);
-        assert.equal(await run('window.saved[1].enabled'), false);
-        await change('模型上下文容量', '', true); await change('模型最大输出', '', true); await save();
         await wait('window.saved.length === 3');
-        assert.equal(await run('window.saved[2].models[0].contextWindow'), undefined);
-        assert.equal(await run('window.saved[2].models[0].maxOutputTokens'), undefined);
+        assert.equal(await run('window.saved[2].models[0].contextWindow'), 65536);
+        assert.equal(await run('window.saved[2].enabled'), false);
+        await change('模型上下文容量', '', true); await change('模型最大输出', '', true); await save();
+        await wait('window.saved.length === 4');
+        assert.equal(await run('window.saved[3].models[0].contextWindow'), undefined);
+        assert.equal(await run('window.saved[3].models[0].maxOutputTokens'), undefined);
         console.log('PASS validation and unknown capacity: invalid limits rejected, provider switching isolated, blank limits remain unknown');
         win.destroy(); app.exit(0);
       } catch (error) { console.error(error); win.destroy(); app.exit(1); }

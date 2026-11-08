@@ -291,7 +291,7 @@ export interface AiFileAttachment {
   documentFormat?: string;
   previewTruncated?: boolean;
   parseWarnings?: string[];
-  contentKind?: 'text' | 'image' | 'binary';
+  contentKind?: 'text' | 'image' | 'binary' | 'directory';
 }
 
 export interface McpToolItem {

@@ -30,6 +30,7 @@ import { CodexTerminalPanel } from "./CodexTerminalPanel";
 import { ApprovalDeployPlan } from "../../../shared/types";
 import { WorkflowLicenseModal } from './WorkflowLicenseModal';
 import { 
+  ChevronRight,
   Sparkles, 
   Settings, 
   KeyRound, 
@@ -145,9 +146,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   onToggleSidebar,
   platform = 'darwin',
 }) => {
-  const { visible: privateFeaturesVisible, isRoleVisible } = useRestrictedFeatures();
+  const { visible: privateFeaturesVisible, isRoleVisible, isSkillVisible } = useRestrictedFeatures();
   const visiblePresets = AI_AGENT_PRESETS.filter((preset) => isRoleVisible(preset.id));
-  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(true);
   const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
 
   // DSH 模式切换 (Standard / PTC / Minimal / Plan)
@@ -249,6 +250,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     () => new Set(personalSkills.map((s) => s.id)),
     [personalSkills]
   );
+  const mentionableSkills = useMemo(() => skills.filter(item => item.enabled && isSkillVisible(item.id)), [skills, privateFeaturesVisible]);
 
   // 当前对话所选供应商与模型
   const [currentProviderId, setCurrentProviderId] = useState<string>('deepseek');
@@ -377,7 +379,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         const list = await window.neoApi.aiGetSessions();
         const validList = list.filter((s) => s.messages && s.messages.length > 0);
         setSessions(previous => mergeSavedChatSessions(validList, previous, activeStreamsRef.current, ''));
-        if (validList.length > 0 && !activeSessionId) {
+        if (propActiveSessionId === undefined && validList.length > 0 && !activeSessionId) {
           const first = validList[0];
           if (requiresRoleLicense(first.presetId) && !licStatus?.isAuthorized) {
             setSelectedPresetId("harness-agent");
@@ -410,12 +412,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
   useEffect(() => {
     const selected = sessionsRef.current.find(item => item.id === activeSessionId);
-    if (!selected?.agentRun) return;
-    setCurrentProviderId(selected.providerId);
-    setCurrentModelId(selected.modelId);
+    if (!selected || !isRoleVisible(selected.presetId)) return;
+    const provider = providers.find(item => item.id === selected.providerId && isProviderConfigured(item));
+    if (provider) {
+      setCurrentProviderId(provider.id);
+      setCurrentModelId(provider.models.some(model => model.id === selected.modelId) ? selected.modelId : provider.models[0]?.id || selected.modelId);
+    }
     setSelectedPresetId(selected.presetId);
-    setActiveSkillIds(selected.activeSkillIds || []);
-  }, [activeSessionId]);
+    setActiveSkillIds((selected.activeSkillIds || []).filter(id => skills.some(skill => skill.id === id && skill.enabled)));
+  }, [activeSessionId, providers, skills, privateFeaturesVisible]);
 
   const handleJumpToTop = () => {
     if (messagesContainerRef.current) {
@@ -666,7 +671,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     refs?: AiContextEntityRef[],
     attachments?: AiFileAttachment[],
     skillIds?: string[],
-    mcpIds?: string[]
+    mcpIds?: string[],
+    mentionedSkillIds?: string[]
   ) => {
     if (await consumeAccessCommand(text)) return;
     if (!isRoleVisible(selectedPresetId)) return;
@@ -682,6 +688,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
     // 仅允许挂载已启用的个人专属技能，内置技能受安全保护禁止随意挂载
     const effectiveSkills = (skillIds || activeSkillIds).filter((sid) => personalSkillIds.has(sid));
+    const visibleSkillIds = new Set(skills.filter(item => item.enabled && isSkillVisible(item.id)).map(item => item.id));
+    const explicitSkillIds = [...new Set((mentionedSkillIds || []).filter(id => visibleSkillIds.has(id)))];
     if (requiresRoleLicense(preset.id)) {
       let latestLic: WorkflowLicenseStatus | null | undefined;
       try {
@@ -715,7 +723,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         providerId: currentProvider?.id || currentProviderId,
         modelId: currentProvider?.models?.some((m) => m.id === currentModelId) ? currentModelId : (currentProvider?.models?.[0]?.id || currentModelId),
         messages: [],
-        activeSkillIds: skillIds || activeSkillIds,
+        activeSkillIds: effectiveSkills,
         mode: currentSessionMode,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -724,7 +732,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       targetSession = {
         ...targetSession,
         title: effectiveTitle,
-        activeSkillIds: skillIds || activeSkillIds,
+        activeSkillIds: effectiveSkills,
         mode: targetSession.mode || currentSessionMode,
       };
     }
@@ -735,7 +743,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       content: text,
       entityRefs: refs && refs.length > 0 ? [...refs] : undefined,
       attachments: attachments && attachments.length > 0 ? [...attachments] : undefined,
-      skillIds: skillIds && skillIds.length > 0 ? [...skillIds] : undefined,
+      skillIds: explicitSkillIds.length > 0 ? explicitSkillIds : undefined,
       createdAt: Date.now(),
     };
 
@@ -760,7 +768,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       providerId: currentProviderId,
       modelId: currentModelId,
       messages: updatedMessages,
-      activeSkillIds: skillIds || activeSkillIds,
+      activeSkillIds: effectiveSkills,
       mode: targetSession.mode || currentSessionMode,
       updatedAt: Date.now(),
     };
@@ -801,7 +809,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         presetPrompt: preset.systemPrompt,
         messages: [...cleanHistory, userMsg],
         enableTools,
-        activeSkillIds: skillIds || activeSkillIds,
+        activeSkillIds: effectiveSkills,
         activeMcpServerIds: effectiveMcpIds,
         compactionSummary: targetSession.compactionSummary,
         projectPath: activeProject?.localPath,
@@ -927,14 +935,14 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const activeToolCalls = activeSession?.messages?.flatMap((m) => m.toolCalls || []) || [];
 
   return (
-    <div className="bg-white overflow-hidden flex flex-1 h-full w-full min-h-0 min-w-0">
+    <div className={`ai-code-layout bg-white overflow-hidden flex flex-1 h-full w-full min-h-0 min-w-0 ${isTerminalOpen ? 'has-workbench' : ''}`}>
 
 
       {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
-      <div className="flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden relative">
+      <div className="ai-chat-column flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden relative">
         {/* 顶部 Codex 风格标题与分栏控制栏 */}
         <div className={`h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0 select-none ${
-          platform === 'darwin' && sidebarCollapsed ? 'pl-20 window-drag' : ''
+          'window-drag'
         }`}>
           <div className="flex items-center space-x-2 min-w-0 window-no-drag">
             {sidebarCollapsed && onToggleSidebar && (
@@ -1051,7 +1059,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   ? "bg-slate-900 text-white border-slate-900 shadow-xs"
                   : "border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
               }`}
-              title={isTerminalOpen ? "收起右侧执行终端与调用日志" : "展开右侧执行终端与调用日志 (Codex Split View)"}
+              title={isTerminalOpen ? "收起代码与终端" : "打开代码与终端"}
             >
               <PanelRight className="w-3.5 h-3.5" />
             </button>
@@ -1134,95 +1142,15 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 
           {/* 空会话欢迎引导页 */}
           {(!activeSession || activeSession.messages.length === 0) ? (
-            <div className="ai-welcome max-w-4xl mx-auto py-10 px-2 space-y-8">
-              {/* 居中品牌标语与状态徽标 (对齐 DSH Codex UI 核心美学) */}
-              <div className="text-center space-y-3">
-                <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-slate-900">
-                  {currentPreset.name.split(" (")[0]}
-                </h1>
-                <p className="text-xs text-slate-500 max-w-xl mx-auto leading-relaxed">
-                  {currentPreset.description}
-                </p>
-
-                {/* 当前租户连接状态提示胶囊 */}
-                <div className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-white border border-slate-200 text-xs text-slate-700 shadow-2xs">
-                  <ShieldCheck className={`w-4 h-4 ${crmSession.isLoggedIn ? "text-emerald-500" : "text-amber-500"}`} />
-                  <span className="font-medium">
-                    {crmSession.isLoggedIn
-                      ? `已连接: ${crmSession.tokenData?.userInfo?.tenantName || crmSession.environment?.name || "沙盒环境"}`
-                      : "未连接 CRM 租户（登录后 AI 可直接读取真实对象与执行安全数据探索）"}
-                  </span>
-                </div>
+            <div className="ai-welcome workspace-welcome">
+              <h1>{activeProject ? `一起构建 ${activeProject.name}` : '从一个项目开始'}</h1>
+              <p>{activeProject ? '打开项目文件直接编辑，或描述你要完成的任务。' : '在左侧关联本地项目，然后打开文件或向 AI 描述任务。'}</p>
+              <div className="workspace-connection"><ShieldCheck size={14} />{crmSession.isLoggedIn ? `已连接 ${crmSession.tokenData?.userInfo?.tenantName || crmSession.environment?.name}` : '尚未连接 CRM · 本地代码编辑可直接使用'}</div>
+              <div className="workspace-prompts">
+                {(selectedPresetId === 'harness-agent' ? ['分析当前项目的目录与技术栈，说明主要入口和运行方式', '检查当前项目中的潜在问题，给出修改建议和验证方式', '根据我的需求修改项目代码，并说明修改结果'] : currentPreset.quickPrompts?.length ? currentPreset.quickPrompts : SUGGESTION_CATEGORIES.flatMap(category => category.tasks.map(task => task.prompt))).slice(0, 3).map((prompt, index) => (
+                  <button key={index} onClick={() => handleSendMessage(prompt, entityRefs)} title={prompt}><Sparkles size={14} /><span>{prompt}</span><ChevronRight size={14} /></button>
+                ))}
               </div>
-
-              {/* 4 大场景建议卡片网格 (业务调研 / 方案构建 / 审计对账 / 排查诊断) */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    推荐业务场景
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-mono">选择任务开始对话</span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {SUGGESTION_CATEGORIES.map((cat) => {
-                    const CatIcon = cat.Icon;
-                    return (
-                      <div
-                        key={cat.id}
-                        className="ai-welcome__category p-4 rounded-xl bg-white border border-slate-200/90 flex flex-col justify-between space-y-3"
-                      >
-                        <div className="space-y-1.5">
-                          <div className="flex items-center space-x-2">
-                            <div className={`p-1.5 rounded-lg border ${cat.color}`}>
-                              <CatIcon className="w-4 h-4" />
-                            </div>
-                            <span className="font-bold text-xs text-slate-800">{cat.title}</span>
-                          </div>
-                          <p className="text-xs text-slate-500 leading-relaxed">
-                            {cat.desc}
-                          </p>
-                        </div>
-
-                        <div className="space-y-1.5 pt-2 border-t border-slate-100">
-                          {cat.tasks.map((task, tIdx) => (
-                            <button
-                              key={tIdx}
-                              type="button"
-                              onClick={() => handleSendMessage(task.prompt, entityRefs)}
-                              className="w-full text-left px-2.5 py-2 rounded-lg bg-slate-50/80 hover:bg-sky-50 text-xs text-slate-700 hover:text-sky-800 font-medium transition-colors block cursor-pointer border border-slate-200/60 hover:border-sky-200"
-                              title={task.prompt}
-                            >
-                              {task.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 当前预设角色的专属快速指令 */}
-              {currentPreset.quickPrompts && currentPreset.quickPrompts.length > 0 && (
-                <div className="pt-2 space-y-2">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-1">
-                    角色专属指令 ({currentPreset.name.split(" (")[0]})
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {currentPreset.quickPrompts.map((prompt, index) => (
-                      <button
-                        key={index}
-                        onClick={() => handleSendMessage(prompt, entityRefs)}
-                        className="px-3 py-1.5 rounded-xl bg-white hover:bg-sky-50/80 border border-slate-200/80 hover:border-sky-300 text-xs text-slate-700 hover:text-sky-800 font-medium transition-all shadow-2xs cursor-pointer flex items-center space-x-1.5"
-                      >
-                        <Sparkles className="w-3 h-3 text-sky-500 shrink-0" />
-                        <span className="truncate max-w-md">{prompt}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           ) : (
             <div className="max-w-4xl mx-auto space-y-4">
@@ -1260,6 +1188,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                   isLastMessage={idx === activeSession.messages.length - 1}
                   projectPath={activeProject?.localPath}
                   sessionId={activeSession.id}
+                  mentionSkills={mentionableSkills}
                   onOpenCreateSchema={(plan) => setPendingSchemaPlan(plan)}
                   onOpenDeployWorkflow={async (plan) => {
                     const latestLic = window.neoApi?.workflowGetLicenseStatus
@@ -1274,7 +1203,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
                     setPendingWorkflowPlan(plan);
                   }}
                   onOpenDeployApproval={(plan) => setPendingApprovalPlan(plan)}
-                  onOpenArtifactsPanel={() => setIsTerminalOpen(true)}
+                  onOpenArtifactsPanel={() => { setIsTerminalOpen(true); setActivePanelTab('artifacts'); }}
                   onSendMessage={(txt) => handleSendMessage(txt)}
                   showToast={showToast}
                 />
@@ -1305,6 +1234,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               enableTools={enableTools}
               onToggleTools={() => setEnableTools(!enableTools)}
               availableSkills={personalSkills}
+              mentionSkills={mentionableSkills}
               activeSkillIds={activeSkillIds.filter((sid) => personalSkillIds.has(sid))}
               onToggleSkill={(sid) => {
                 if (!personalSkillIds.has(sid)) {
@@ -1367,6 +1297,21 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         onExecuteSql={(sql) => handleSendMessage(`请执行并分析以下 XOQL 查询结果：\n\`\`\`sql\n${sql}\n\`\`\``)}
         onAttachFileToComposer={async (file) => {
           try {
+            if (file.isDirectory) {
+              setPendingComposerAttachment({
+                id: `directory:${file.fullPath}`,
+                name: file.name,
+                size: 0,
+                mimeType: 'inode/directory',
+                parsedContent: '',
+                fullPath: file.fullPath,
+                relativePath: file.relativePath || file.name,
+                contentKind: 'directory',
+                summaryText: `项目文件夹 · ${file.relativePath}`,
+              });
+              showToast("success", `已引用文件夹 [${file.name}] 至对话输入框`);
+              return;
+            }
             if (window.neoApi?.fileParseLocalPath) {
               const parsed = await window.neoApi.fileParseLocalPath(file.fullPath);
               setPendingComposerAttachment(parsed);

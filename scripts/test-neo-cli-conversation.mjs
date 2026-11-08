@@ -23,6 +23,7 @@ try {
     stdin: { contents: `
       export { SessionStore } from './electron/services/sessionStore';
       export { AiService } from './electron/services/aiService';
+      export { DshToolService } from './electron/services/dshToolService';
       export { NeoMetadataCliReader } from './electron/services/neoMetadataCli';
       export { NeoBusinessTypeService } from './electron/services/neoBusinessTypeService';
       export { NeoOpenApiService, resolveNeoOpenApiUrl } from './electron/services/neoOpenApiService';
@@ -682,6 +683,7 @@ try {
   }
   console.log('PASS no/expired license: NEX and approval run; automatic flows and BI stay locked');
 
+  const persistedAi = new AiService(store, {}, {});
   for (const [presetId, skill] of [['nex-architect', 'neo-nex-dev'], ['approval-architect', 'neo-approval-flow-designer']]) {
     assert.equal(requiresRoleLicense(presetId), false);
     for (const alias of [presetId, `preset-${presetId}`, skill, `skill-${skill}`]) {
@@ -689,12 +691,12 @@ try {
       assert(getProtectedSkillInstruction(alias)?.length > 100, alias);
     }
     const item = { id: `skill-${skill}`, name: skill, category: 'builtin', enabled: true, description: 'fixture' };
-    fixtureConfig.skills = [item];
-    ai.saveSkill({ ...item, category: 'personal', systemInstruction: 'injected plaintext', enabled: true });
-    assert.equal(item.systemInstruction, undefined);
-    ai.deleteSkill(item.id);
-    assert.equal(fixtureConfig.skills[0], item);
-    assert.equal((await ai.exportSkillZip([item.id])).success, false);
+    await persistedAi.saveSkill({ ...item, category: 'personal', systemInstruction: 'injected plaintext', enabled: true });
+    await persistedAi.deleteSkill(item.id);
+    const protectedSkill = (await persistedAi.getAiConfigAsync()).skills.find(skill => skill.id === item.id);
+    assert.equal(protectedSkill.category, 'builtin');
+    assert.equal(protectedSkill.systemInstruction, undefined);
+    assert.equal((await persistedAi.exportSkillZip([item.id])).success, false);
   }
   fixtureConfig.skills = [];
   console.log('PASS unlocked skills retain built-in identity and resist editing, deletion and export');
@@ -737,6 +739,108 @@ try {
     assert(toolTrace.every((event) => event.toolCall.resultData.protectedBuiltin === true));
   }
   console.log('PASS OpenAI/Gemini skill tool calls: model keeps full instructions; renderer sees protected metadata');
+
+  fixtureConfig.skills = [
+    {id:'skill-neo-frontend-dev',name:'Neo 前端开发',description:'fixture',category:'builtin',enabled:true},
+    {id:'personal-check',name:'个人核查',description:'fixture',category:'personal',enabled:true,systemInstruction:'PERSONAL_SKILL_SENTINEL'},
+    {id:'disabled-skill',name:'已停用',description:'fixture',category:'personal',enabled:false,systemInstruction:'MUST_NOT_LOAD'},
+    {id:'skill-autoflow-architect',name:'受保护技能',description:'fixture',category:'builtin',enabled:true},
+  ];
+  for (const protocol of ['openai','google-gemini']) {
+    fixtureConfig.providers[0].protocol=protocol;
+    const bodies=[], traced=[];
+    globalThis.fetch=async (_url,options)=>{bodies.push(JSON.parse(options.body));const data=protocol==='google-gemini'
+      ? {candidates:[{content:{parts:[{text:'完成'}]},finishReason:'STOP'}]}
+      : {choices:[{delta:{content:'完成'},finish_reason:'stop'}]};
+      return new Response('data: '+JSON.stringify(data)+'\n\n'+(protocol==='openai'?'data: [DONE]\n\n':''),{status:200,headers:{'Content-Type':'text/event-stream'}});
+    };
+    const base={requestId:'mention-'+protocol,sessionId:'fixture-session',messageId:'fixture-msg',providerId:'fixture',modelId:'fixture',projectPath:project,enableTools:true,mode:'standard'};
+    await ai.startChatStream({...base,messages:[{id:'mention-u',role:'user',content:'协助实现组件',skillIds:['skill-neo-frontend-dev','personal-check'],createdAt:1}]},event=>traced.push(event));
+    assert(!traced.some(event=>event.type==='error'),JSON.stringify(traced));
+    const prompt=protocol==='google-gemini'?bodies[0].systemInstruction.parts.map(part=>part.text).join('\n'):bodies[0].messages[0].content;
+    assert(prompt.includes(getProtectedSkillInstruction('skill-neo-frontend-dev')));
+    assert(prompt.includes('PERSONAL_SKILL_SENTINEL'));
+    assert(!JSON.stringify(traced).includes('PERSONAL_SKILL_SENTINEL'));
+    assert(!JSON.stringify(traced).includes(getProtectedSkillInstruction('skill-neo-frontend-dev').slice(0,80)));
+    bodies.length=0;
+    await ai.startChatStream({...base,messages:[{id:'earlier',role:'user',content:'前文',skillIds:['personal-check'],createdAt:1},{id:'next',role:'user',content:'继续',createdAt:2}]},()=>{});
+    assert(!JSON.stringify(bodies[0]).includes('PERSONAL_SKILL_SENTINEL'),'explicit skill must apply only to the latest message');
+    for (const id of ['disabled-skill','skill-autoflow-architect']) {
+      bodies.length=0; const rejected=[];
+      await ai.startChatStream({...base,messages:[{id:'blocked',role:'user',content:'处理',skillIds:[id],createdAt:1}]},event=>rejected.push(event));
+      assert.equal(bodies.length,0);assert(rejected.some(event=>event.type==='error'));
+    }
+  }
+  fixtureConfig.skills=[];
+  console.log('PASS explicit skill mentions: model-only instructions, latest message scope, disabled and protected skill checks');
+
+  // Mock model SSE only; real file tools and final-answer validation run unchanged.
+  ai.dshToolService = new subject.DshToolService();
+  const diagramSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80"><title>回归图</title><rect width="200" height="80"/></svg>';
+  const runDiagramConversation = async (protocol, turns, options = {}) => {
+    fixtureConfig.providers[0].protocol = protocol;
+    const bodies = [], traced = [];
+    globalThis.fetch = async (_url, request) => {
+      bodies.push(JSON.parse(request.body));
+      assert(bodies.length <= turns.length, 'unexpected model retry');
+      const turn = turns[bodies.length - 1];
+      const data = protocol === 'google-gemini'
+        ? { candidates: [{ content: { parts: turn.tool ? [{ functionCall: { name: 'write', args: turn.args } }] : [{ text: turn.text }] }, finishReason: 'STOP' }] }
+        : { choices: [{ delta: turn.tool ? { tool_calls: [{ index: 0, id: 'diagram-write-' + bodies.length, type: 'function',
+          function: { name: 'write', arguments: typeof turn.args === 'string' ? turn.args : JSON.stringify(turn.args) } }] } : { content: turn.text },
+          finish_reason: turn.tool ? 'tool_calls' : 'stop' }] };
+      return new Response('data: ' + JSON.stringify(data) + '\n\n' + (protocol === 'openai' ? 'data: [DONE]\n\n' : ''),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    await ai.startChatStream({ requestId: 'diagram-' + protocol + '-' + (options.mode || 'standard'), sessionId: 'fixture-session', messageId: 'diagram-msg',
+      providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: options.enableTools !== false, mode: options.mode || 'standard',
+      messages: [{ id: 'diagram-u', role: 'user', content: '请在当前项目生成 SVG 图并核对实际文件', createdAt: Date.now() }] }, event => traced.push(event));
+    assert.equal(traced.some(event => event.type === 'error'), false, JSON.stringify(traced));
+    assert.equal(traced.at(-1).type, 'done');
+    return { bodies, traced, text: traced.filter(event => event.type === 'content_delta').map(event => event.delta).join('') };
+  };
+  for (const protocol of ['openai', 'google-gemini']) {
+    const filename = 'delivery-' + protocol + '.svg', link = '[已生成图表](' + filename + ')';
+    const repaired = await runDiagramConversation(protocol, [
+      { tool: true, args: {} }, { text: link },
+      { tool: true, args: { file_path: filename, content: diagramSvg } }, { text: link },
+    ]);
+    assert.equal(repaired.bodies.length, 4);
+    assert.equal(fs.readFileSync(path.join(project, filename), 'utf8'), diagramSvg);
+    assert.match(JSON.stringify(repaired.bodies[2]), /本轮图表交付校验未通过/);
+    assert.match(JSON.stringify(repaired.bodies[2]), /file_path/);
+    assert.match(repaired.text, /尚未完成交付/);
+    assert.equal(repaired.traced.filter(event => event.type === 'tool_update' && event.toolCall.name === 'write' && event.toolCall.status === 'error').length, 1);
+    assert.equal(repaired.traced.filter(event => event.type === 'tool_update' && event.toolCall.name === 'write' && event.toolCall.status === 'success').length, 1);
+
+    const missing = '[图](unwritten-' + protocol + '.svg)';
+    const bounded = await runDiagramConversation(protocol, [{ text: missing }, { text: missing }, { text: missing }]);
+    assert.equal(bounded.bodies.length, 3);
+    assert.match(bounded.text, /请要求助手补生成/);
+    assert.equal(fs.existsSync(path.join(project, 'unwritten-' + protocol + '.svg')), false);
+    for (const options of [{ mode: 'plan' }, { enableTools: false }, { mode: 'minimal' }]) {
+      const readOnly = await runDiagramConversation(protocol, [{ text: missing }], options);
+      assert.equal(readOnly.bodies.length, 1);
+      assert.match(readOnly.text, /尚未完成交付/);
+      assert.equal(readOnly.traced.some(event => event.type === 'tool_start' && event.toolCall.name === 'write'), false);
+    }
+  }
+  for (const args of ['{"file_path":"truncated.svg","content":', 'null', '[]']) {
+    const result = await runDiagramConversation('openai', [{ tool: true, args }, { text: '写入参数无效，文件未生成。' }]);
+    const receipt = result.traced.find(event => event.type === 'tool_update' && event.toolCall.name === 'write');
+    assert.equal(receipt.toolCall.status, 'error');
+    assert.match(receipt.toolCall.resultSummary, /JSON 不完整或无效.*尚未执行工具/);
+  }
+  assert.equal(fs.existsSync(path.join(project, 'truncated.svg')), false);
+  const synthesis = await runDiagramConversation('openai', [
+    { tool: true, args: {} }, { tool: true, args: {} }, { tool: true, args: {} }, { text: '[图](synthesis-missing.svg)' },
+  ]);
+  assert.equal(synthesis.bodies.length, 4);
+  assert.match(JSON.stringify(synthesis.bodies[3].messages), /file_path/);
+  assert.match(synthesis.text, /尚未完成交付/);
+  fixtureConfig.providers[0].protocol = 'openai';
+  globalThis.fetch = originalModelFetch;
+  console.log('PASS diagram delivery: OpenAI/Gemini repair real files, bounded retries, read-only modes, invalid JSON rejection and failed-write synthesis receipts');
 
   // Register the actual workflow IPC handlers in an isolated host; never contact CRM.
   const main = fs.readFileSync(path.join(root, 'electron/main.ts'), 'utf8');

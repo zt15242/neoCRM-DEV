@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Copy, ChevronDown, ChevronRight, Code2, Download, ExternalLink, ImageOff, Loader2, Maximize2, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { MessageFilePreview, MessagePreviewRequest, MindMapSheet, MindMapTopic } from '../../../shared/messagePreview';
-import { isLocalSource, mediaKind, safeRemoteUrl } from './messageMediaModel';
+import { isLocalSource, mediaKind, safeRemoteUrl, messagePreviewError } from './messageMediaModel';
 import './messageMedia.css';
 import { exportSvgDiagram, matchesDiagramSource, prepareSvgDiagram, type SvgDiagram } from './svgDiagram';
 
@@ -139,7 +139,7 @@ export function SvgDiagramPreview({ source, pending = false, html = false, fileS
       throw lastError || new Error('未找到与回复匹配的完整图表文件');
     };
     void load().catch(error => {
-      if (!canceled) setLoaded({ key: loadKey, error: error instanceof Error ? error.message : '图表文件读取失败' });
+      if (!canceled) setLoaded({ key: loadKey, error: messagePreviewError(error) });
     });
     return () => { canceled = true; };
   }, [loadKey, pending]);
@@ -221,7 +221,7 @@ function LocalFilePreview({ source, label }: { source: string; label: string }) 
       const data = await window.neoApi.filePreviewMessage({ source, ...context });
       if (!canceled) setState({ data });
     };
-    void load().catch(error => { if (!canceled) setState({ error: error?.message || '文件预览失败' }); });
+    void load().catch(error => { if (!canceled) setState({ error: messagePreviewError(error) }); });
     return () => { canceled = true; };
   }, [source, context.projectPath, context.sessionId, attempt]);
   if (state.error) return <span className="message-media message-media__fallback"><Status error>{state.error}</Status><button type="button" onClick={() => setAttempt(value => value + 1)}>重新读取</button></span>;

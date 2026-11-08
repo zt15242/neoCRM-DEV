@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { inspect } from 'node:util';
 import { app, shell, dialog, BrowserWindow } from 'electron';
 import { LogEntry, LogFileInfo, GetLogsOptions, LogLevel } from '../../shared/types';
 
@@ -89,7 +90,7 @@ export class LoggerService {
         detailStr = details.stack || details.message;
       } else if (typeof details === 'object') {
         try {
-          detailStr = JSON.stringify(details);
+          detailStr = inspect(details, { depth: 5, maxArrayLength: 100, breakLength: 120 });
         } catch {
           detailStr = String(details);
         }
@@ -302,73 +303,49 @@ export class LoggerService {
 
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const rawLines = content.split('\n').filter((l) => Boolean(l.trim()));
-      const total = rawLines.length;
-
+      const lines = content.split(/\r?\n/);
+      const entries: LogEntry[] = [];
+      const header = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\] \[(DEBUG|INFO|WARN|ERROR)\] \[(.*?)\] ?(.*)$/;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (i === lines.length - 1 && !line) continue;
+        const match = line.match(header);
+        if (match) {
+          const separator = ' | Details: ';
+          const detailAt = match[4].indexOf(separator);
+          entries.push({
+            id: `log_${dateStr}_${i}`, timestamp: match[1], level: match[2] as LogLevel,
+            module: match[3] || 'App',
+            message: detailAt < 0 ? match[4] : match[4].slice(0, detailAt),
+            details: detailAt < 0 ? undefined : match[4].slice(detailAt + separator.length), raw: line,
+          });
+        } else if (entries.length) {
+          const entry = entries[entries.length - 1];
+          entry.raw += `\n${line}`;
+          entry.details = entry.details === undefined ? line : `${entry.details}\n${line}`;
+        } else if (line.trim()) {
+          entries.push({ id: `log_${dateStr}_${i}`, timestamp: '', level: 'INFO', module: 'App', message: line, raw: line });
+        }
+      }
+      const total = entries.length;
       const levelFilter = options.level && options.level !== 'ALL' ? options.level.toUpperCase() : null;
       const kwFilter = options.keyword?.trim().toLowerCase() || null;
       const modFilter = options.module?.trim().toLowerCase() || null;
-      const limit = Math.min(options.limit || 300, 1000);
-
+      const limit = Math.max(1, Math.min(options.limit || 300, 1000));
       const parsedLogs: LogEntry[] = [];
-
-      // 逆序读取最新日志优先展示
-      for (let i = rawLines.length - 1; i >= 0; i--) {
-        const line = rawLines[i];
-        // 匹配格式: [2026-10-16 14:35:21.123] [INFO] [Auth] Message | Details: ...
-        const match = line.match(/^\[(.*?)\]\s+\[(.*?)\]\s+\[(.*?)\]\s+(.*?)(?:\s+\|\s+Details:\s+(.*))?$/);
-
-        let entry: LogEntry;
-        if (match) {
-          entry = {
-            id: `log_${dateStr}_${i}`,
-            timestamp: match[1],
-            level: (match[2] as LogLevel) || 'INFO',
-            module: match[3] || 'App',
-            message: match[4] || '',
-            details: match[5] || undefined,
-            raw: line,
-          };
-        } else {
-          entry = {
-            id: `log_${dateStr}_${i}`,
-            timestamp: '',
-            level: 'INFO',
-            module: 'App',
-            message: line,
-            raw: line,
-          };
-        }
-
-        // 过滤级别
-        if (levelFilter && entry.level !== levelFilter) {
-          continue;
-        }
-
-        // 过滤模块
-        if (modFilter && !entry.module.toLowerCase().includes(modFilter)) {
-          continue;
-        }
-
-        // 过滤关键词
-        if (kwFilter) {
-          const matchMsg = entry.message.toLowerCase().includes(kwFilter);
-          const matchMod = entry.module.toLowerCase().includes(kwFilter);
-          const matchDet = entry.details?.toLowerCase().includes(kwFilter);
-          if (!matchMsg && !matchMod && !matchDet) {
-            continue;
-          }
-        }
-
-        parsedLogs.push(entry);
-        if (parsedLogs.length >= limit) {
-          break;
-        }
+      let filteredCount = 0;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (levelFilter && entry.level !== levelFilter) continue;
+        if (modFilter && !entry.module.toLowerCase().includes(modFilter)) continue;
+        if (kwFilter && !`${entry.message}\n${entry.module}\n${entry.details || ''}`.toLowerCase().includes(kwFilter)) continue;
+        filteredCount++;
+        if (parsedLogs.length < limit) parsedLogs.push(entry);
       }
 
       return {
         total,
-        filteredCount: parsedLogs.length,
+        filteredCount,
         logs: parsedLogs,
         currentDate: dateStr,
         logFilePath: filePath,
@@ -399,8 +376,7 @@ export class LoggerService {
   public async openLogDirectory(): Promise<boolean> {
     this.ensureDirectoryExists();
     try {
-      await shell.openPath(this.logDir);
-      return true;
+      return (await shell.openPath(this.logDir)) === '';
     } catch {
       return false;
     }
@@ -413,15 +389,16 @@ export class LoggerService {
     try {
       if (!fs.existsSync(this.logDir)) return true;
       const files = fs.readdirSync(this.logDir);
+      let success = true;
       for (const file of files) {
         if (file.endsWith('.log')) {
           try {
             fs.unlinkSync(path.join(this.logDir, file));
-          } catch {}
+          } catch { success = false; }
         }
       }
-      this.info('Logger', '用户已手动清空全部历史运行日志');
-      return true;
+      this.info('Logger', success ? '用户已手动清空全部历史运行日志' : '部分历史运行日志未能清空');
+      return success;
     } catch {
       return false;
     }

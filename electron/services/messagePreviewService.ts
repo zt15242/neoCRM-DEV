@@ -92,7 +92,31 @@ export async function parseXMind(buffer: Buffer): Promise<Extract<MessageFilePre
   return { kind: 'mindmap', name: '', sheets, warnings: ['预览展示主题层级；原文件中的样式、附件、备注及跨主题关联线请在 XMind 中查看。'] };
 }
 
+class MissingPreviewError extends Error {}
+
+export async function readMessagePreviewResult(source: string, context: { projectPath?: string; allowedFiles?: string[]; diagram?: boolean }): Promise<import('../../shared/messagePreview').MessagePreviewResult> {
+  try {
+    return { ok: true, preview: await readMessagePreview(source, context) };
+  } catch (error) {
+    if (error instanceof MissingPreviewError) return { ok: false, message: error.message };
+    throw error;
+  }
+}
+
 export async function readMessagePreview(source: string, context: { projectPath?: string; allowedFiles?: string[]; diagram?: boolean }): Promise<MessageFilePreview> {
+  try {
+    return await loadMessagePreview(source, context);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new MissingPreviewError(`找不到预览文件：${source}。文件可能尚未生成、已被移动或删除；请先生成或恢复原文件，再点击“重新读取”。`);
+    }
+    if (code === 'EACCES' || code === 'EPERM') throw new Error('无法读取预览文件，请检查文件及所在目录的访问权限后重试。');
+    throw error;
+  }
+}
+
+async function loadMessagePreview(source: string, context: { projectPath?: string; allowedFiles?: string[]; diagram?: boolean }): Promise<MessageFilePreview> {
   if (typeof source !== 'string' || !source.trim() || source.includes('\0')) throw new Error('预览路径无效');
   let target: string;
   if (/^file:/i.test(source)) target = fileURLToPath(source);

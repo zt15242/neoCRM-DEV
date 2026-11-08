@@ -292,8 +292,8 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 select-none">
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="connector-dialog-title" className="connector-dialog w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="window-no-drag fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 select-none">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="connector-dialog-title" className="connector-dialog w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         {/* 头部 */}
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
           <div className="flex items-center space-x-2.5">
@@ -324,7 +324,7 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
         </div>
 
         {/* 表单内容 */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+        <form id="connector-form" onSubmit={handleSubmit} className="connector-dialog__form p-5 space-y-4 overflow-y-auto flex-1 text-xs">
           {/* 1. 选择 CRM 产品类型 */}
           <div className="space-y-1.5">
             <label className="block text-xs font-semibold text-slate-700">
@@ -888,8 +888,10 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </div>
           )}
 
-          {/* 底部按钮 */}
-          <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+        </form>
+
+          {/* 固定操作区，避免较长的连接器配置遮住保存按钮。 */}
+          <div className="connector-dialog__footer flex items-center justify-end gap-2 px-5 py-3 border-t border-slate-100 shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -899,12 +901,12 @@ export const CustomEnvModal: React.FC<CustomEnvModalProps> = ({
             </button>
             <button
               type="submit"
+              form="connector-form"
               className="connector-hub__primary cursor-pointer"
             >
               {initialEnv?.isPreset ? '保存凭据配置' : (initialEnv ? '保存修改' : '确认创建连接器')}
             </button>
           </div>
-        </form>
       </div>
     </div>
   );

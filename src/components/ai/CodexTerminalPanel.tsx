@@ -1,5 +1,5 @@
 import { consumeAccessCommand } from '../../security/RestrictedFeatures';
-import React, { useState, useEffect, useRef } from "react";
+import React, { lazy, Suspense, useState, useEffect, useRef } from "react";
 import { 
   Terminal, 
   X, 
@@ -38,7 +38,7 @@ import {
   WorkspaceGitChangeItem
 } from "../../../shared/types";
 
-import { ProjectFileTree } from "./ProjectFileTree";
+const WorkspaceCodeEditor = lazy(() => import("./WorkspaceCodeEditor"));
 
 interface CodexTerminalPanelProps {
   isOpen: boolean;
@@ -48,7 +48,7 @@ interface CodexTerminalPanelProps {
   toolCalls?: AiToolCallRecord[];
   activeExecutedSql?: string | null;
   onExecuteSql?: (sql: string) => void;
-  onAttachFileToComposer?: (file: { name: string; fullPath: string }) => void;
+  onAttachFileToComposer?: (file: { name: string; fullPath: string; relativePath?: string; isDirectory?: boolean }) => void;
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
   activePanelTab?: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools";
   onTabChange?: (tab: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools") => void;
@@ -130,6 +130,20 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   const [activeDiffContent, setActiveDiffContent] = useState<string>('');
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(64);
+  const hasOpened = useRef(false);
+  if (isOpen) hasOpened.current = true;
+  const resizePanel = (event: React.PointerEvent<HTMLDivElement>) => {
+    const handle = event.currentTarget;
+    const bounds = handle.parentElement?.parentElement?.getBoundingClientRect();
+    if (!bounds) return;
+    handle.setPointerCapture(event.pointerId);
+    const move = (pointer: PointerEvent) => setPanelWidth(Math.max(45, Math.min(74, (pointer.clientX - bounds.left) / bounds.width * 100)));
+    const end = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end); };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  };
   const [copied, setCopied] = useState(false);
 
   const [treeRefreshVersion, setTreeRefreshVersion] = useState(0);
@@ -233,15 +247,15 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
 
   // 关键防抖优化：在大任务连续调用工具或文件频繁生成时，防抖 1000ms 刷新，消除高频同步遍历打死主进程
   useEffect(() => {
-    if (!isOpen || !projectPath) return;
+    if (!isOpen || !projectPath || !['artifacts', 'jobs'].includes(activeTab)) return;
 
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
     }
 
     refreshTimerRef.current = setTimeout(() => {
-      loadRecentArtifacts();
-      loadJobs();
+      if (activeTab === 'artifacts') loadRecentArtifacts();
+      if (activeTab === 'jobs') loadJobs();
     }, 1000);
 
     return () => {
@@ -249,7 +263,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
         clearTimeout(refreshTimerRef.current);
       }
     };
-  }, [isOpen, projectPath, toolCalls.length, activeSessionAttachments.length]);
+  }, [isOpen, projectPath, activeTab, toolCalls.length, activeSessionAttachments.length]);
 
   // 终端命令历史随更新滚动
   useEffect(() => {
@@ -258,7 +272,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     }
   }, [terminalHistory.length, activeTab]);
 
-  if (!isOpen) return null;
+  if (!hasOpened.current) return null;
 
   // 获取文件专属图标
   const getFileIcon = (fileName: string) => {
@@ -457,13 +471,17 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
 
   return (
     <div
-      className={`border-l border-slate-200/90 bg-white flex flex-col min-h-0 min-w-0 transition-all duration-200 shrink-0 select-text ${
-        isMaximized ? "w-full md:w-[680px]" : "w-80 md:w-96 lg:w-[440px]"
-      }`}
+      className={`workspace-panel ${!isOpen ? 'is-hidden' : ''} ${isMaximized ? 'is-maximized' : ''}`}
+      style={{ '--workbench-width': `${panelWidth}%` } as React.CSSProperties}
     >
+      <div className="workspace-resize" role="separator" tabIndex={0} aria-label="调整代码区宽度"
+        aria-orientation="vertical" aria-valuemin={45} aria-valuemax={74} aria-valuenow={panelWidth}
+        onPointerDown={resizePanel} onKeyDown={event => {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth(value => Math.max(45, Math.min(74, value + (event.key === 'ArrowLeft' ? -3 : 3)))); }
+        }} />
       {/* 顶部标签栏 */}
-      <div className="h-10 border-b border-slate-200/80 bg-slate-50/80 px-2 flex items-center justify-between shrink-0">
-        <div className="flex items-center space-x-1 min-w-0">
+      <div className="workspace-panel-tabs h-10 border-b border-slate-200/80 bg-slate-50/80 px-2 flex items-center justify-between shrink-0">
+        <div className="workspace-panel-tab-scroll flex items-center space-x-1 min-w-0">
           <button
             onClick={() => setActiveTab("files")}
             className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
@@ -473,7 +491,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
             }`}
           >
             <FolderTree className="w-3.5 h-3.5 text-amber-600" />
-            <span>项目文件</span>
+            <span>代码</span>
           </button>
 
           <button
@@ -488,45 +506,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
             }`}
           >
             <GitCommit className="w-3.5 h-3.5 text-indigo-600" />
-            <span>代码变更{changesSummary && !changesSummary.clean ? ` (${changesSummary.changes.length})` : ''}</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab("jobs");
-              loadJobs();
-            }}
-            className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
-              activeTab === "jobs"
-                ? "bg-white text-slate-900 font-bold shadow-2xs border border-slate-200"
-                : "text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5 text-amber-500" />
-            <span className="flex items-center">
-              后台任务
-              {jobsList.some((j) => j.status === 'running') ? (
-                <span className="ml-1 px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 text-[10px] font-mono animate-pulse">
-                  {jobsList.filter((j) => j.status === 'running').length} 运行中
-                </span>
-              ) : jobsList.length > 0 ? (
-                <span className="ml-1 text-[10px] text-slate-400 font-mono">
-                  ({jobsList.length})
-                </span>
-              ) : ''}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("artifacts")}
-            className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
-              activeTab === "artifacts"
-                ? "bg-white text-slate-900 font-bold shadow-2xs border border-slate-200"
-                : "text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            <Paperclip className="w-3.5 h-3.5 text-sky-600" />
-            <span>上传/产物 ({activeSessionAttachments.length + artifacts.length})</span>
+            <span>变更{changesSummary && !changesSummary.clean ? ` (${changesSummary.changes.length})` : ''}</span>
           </button>
 
           <button
@@ -555,10 +535,10 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
         </div>
 
         {/* 窗口操作按钮 */}
-        <div className="flex items-center space-x-0.5">
+        <div className="workspace-panel-actions flex items-center space-x-0.5">
           <button
             onClick={() => setIsMaximized(!isMaximized)}
-            title={isMaximized ? "还原宽度" : "最大化侧栏"}
+            title={isMaximized ? "还原宽度" : "扩大代码区"}
             className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
           >
             {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -577,13 +557,13 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-white">
         {/* ================= TAB 1: 树状项目文件 (File Tree) ================= */}
         <div className={activeTab === 'files' ? 'flex-1 min-h-0 min-w-0 flex overflow-hidden' : 'hidden'}>
-          <ProjectFileTree
-            projectPath={projectPath}
-            projectName={projectName}
+          <Suspense fallback={<div className="suite-loading" role="status">正在打开代码编辑器…</div>}>
+          <WorkspaceCodeEditor
+            root={projectPath}
+            name={projectName}
             refreshVersion={`${treeRefreshVersion}:${toolCalls.filter((call) => call.status !== 'running').length}:${activeSessionAttachments.length}`}
             isPullingCode={isPullingCode}
             onPullProjectCode={handlePullProjectCode}
-            onPreviewFile={handlePreviewFile}
             onOpenFile={handleOpenFile}
             onRevealFile={handleRevealInFinder}
             onAttachFile={onAttachFileToComposer ? (file) => {
@@ -591,6 +571,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
               showToast?.('success', `已将 ${file.name} 引用至对话`);
             } : undefined}
           />
+          </Suspense>
         </div>
 
         {/* ================= TAB 1.5: 工作区代码变更与 Git Diff 概览 (DSH Workspace Changes) ================= */}

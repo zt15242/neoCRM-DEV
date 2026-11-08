@@ -110,7 +110,7 @@ export class MetadataService {
           });
         }
       } catch (err: any) {
-        console.error(`拉取实体列表失败 (custom=${isCustom}):`, err.message);
+        console.error(`拉取实体列表失败 (custom=${isCustom}):`, err);
       }
     }
 

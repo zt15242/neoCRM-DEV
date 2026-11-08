@@ -13,13 +13,14 @@ interface Props {
   onPreviewFile: (name: string, path: string) => void;
   onOpenFile: (path: string) => void;
   onRevealFile: (path: string) => void;
-  onAttachFile?: (file: { name: string; fullPath: string }) => void;
+  onAttachFile?: (file: { name: string; fullPath: string; relativePath?: string; isDirectory?: boolean }) => void;
+  activePath?: string;
 }
 
 const ROW_HEIGHT = 28;
 const fileIcon = (name: string) => {
   const ext = name.split('.').pop()?.toLowerCase();
-  if (['ts', 'tsx', 'js', 'jsx', 'py'].includes(ext || '')) return <FileCode className="w-4 h-4 text-sky-500 shrink-0" />;
+  if (['ts', 'tsx', 'js', 'jsx', 'py', 'java'].includes(ext || '')) return <FileCode className="w-4 h-4 text-sky-500 shrink-0" />;
   if (ext === 'json') return <FileCode className="w-4 h-4 text-emerald-500 shrink-0" />;
   if (['csv', 'xlsx', 'xls'].includes(ext || '')) return <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />;
   if (['md', 'txt', 'doc', 'docx'].includes(ext || '')) return <FileText className="w-4 h-4 text-slate-500 shrink-0" />;
@@ -28,7 +29,7 @@ const fileIcon = (name: string) => {
 };
 
 export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, refreshVersion, isPullingCode,
-  onPullProjectCode, onPreviewFile, onOpenFile, onRevealFile, onAttachFile }) => {
+  onPullProjectCode, onPreviewFile, onOpenFile, onRevealFile, onAttachFile, activePath }) => {
   const [directories, setDirectories] = useState(new Map<string, ProjectDirNode[]>());
   const directoryRef = useRef(directories);
   const [expanded, setExpanded] = useState(new Set<string>());
@@ -186,7 +187,7 @@ export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, ref
     setExpanded(next);
   };
 
-  return <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden" data-testid="project-file-tree">
+  return <div className="project-file-tree flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden" data-testid="project-file-tree">
     <div className="p-2 border-b border-slate-100 flex items-center gap-2 bg-slate-50/50 shrink-0">
       <div className="relative flex-1 min-w-0">
         <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
@@ -204,7 +205,7 @@ export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, ref
       </button>
     </div>
     <div className="px-3 py-2 border-b border-slate-100 shrink-0 text-[10px] text-slate-400">
-      <div className="truncate font-mono" title={projectPath}>📁 {projectName} {projectPath && `(${projectPath})`}</div>
+      <div className="truncate font-mono" title={projectPath}><Folder className="inline-block w-3 h-3 mr-1" />{projectName} {projectPath && `(${projectPath})`}</div>
       <div className="mt-1" aria-live="polite">{busy ? (query ? '正在搜索所有子目录…' : '正在读取目录…') : `${rows.filter((row) => row.node).length.toLocaleString()} 项${query ? '匹配内容（含所在目录）' : '已展开内容'}`}</div>
     </div>
     {rootError && <div role="alert" className="px-3 py-2 text-xs text-red-600 bg-red-50 break-all shrink-0">
@@ -215,7 +216,7 @@ export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, ref
       {searchState.result.errors.length} 个目录读取失败，搜索结果可能不完整。<button onClick={() => void refresh()} className="underline">重试</button>
     </div>}
     <div ref={viewportRef} role="tree" aria-label="项目文件" aria-busy={busy} data-testid="project-file-tree-scroll"
-      className="flex-1 min-h-0 overflow-auto px-2" onScroll={(event) => {
+      className="project-tree-scroll flex-1 min-h-0 overflow-auto px-2" onScroll={(event) => {
         const element = event.currentTarget;
         if (!query) normalScroll.current = element.scrollTop;
         setViewport({ top: element.scrollTop, height: element.clientHeight });
@@ -228,40 +229,38 @@ export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, ref
           <Download className={`w-3.5 h-3.5 ${isPullingCode ? 'animate-bounce' : ''}`} />
           {isPullingCode ? '正在拉取代码与元数据…' : '拉取代码与元数据'}
         </button>}
-      </div> : <div style={{ height: range.totalHeight, position: 'relative' }}>
-        <div style={{ position: 'absolute', top: range.offset, left: 0, right: 0 }}>
+      </div> : <div className="project-tree-rows" style={{ height: range.totalHeight, paddingTop: range.offset, boxSizing: 'border-box', minWidth: '100%', width: 'max-content' }}>
           {rows.slice(range.start, range.end).map((row) => {
             const node = row.node;
-            if (!node) return <div key={row.key} style={{ height: ROW_HEIGHT, paddingLeft: row.depth * 14 + 8 }} className="flex items-center text-[11px] text-slate-400">
+            if (!node) return <div key={row.key} style={{ height: ROW_HEIGHT, paddingLeft: row.depth * 10 + 8 }} className="flex items-center text-[11px] text-slate-400">
               {row.kind === 'error' ? <button title={row.message} onClick={() => void readDirectory(row.directoryPath!, true, generation.current)} className="text-red-500 truncate">读取失败，点击重试</button>
                 : row.kind === 'empty' ? '空目录' : <span className="inline-flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" />正在读取…</span>}
             </div>;
             const isFolder = node.type === 'directory';
             return <div key={row.key} role="treeitem" aria-level={row.depth + 1} aria-expanded={isFolder ? row.expanded : undefined}
-              data-path={node.path} tabIndex={0} title={node.relativePath}
-              style={{ height: ROW_HEIGHT, paddingLeft: row.depth * 14 + 8 }}
-              className={`group flex items-center justify-between pr-2 rounded-lg text-xs hover:bg-slate-100/90 focus-visible:outline-amber-400 cursor-pointer select-none ${isFolder ? 'text-slate-800 font-medium' : 'text-slate-600'}`}
+              data-path={node.path} tabIndex={0} title={node.relativePath} aria-label={node.name} aria-selected={node.path === activePath}
+              style={{ height: ROW_HEIGHT, paddingLeft: row.depth * 10 + 8 }}
+              className={`project-tree-row group flex items-center justify-between pr-2 rounded text-xs hover:bg-slate-100/90 focus-visible:outline-amber-400 cursor-pointer select-none ${node.path === activePath ? 'is-active' : ''} ${isFolder ? 'font-medium' : ''}`}
               onClick={() => isFolder ? toggle(node) : onPreviewFile(node.name, node.path)}
               onKeyDown={(event) => {
                 if (event.target !== event.currentTarget) return;
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); isFolder ? toggle(node) : onPreviewFile(node.name, node.path); }
                 if (isFolder && ((event.key === 'ArrowRight' && !row.expanded) || (event.key === 'ArrowLeft' && row.expanded))) { event.preventDefault(); toggle(node); }
               }}>
-              <div className="flex items-center gap-1.5 min-w-0 pr-1">
+              <div className="project-tree-label flex items-center gap-1.5 pr-1">
                 {isFolder ? <><ChevronRight className={`w-3 h-3 text-slate-400 shrink-0 ${row.expanded ? 'rotate-90' : ''}`} />
                   {row.expanded ? <FolderOpen className="w-4 h-4 text-amber-600 shrink-0" /> : <Folder className="w-4 h-4 text-amber-500 shrink-0" />}</> : fileIcon(node.name)}
-                <span className="truncate">{node.name}</span>
+                <span className="project-tree-name">{node.name}</span>
                 {isFolder && row.childCount !== undefined && <span className="text-[10px] text-slate-400 font-mono font-normal shrink-0">({row.childCount.toLocaleString()})</span>}
                 {loading.has(node.path) && <RefreshCw className="w-3 h-3 animate-spin text-amber-500 shrink-0" />}
               </div>
-              <div className="hidden group-hover:flex group-focus-within:flex items-center gap-1 shrink-0">
-                {!isFolder && onAttachFile && <button title="在对话中引用 (@)" className="p-1 hover:bg-slate-200 rounded text-slate-500" onClick={(event) => { event.stopPropagation(); onAttachFile({ name: node.name, fullPath: node.path }); }}><Plus className="w-3 h-3" /></button>}
+              <div className="project-tree-actions flex items-center gap-1 shrink-0">
+                {onAttachFile && <button title={isFolder ? "在对话中引用此文件夹 (@)" : "在对话中引用 (@)"} aria-label={isFolder ? `引用文件夹 ${node.name}` : `引用文件 ${node.name}`} className="p-1 hover:bg-slate-200 rounded text-slate-500" onClick={(event) => { event.stopPropagation(); onAttachFile({ name: node.name, fullPath: node.path, relativePath: node.relativePath, isDirectory: isFolder }); }}><Plus className="w-3 h-3" /></button>}
                 {!isFolder && <button title="用系统默认应用打开" className="p-1 hover:bg-slate-200 rounded text-slate-500" onClick={(event) => { event.stopPropagation(); onOpenFile(node.path); }}><Eye className="w-3 h-3" /></button>}
                 <button title="在系统访达/资源管理器中显示" className="p-1 hover:bg-slate-200 rounded text-slate-500" onClick={(event) => { event.stopPropagation(); onRevealFile(node.path); }}><ExternalLink className="w-3 h-3" /></button>
               </div>
             </div>;
           })}
-        </div>
       </div>}
     </div>
   </div>;

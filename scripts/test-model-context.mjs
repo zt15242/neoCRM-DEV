@@ -15,6 +15,7 @@ try {
   const output = path.join(fixture, 'subject.cjs');
   await build({ stdin: { resolveDir: root, loader: 'ts', contents: `
     export * from './electron/services/modelContext';
+    export { shouldLoadBusinessTypeSkill } from './electron/security/neoCliConversation';
     export { AiService } from './electron/services/aiService';
   ` }, bundle: true, platform: 'node', format: 'cjs', outfile: output, external: ['esbuild'], logLevel: 'silent',
     plugins: [{ name: 'isolated-model-host', setup(builder) {
@@ -27,7 +28,13 @@ try {
   });
   const { AiService, getModelContextBudget: budgetFor, estimateContextTokens: estimate, readModelTokenLimits,
     uncompactedMessages, chooseCompactionCutoff, pruneToolMessages, pruneGeminiContents, pruneToolContent,
-    assertContextFits, isContextLimitError, reportedContextWindow } = require(output);
+    assertContextFits, isContextLimitError, isCompletedWorkSummaryRequest, reportedContextWindow, shouldLoadBusinessTypeSkill } = require(output);
+  assert(isCompletedWorkSummaryRequest('请结合上述工具执行结果，给出完整详尽的总结分析与最终答复。'));
+  assert(!isCompletedWorkSummaryRequest('请结合上述工具执行结果，给出完整总结，并部署上线'));
+  assert(!isCompletedWorkSummaryRequest('请创建一个自定义页面并部署'));
+  assert(shouldLoadBusinessTypeSkill('继续处理',[], '先前配置了业务类型'));
+  assert(shouldLoadBusinessTypeSkill('创建业务类型',[],''));
+  assert(!shouldLoadBusinessTypeSkill('创建一个自定义页面部署到环境上，增加一个菜单',['之前配置业务类型'],''));
   const model = (contextWindow, maxOutputTokens = 4096) => ({ id: 'fixture', name: 'Fixture', contextWindow, maxOutputTokens });
   const providerFor = (contextWindow) => ({ id: 'fixture', name: 'Fixture', type: 'custom', protocol: 'openai-completions',
     baseUrl: '', apiKey: 'test-only', enabled: true, models: [model(contextWindow)] });
@@ -71,10 +78,35 @@ try {
   assert.deepEqual(trimmedGemini[0], gemini[0]);
   assert.equal(trimmedGemini[1].parts[0].functionResponse.name, 'read');
   assertContextFits({ contents: trimmedGemini, system: 'system' }, [], small);
+  const oldCall = {id:'old',type:'function',function:{name:'write',arguments:JSON.stringify({file_path:'src/example.ts',content:'data '.repeat(26000)})}};
+  const recentCalls = [1,2].map(index => ({id:'new-'+index,type:'function',function:{name:'read',arguments:'{}'}}));
+  const heavyWire = [{role:'user',content:'Keep the current request'}, {role:'assistant',content:null,tool_calls:[oldCall,...recentCalls]},
+    ...[oldCall,...recentCalls].map(call=>({role:'tool',tool_call_id:call.id,content:'completed'}))];
+  const heavySnapshot=structuredClone(heavyWire);
+  const slimWire=pruneToolMessages(heavyWire,[],small);
+  assert.deepEqual(heavyWire,heavySnapshot,'request pruning must not mutate the stored history');
+  assert.deepEqual(JSON.parse(slimWire[1].tool_calls[0].function.arguments),{_contextPruned:true,file_path:'src/example.ts'});
+  assert.deepEqual(slimWire[1].tool_calls.slice(1),recentCalls);
+  assert.deepEqual(slimWire.slice(2).map(message=>message.tool_call_id),['old','new-1','new-2']);
+  assertContextFits(slimWire,[],small);
+  const oldNative = [{role:'user',parts:[{text:'Current request'}]}, {role:'model',parts:[{functionCall:{name:'write',args:JSON.parse(oldCall.function.arguments)},thoughtSignature:'keep'}]},
+    {role:'user',parts:[{functionResponse:{name:'write',response:{ok:true}}}]},
+    ...recentCalls.flatMap(call=>[{role:'model',parts:[{functionCall:{name:call.id,args:{}}}]},{role:'user',parts:[{functionResponse:{name:call.id,response:{ok:true}}}]}])];
+  const oldNativeSnapshot=structuredClone(oldNative);
+  const slimNative=pruneGeminiContents(oldNative,'system',[],small);
+  assert.deepEqual(oldNative,oldNativeSnapshot);
+  assert.deepEqual(slimNative[1].parts[0].functionCall.args,{_contextPruned:true,file_path:'src/example.ts'});
+  assert.equal(slimNative[1].parts[0].thoughtSignature,'keep');
+  assertContextFits({contents:slimNative,system:'system'},[],small);
+  const groupedNative = [{role:'model',parts:[oldCall,...recentCalls].map(call=>({functionCall:{name:call.id,args:JSON.parse(call.function.arguments)}}))},
+    {role:'user',parts:[oldCall,...recentCalls].map(call=>({functionResponse:{name:call.id,response:{ok:true}}}))}];
+  const slimGrouped=pruneGeminiContents(groupedNative,'system',[],small);
+  assert.deepEqual(slimGrouped[0].parts[0].functionCall.args,{_contextPruned:true,file_path:'src/example.ts'});
+  assert.deepEqual(slimGrouped[0].parts.slice(1),groupedNative[0].parts.slice(1));
   console.log('PASS budgets: model limits, output reservation, unknown-capacity fallback, full request accounting, valid tool pairing/JSON, Gemini pruning');
 
   const requests = [];
-  let failureStatus = 0, failOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0;
+  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0;
   server = http.createServer(async (request, response) => {
     if (request.method === 'GET') {
       response.setHeader('Content-Type', 'application/json');
@@ -82,6 +114,7 @@ try {
     }
     let raw = ''; for await (const part of request) raw += part;
     const body = JSON.parse(raw); requests.push({url: request.url, body});
+    if (body.contents && nativeFailOnce) { nativeFailOnce=false; response.statusCode=400; response.end(JSON.stringify({error:{message:'maximum context length exceeded'}})); return; }
     if (body.stream && [1, 3].includes(toolScenario)) {
       toolScenario = toolScenario === 1 ? 2 : 0;
       response.setHeader('Content-Type', 'text/event-stream');
@@ -136,6 +169,24 @@ try {
   let chat = requests.filter(item => item.body.stream).at(-1).body;
   for (let index = 0; index < 8; index++) assert(JSON.stringify(chat).includes('MARKER_' + index));
   assert.equal(requests.filter(item => !item.body.stream).length, 0);
+  for (const protocol of ['openai-completions','google-gemini']) {
+    const summaryMessage = [{id:'summary-user',role:'user',content:'请结合上述工具执行结果，给出完整详尽的总结分析与最终答复。',createdAt:1}];
+    const summaryCase=makeService(undefined,summaryMessage,protocol);
+    summaryCase.config.settings.enableCrmTools=true;
+    const from=requests.length;
+    await summaryCase.run({enableTools:true,mode:'standard'});
+    const request=requests.slice(from).find(item=>item.body.stream || item.body.contents)?.body;
+    assert(request);
+    assert(!request.tools,'a report-only request must not include the full tool catalogue');
+    assert(JSON.stringify(request).includes('用户只要求总结已有的执行记录'));
+    assert(estimate(request)<budgetFor(providerFor(undefined),'fixture').inputTokens);
+  }
+  const activeToolsCase=makeService(1048576,[{id:'active-user',role:'user',content:'创建并部署一个页面',createdAt:1}]);
+  activeToolsCase.config.settings.enableCrmTools=true;
+  const activeFrom=requests.length;
+  await activeToolsCase.run({enableTools:true,mode:'standard'});
+  assert(requests.slice(activeFrom).find(item=>item.body.stream)?.body.tools?.length>0,'ordinary tasks retain tools');
+  console.log('PASS report-only follow-up avoids unused tools under an unknown 32K context; ordinary tasks retain tools');
   const little = makeService(32768);
   await little.run();
   assert.equal(little.events.filter(event => event.type === 'compaction_done').length, 1);
@@ -214,7 +265,7 @@ try {
   const growthStart = requests.length;
   toolScenario = 3;
   await growingTurn.run();
-  assert(growingTurn.events.some(event => event.type === 'compaction_done'), 'large live tool data should trigger history compaction before the next request');
+  assert(!growingTurn.events.some(event => event.type === 'compaction_done'), 'prune tool output before requesting a summary when it is enough');
   const growthRequests = requests.slice(growthStart).filter(item => item.body.stream);
   assert.equal(growthRequests.length, 2);
   const nextTurn = growthRequests[1].body;
@@ -223,7 +274,20 @@ try {
   assert(liveResult.content.includes('LIVE_LARGE_TOOL_RESULT'));
   assert(JSON.parse(liveResult.content)._contextPruned);
   assertContextFits(nextTurn.messages, [], small);
-  console.log('PASS agent-loop growth: history compacts as tool data accumulates, current call/result survives, large result is budgeted before submission');
+  console.log('PASS agent-loop growth: large tool output is pruned before an unnecessary summary, preserving the call/result');
+
+  const nativeHistory = [{id:'native-u',role:'user',content:'Complete the task',createdAt:1},
+    {id:'native-a',role:'assistant',content:'Prior work',createdAt:2,toolCalls:Array.from({length:3},(_,i)=>({id:'native-'+i,name:'read',arguments:{path:'file-'+i},resultData:{text:'x'.repeat(18000)}}))},
+    {id:'native-last',role:'user',content:'Continue',createdAt:3}];
+  const nativeRecovery=makeService(32768,nativeHistory,'google-gemini');
+  const nativeStart=requests.length; nativeFailOnce=true;
+  await nativeRecovery.run();
+  const nativeAttempts=requests.slice(nativeStart).filter(item=>item.body.contents);
+  assert.equal(nativeAttempts.length,2,'Gemini should retry once after a real overflow only when pruning reduces the request');
+  assert(estimate(nativeAttempts[1].body.contents)<estimate(nativeAttempts[0].body.contents));
+  assert.deepEqual(nativeRecovery.stored.messages,nativeHistory);
+  assert(nativeRecovery.events.some(event=>event.delta?.includes('整理已完成的工具记录')));
+  console.log('PASS native Gemini overflow: reduced request retries once without modifying visible history');
 
   const discovery = await big.service.fetchAvailableModels({...providerFor(undefined), baseUrl});
   assert.equal(discovery.models[0].contextWindow, 1048576);

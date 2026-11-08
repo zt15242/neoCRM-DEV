@@ -1,5 +1,5 @@
 import { useRestrictedFeatures } from '../../security/RestrictedFeatures';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   AiProviderConfig, 
   AiHarnessSettings,
@@ -137,6 +137,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(BUILTIN_MCP_SERVERS);
   const [skills, setSkills] = useState<AiSkillItem[]>(BUILTIN_AI_SKILLS);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
 
   useEffect(() => {
@@ -166,35 +168,38 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   }, [isOpen, initialTab]);
 
-  const loadConfig = async () => {
+  useEffect(() => {
+    if (!isOpen) {
+      setLoading(true);
+      return;
+    }
+    let active = true;
     setLoading(true);
-    try {
-      if (window.neoApi?.aiGetConfig) {
+    setLoadError('');
+    const loadConfig = async () => {
+      try {
         const cfg = await window.neoApi.aiGetConfig();
+        if (!active) return;
         setProviders(cfg.providers);
         setSettings(cfg.settings);
         if (cfg.mcpServers) setMcpServers(cfg.mcpServers);
         if (cfg.skills) setSkills(cfg.skills);
+      } catch (e: any) {
+        if (active) setLoadError(`加载配置失败：${e.message || '请重试'}`);
+      } finally {
+        if (active) setLoading(false);
       }
-    } catch (e: any) {
-      showToast('error', `加载配置失败: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+    void loadConfig();
+    return () => { active = false; };
+  }, [isOpen, privateFeaturesVisible, loadAttempt]);
 
-  useEffect(() => {
-    if (isOpen) {
-      loadConfig();
-    }
-  }, [isOpen, privateFeaturesVisible]);
-
-  if (!isOpen) return null;
-
-  const handleSaveProvider = async (provider: AiProviderConfig) => {
+  const handleSaveProvider = useCallback(async (provider: AiProviderConfig) => {
     const list = await window.neoApi.aiSaveProvider(provider);
     setProviders(list);
-  };
+  }, []);
+
+  if (!isOpen) return null;
 
   const handleDeleteProvider = async (id: string) => {
     if (!window.confirm('确定要删除该模型供应商配置吗？')) return;
@@ -259,9 +264,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const personalItems = filteredNavItems.filter((i) => i.category === 'personal');
   const integrationItems = filteredNavItems.filter((i) => i.category === 'integrations');
   const systemItems = filteredNavItems.filter((i) => i.category === 'system');
+  const configTab = ['general', 'models', 'plugins', 'skills', 'agent'].includes(activeSubTab);
+  const configReady = !loading && !loadError;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150 select-none">
+    <div className="window-no-drag fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150 select-none">
       {/* 全屏双岛工作台容器 */}
       <div className="bg-white/95 rounded-2xl shadow-2xl border border-slate-200/90 w-full max-w-6xl h-[92vh] flex flex-col overflow-hidden relative">
         {/* 顶部标题栏 (含快速动作与关闭键) */}
@@ -434,7 +441,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
           {/* 右侧设置内容详情面板 */}
           <div className="flex-1 overflow-y-auto bg-white flex flex-col">
-            {activeSubTab === 'general' && (
+            {configTab && !configReady && (
+              <div className="p-6 text-sm text-slate-600" role={loadError ? 'alert' : 'status'}>
+                {loadError || '正在加载已保存的配置…'}
+                {loadError && <button type="button" onClick={() => setLoadAttempt(value => value + 1)} className="ml-3 rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-50">重新加载</button>}
+              </div>
+            )}
+            {configReady && activeSubTab === 'general' && (
               <div className="p-6 max-w-4xl">
                 <GeneralSettings
                   settings={settings}
@@ -452,7 +465,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </div>
             )}
 
-            {activeSubTab === 'models' && (
+            {configReady && activeSubTab === 'models' && (
               <div className="p-6 max-w-4xl">
                 <ModelProviderSettings
                   providers={providers}
@@ -463,7 +476,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </div>
             )}
 
-            {activeSubTab === 'plugins' && (
+            {configReady && activeSubTab === 'plugins' && (
               <PluginManagerPage
                 mcpServers={mcpServers}
                 skills={skills}
@@ -480,7 +493,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               />
             )}
 
-            {activeSubTab === 'skills' && (
+            {configReady && activeSubTab === 'skills' && (
               <div className="p-6 max-w-4xl">
                 <SkillSettings
                   skills={skills}
@@ -492,7 +505,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </div>
             )}
 
-            {activeSubTab === 'agent' && (
+            {configReady && activeSubTab === 'agent' && (
               <div className="p-6 max-w-4xl">
                 <AgentHarnessSettings
                   settings={settings}
@@ -520,7 +533,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         {/* 底部关闭栏 */}
         <div className="px-6 py-2.5 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between text-xs text-slate-500 shrink-0">
           <span className="text-[11px] text-slate-400 font-mono">
-            配置变更将自动实时保存至本地存储，按 Esc 或点击右上角关闭
+            编辑后点击对应的保存按钮生效；外观设置即时生效。按 Esc 关闭
           </span>
           <button
             onClick={onClose}

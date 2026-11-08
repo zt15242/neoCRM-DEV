@@ -29,6 +29,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
   const [startupTab, setStartupTab] = useState(settings.defaultStartupTab || 'dashboard');
   const [sqlLimit, setSqlLimit] = useState(settings.defaultSqlLimit || 100);
   const [clearing, setClearing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
 
   useEffect(() => {
@@ -40,6 +41,8 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
   }, []);
 
   const handleSave = async () => {
+    if (saving) return;
+    setSaving(true);
     try {
       await onSaveSettings({
         defaultStartupTab: startupTab as any,
@@ -48,7 +51,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
       showToast('success', '工作台通用偏好已保存');
     } catch (e: any) {
       showToast('error', `保存失败: ${e.message}`);
-    }
+    } finally { setSaving(false); }
   };
 
   const handleClearSessions = async () => {
@@ -75,9 +78,10 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = ({
         </div>
         <button
           onClick={handleSave}
+          disabled={saving}
           className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs cursor-pointer"
         >
-          保存通用设置
+          {saving ? '保存中…' : '保存通用设置'}
         </button>
       </div>
 

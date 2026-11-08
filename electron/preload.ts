@@ -44,7 +44,11 @@ export const neoApi = {
   projectOpenFolder: (folderPath: string) => ipcRenderer.invoke('project:openFolder', folderPath),
   projectListFiles: (params?: { folderPath?: string; query?: string; maxFiles?: number }) => ipcRenderer.invoke('project:listFiles', params),
   fileParseLocalPath: (filePath: string) => ipcRenderer.invoke('file:parseLocalPath', filePath),
-  filePreviewMessage: (request: import('../shared/messagePreview').MessagePreviewRequest) => ipcRenderer.invoke('file:previewMessage', request),
+  filePreviewMessage: async (request: import('../shared/messagePreview').MessagePreviewRequest) => {
+    const result: import('../shared/messagePreview').MessagePreviewResult = await ipcRenderer.invoke('file:previewMessage', request);
+    if (!result.ok) throw new Error(result.message);
+    return result.preview;
+  },
   fileGetPath: (file: File) => webUtils.getPathForFile(file),
   clipboardReadFilePaths: () => ipcRenderer.invoke('clipboard:readFilePaths'),
   clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text),
@@ -54,6 +58,8 @@ export const neoApi = {
   projectReadDirectory: (params: ProjectDirectoryRequest) => ipcRenderer.invoke('project:readDirectory', params),
   projectGetRecentArtifacts: (folderPath?: string, limit?: number) => ipcRenderer.invoke('project:getRecentArtifacts', folderPath, limit),
   projectGetWorkspaceChanges: (folderPath?: string) => ipcRenderer.invoke('project:getWorkspaceChanges', folderPath),
+  editorRead: (root: string, file: string) => ipcRenderer.invoke('editor:read', root, file),
+  editorSave: (root: string, file: string, content: string, revision: string) => ipcRenderer.invoke('editor:save', root, file, content, revision),
   projectGetFileDiff: (filePath: string, folderPath?: string) => ipcRenderer.invoke('project:getFileDiff', filePath, folderPath),
   projectDiscardFileChanges: (filePath: string, folderPath?: string) => ipcRenderer.invoke('project:discardFileChanges', filePath, folderPath),
   jobsList: () => ipcRenderer.invoke('jobs:list'),

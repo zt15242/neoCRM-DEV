@@ -1,4 +1,4 @@
-import type { App, BrowserWindow } from 'electron';
+import type { App, BrowserWindow, WebContents } from 'electron';
 
 interface WindowLifecycleOptions {
   app: App;
@@ -61,5 +61,14 @@ export function configureWindowLifecycle(options: WindowLifecycleOptions) {
     window.on('session-end', beginQuit);
   };
 
-  return { registerWindow, showWindow };
+  const cancelQuit = () => { quitting = false; cleanedUp = false; };
+  return { registerWindow, showWindow, cancelQuit };
+}
+
+/** Electron owns the confirmation so cancelling an unload also restores Dock activation. */
+export function configureUnsavedFileGuard(contents: WebContents, confirmDiscard: () => boolean, onCancelQuit: () => void) {
+  contents.on('will-prevent-unload', event => {
+    if (confirmDiscard()) event.preventDefault(); // Electron: ignore the renderer veto and proceed.
+    else onCancelQuit();
+  });
 }

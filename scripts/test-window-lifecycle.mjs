@@ -116,7 +116,7 @@ try {
     await fs.writeFile(host, `
       const { app, BrowserWindow } = require('electron');
       const assert = require('node:assert/strict');
-      const { configureWindowLifecycle } = require(${JSON.stringify(bundle)});
+      const { configureWindowLifecycle, configureUnsavedFileGuard } = require(${JSON.stringify(bundle)});
       app.setPath('userData', ${JSON.stringify(path.join(fixture, 'user-data'))});
       let win, created = 0, cleanup = 0;
       const lifecycle = configureWindowLifecycle({ app, platform: process.platform,
@@ -138,8 +138,22 @@ try {
           assert.equal(created, 0);
           assert.deepEqual(await win.webContents.executeJavaScript('window.conversation'), { id:123, chunks:2 });
           console.log('PASS native Electron: closing preserves the renderer; activation restores the same conversation');
+          let prompts = 0, allowDiscard = false;
+          configureUnsavedFileGuard(win.webContents, () => { prompts++; return allowDiscard; }, lifecycle.cancelQuit);
+          await win.webContents.executeJavaScript('window.onbeforeunload = event => { event.returnValue = false; return false; }; undefined');
+          app.on('will-quit', () => { if (!allowDiscard) { console.error('Quit bypassed unsaved file protection'); app.exit(1); } });
+          app.quit();
+          for (let attempt = 0; prompts === 0 && attempt < 100; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+          assert.equal(prompts, 1);
+          assert.equal(win.isDestroyed(), false);
+          win.hide();
+          app.emit('activate');
+          assert.equal(win.isVisible(), true);
+          assert.deepEqual(await win.webContents.executeJavaScript('window.conversation'), { id:123, chunks:2 });
+          console.log('PASS native Electron: cancelling unsaved-file quit retains the renderer and restores Dock activation');
+          allowDiscard = true;
           app.once('will-quit', () => {
-            assert.equal(cleanup, 1);
+            assert.equal(cleanup, 2);
             assert.equal(win.isDestroyed(), true);
             console.log('PASS native Electron: explicit app.quit closes the retained window and exits');
           });

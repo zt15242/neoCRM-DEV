@@ -1,5 +1,4 @@
 import { useRestrictedFeatures } from '../security/RestrictedFeatures';
-import { requiresRoleLicense } from '../../shared/licensePolicy';
 import React, { useState, useEffect } from 'react';
 import { CURRENT_APP_VERSION } from '../../shared/constants';
 import { 
@@ -47,7 +46,6 @@ import {
   NeoEnvironment,
   WorkspaceProject 
 } from '../../shared/types';
-import { AI_AGENT_PRESETS } from '../../shared/constants';
 import { AGENT_STATUS_LABELS, orderAgentSessions } from './ai/chatSessionState';
 
 export type AppNavTab = 'dashboard' | 'metadata' | 'data' | 'ai' | 'mail' | 'workspace' | 'meeting';
@@ -81,6 +79,7 @@ interface AppSidebarProps {
   onEditProject?: (project: WorkspaceProject) => void;
   onDeleteProject?: (projectId: string) => void;
   onOpenFolderInExplorer?: (folderPath: string) => void;
+  contextOnly?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }
@@ -118,10 +117,6 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onDeleteSession,
   onUpdateSessionTitle,
   onClearSessions,
-  selectedPresetId,
-  onSelectPreset,
-  workflowLicenseStatus,
-  onOpenLicenseModal,
   onOpenSettings,
   onOpenLogs,
   projects = [],
@@ -131,11 +126,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onEditProject,
   onDeleteProject,
   onOpenFolderInExplorer,
+  contextOnly = false,
   collapsed = false,
   onToggleCollapse,
 }) => {
   const { isRoleVisible } = useRestrictedFeatures();
-  const visiblePresets = AI_AGENT_PRESETS.filter((preset) => isRoleVisible(preset.id));
   const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
 
   useEffect(() => {
@@ -152,37 +147,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);
-  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false);
 
   const toggleProjectExpand = (id: string) => {
     setExpandedProjectIds((prev) =>
       prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
     );
-  };
-
-  const getPresetIcon = (iconName: string) => {
-    switch (iconName) {
-      case 'Cloud':
-        return Cloud;
-      case 'Flame':
-        return Flame;
-      case 'Printer':
-        return Printer;
-      case 'Workflow':
-        return Workflow;
-      case 'FileCheck':
-        return FileCheck;
-      case 'Database':
-        return Database;
-      case 'Box':
-        return Box;
-      case 'Code2':
-        return Code2;
-      case 'LayoutTemplate':
-        return LayoutTemplate;
-      default:
-        return Sparkles;
-    }
   };
 
   const handleStartRename = (sess: AiChatSession, e: React.MouseEvent) => {
@@ -206,13 +175,13 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
     return s.title.toLowerCase().includes(keyword.toLowerCase());
   });
 
-  const currentPreset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
   const activeTenantName = session.tokenData?.userInfo?.tenantName || session.environment?.name || 'NeoCRM-DEV';
   const activeUserName = session.tokenData?.userInfo?.name || (session.isLoggedIn ? '已连接' : '未登录');
 
   // =========================================================================
   // 1. 折叠收起态: 100% 对齐 DSH 官方 56px (w-14) 原生导轨
   // =========================================================================
+  if (contextOnly && collapsed) return null;
   if (collapsed) {
     return (
       <aside
@@ -399,110 +368,14 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   // 2. 展开态: 260px 沉浸式模块化侧栏 (含项目树与会话历史、星标、时间标签)
   // =========================================================================
   return (
-    <aside className="app-sidebar w-64 opacity-100 translate-x-0 transition-all duration-200 ease-in-out bg-slate-50/95 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative">
+    <aside className="app-sidebar suite-project-sidebar w-64 opacity-100 translate-x-0 transition-all duration-200 ease-in-out bg-slate-50/95 border-r border-slate-200/90 flex flex-col h-screen select-none shrink-0 font-sans z-30 overflow-hidden relative">
       {/* 1. 顶部 Header (Codex 样式红绿灯安全边距、品牌下拉与搜索) */}
       <div className={`border-b border-slate-200/60 flex items-center justify-between shrink-0 px-3 ${
-        isMac ? 'pt-8 pb-2.5 window-drag' : 'py-2.5'
+        isMac && !contextOnly ? 'pt-8 pb-2.5 window-drag' : 'py-2.5'
       }`}>
-        <div className="relative window-no-drag">
-          <button
-            onClick={() => setPresetDropdownOpen(!presetDropdownOpen)}
-            className="flex items-center space-x-1.5 px-2 py-1 rounded-lg hover:bg-slate-200/60 transition-colors text-slate-800 text-sm font-bold cursor-pointer"
-            title="点击切换 AI 智能体预设角色"
-          >
-            {session.environment?.productType === 'salesforce' ? (
-              <span className="flex items-center space-x-1 text-cyan-700">
-                <Cloud className="w-4 h-4 text-cyan-600" />
-                <span>Salesforce</span>
-              </span>
-            ) : session.environment?.productType === 'fxiaoke' ? (
-              <span className="flex items-center space-x-1 text-orange-700">
-                <Flame className="w-4 h-4 text-orange-600" />
-                <span>纷享销客</span>
-              </span>
-            ) : (
-              <span className="flex items-center space-x-1 text-sky-800">
-                <span>NeoCRM</span>
-              </span>
-            )}
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-          </button>
-
-          {/* 角色与预设切换菜单 */}
-          {presetDropdownOpen && (
-            <div className="absolute left-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-              <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                选择智能体角色
-              </div>
-              {visiblePresets.map((p: any) => {
-                const Icon = getPresetIcon(p.iconName);
-                const isSelected = p.id === selectedPresetId;
-                const isLocked = requiresRoleLicense(p.id);
-
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => {
-                      if (isLocked && !workflowLicenseStatus?.isAuthorized) {
-                        onOpenLicenseModal?.();
-                        setPresetDropdownOpen(false);
-                        return;
-                      }
-                      onSelectPreset(p.id);
-                      setPresetDropdownOpen(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between cursor-pointer ${
-                      isSelected ? 'bg-sky-50 text-sky-700 font-semibold' : 'hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2 truncate">
-                      <Icon className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{p.name.split(' (')[0]}</span>
-                    </div>
-                    {isLocked ? (
-                      workflowLicenseStatus?.isAuthorized ? (
-                        <span
-                          onClick={(e) => {
-                            if (onOpenLicenseModal) {
-                              e.stopPropagation();
-                              onOpenLicenseModal();
-                              setPresetDropdownOpen(false);
-                            }
-                          }}
-                          className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono shrink-0 flex items-center space-x-0.5 hover:bg-emerald-100 transition-colors"
-                          title="设备已绑定，点击查看有效天数或更换密码"
-                        >
-                          <Unlock className="w-2.5 h-2.5 text-emerald-600 mr-0.5" />
-                          <span>剩{workflowLicenseStatus.remainingDays}天</span>
-                        </span>
-                      ) : (
-                        <span
-                          onClick={(e) => {
-                            if (onOpenLicenseModal) {
-                              e.stopPropagation();
-                              onOpenLicenseModal();
-                              setPresetDropdownOpen(false);
-                            }
-                          }}
-                          className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-mono shrink-0 flex items-center space-x-0.5 hover:bg-amber-100 transition-colors"
-                          title="已上锁，点击输入设备绑定密码激活"
-                        >
-                          <Lock className="w-2.5 h-2.5 text-amber-600 mr-0.5" />
-                          <span>已上锁</span>
-                        </span>
-                      )
-                    ) : (
-                      p.badge && (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
-                          {p.badge}
-                        </span>
-                      )
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex items-center gap-1.5 px-2 py-1 text-sm font-bold text-slate-800 window-no-drag" aria-label="当前助手">
+          <Sparkles className="w-4 h-4 text-sky-600" />
+          <span>全能 CRM 架构师</span>
         </div>
 
         <div className="flex items-center space-x-0.5 window-no-drag">
@@ -567,6 +440,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           </span>
         </button>
 
+        {!contextOnly && <>
         {/* 会议助手 (类似飞书妙计) */}
         <button
           onClick={() => onSelectTab('meeting')}
@@ -663,6 +537,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           <Database className="w-4 h-4 text-sky-600" />
           <span>数据中心 (DML/SQL)</span>
         </button>
+        </>}
       </nav>
 
       {/* 4. Projects 本地项目工作区文件夹列表 (对齐 Codex 多项目目录树与会话历史) */}

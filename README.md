@@ -101,3 +101,7 @@ npm run release:minor
   * 自动将各平台编译好的安装包上传归档至 GitHub Releases；
   * 自动生成更新版本说明与 SHA 校验；
   * 客户端内“检查更新”功能将自动感知该 Release，支持在应用内直接流式下载更新包！
+
+### 代码工作区
+
+代码编辑、会议与邮件独立导航的操作方式，见 [代码工作区使用说明](docs/code-workspace.md)。

@@ -17,6 +17,13 @@ export function positiveTokenLimit(...values: unknown[]): number | undefined {
   }
 }
 
+/** The UI's explicit follow-up asks only for a report on completed work. */
+export function isCompletedWorkSummaryRequest(text: string): boolean {
+  const value = text.trim();
+  return /^(?:请)?(?:结合|基于|根据)(?:上述|以上|已有)(?:工具)?(?:执行)?结果[，,\s]*(?:给出|提供|生成|撰写)(?:完整|详细|详尽|完整详尽|完整详细|全面|最终|分析|的|\s)*(?:总结|汇总|答复|报告|分析)/.test(value)
+    && !/(?:创建|修改|写入|部署|上传|删除|运行|执行命令|调用工具)/.test(value);
+}
+
 export function readModelTokenLimits(item: any, configured?: AiModelItem): Pick<AiModelItem, 'contextWindow' | 'maxOutputTokens'> {
   return {
     contextWindow: positiveTokenLimit(item?.contextWindow, item?.context_window, item?.context_length,
@@ -104,6 +111,22 @@ export function pruneToolContent(content: string, tokenLimit: number): string {
   return JSON.stringify(result);
 }
 
+// Historical calls have already executed. Keep their identity and small location
+// fields, but do not resend an entire old file or script as call arguments.
+function compactCompletedArguments(args: unknown): Record<string, unknown> | undefined {
+  let value: unknown = args;
+  if (typeof args === 'string') {
+    try { value = JSON.parse(args); } catch { return undefined; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || estimateContextTokens(value) <= 512) return undefined;
+  const compact: Record<string, unknown> = { _contextPruned: true };
+  for (const key of ['file_path', 'path', 'relative_path', 'name', 'command', 'job_id', 'pattern']) {
+    const field = (value as Record<string, unknown>)[key];
+    if (typeof field === 'string' && field.length <= 256) compact[key] = field;
+  }
+  return compact;
+}
+
 export function pruneToolMessages(messages: any[], tools: unknown, budget: ModelContextBudget, force = false): any[] {
   if (!force && estimateContextTokens({ messages, tools }) < budget.triggerTokens) return messages;
   const results = messages.filter((message) => message.role === 'tool' && typeof message.content === 'string');
@@ -113,26 +136,61 @@ export function pruneToolMessages(messages: any[], tools: unknown, budget: Model
     - estimateContextTokens({ messages: base, tools }));
   const unit = Math.floor(available / (results.length + Math.min(2, results.length)));
   const hot = new Set(results.slice(-2));
-  return messages.map((message) => message.role === 'tool' && typeof message.content === 'string'
+  let projected = messages.map((message) => message.role === 'tool' && typeof message.content === 'string'
     ? { ...message, content: pruneToolContent(message.content, Math.max(128, unit * (hot.has(message) ? 2 : 1))) }
     : message);
+  if (estimateContextTokens({ messages: projected, tools }) <= (force ? budget.targetTokens : budget.inputTokens)) return projected;
+  const completed = new Set(messages.filter(message => message.role === 'tool').map(message => message.tool_call_id));
+  const calls = messages.flatMap(message => message.role === 'assistant' && Array.isArray(message.tool_calls) ? message.tool_calls : []);
+  const recent = new Set(calls.slice(-2).map((call: any) => call.id));
+  projected = projected.map(message => {
+    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls)) return message;
+    let changed = false;
+    const tool_calls = message.tool_calls.map((call: any) => {
+      if (!completed.has(call.id) || recent.has(call.id)) return call;
+      const compact = compactCompletedArguments(call.function?.arguments);
+      if (!compact) return call;
+      changed = true;
+      return { ...call, function: { ...call.function, arguments: JSON.stringify(compact) } };
+    });
+    return changed ? { ...message, tool_calls } : message;
+  });
+  return projected;
 }
 
-export function pruneGeminiContents(contents: any[], system: unknown, tools: unknown, budget: ModelContextBudget): any[] {
-  if (estimateContextTokens({ contents, system, tools }) < budget.triggerTokens) return contents;
+export function pruneGeminiContents(contents: any[], system: unknown, tools: unknown, budget: ModelContextBudget, force = false): any[] {
+  if (!force && estimateContextTokens({ contents, system, tools }) < budget.triggerTokens) return contents;
   const responses = contents.flatMap((message) => message.parts.filter((part: any) => part.functionResponse));
   if (!responses.length) return contents;
   const base = contents.map((message) => ({ ...message, parts: message.parts.map((part: any) => part.functionResponse
     ? { functionResponse: { name: part.functionResponse.name, response: {} } } : part) }));
-  const available = Math.max(0, budget.inputTokens * 0.8 - estimateContextTokens({ contents: base, system, tools }));
+  const available = Math.max(0, (force ? budget.targetTokens : budget.inputTokens * 0.8) - estimateContextTokens({ contents: base, system, tools }));
   const limit = Math.max(128, Math.floor(available / responses.length));
-  return contents.map((message) => ({ ...message, parts: message.parts.map((part: any) => {
+  let projected = contents.map((message) => ({ ...message, parts: message.parts.map((part: any) => {
     if (!part.functionResponse) return part;
     const response = part.functionResponse;
     const text = JSON.stringify(response.response);
     if (estimateContextTokens(text) <= limit) return part;
     return { ...part, functionResponse: { ...response, response: JSON.parse(pruneToolContent(text, limit)) } };
   }) }));
+  if (estimateContextTokens({ contents: projected, system, tools }) <= (force ? budget.targetTokens : budget.inputTokens)) return projected;
+  const callTurns = contents.map((message, index) => message.role === 'model' && message.parts.some((part: any) => part.functionCall) ? index : -1).filter(index => index >= 0);
+  const callPositions = callTurns.flatMap(index => contents[index].parts.flatMap((part: any, partIndex: number) => part.functionCall ? [`${index}:${partIndex}`] : []));
+  const recentCalls = new Set(callPositions.slice(-2));
+  projected = projected.map((message, index) => {
+    if (!callTurns.includes(index)) return message;
+    const next = contents[index + 1];
+    if (!next || next.role !== 'user') return message;
+    const responses = next.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.name);
+    const calls = message.parts.filter((part: any) => part.functionCall);
+    if (!calls.length || calls.length !== responses.length || calls.some((part: any, i: number) => part.functionCall.name !== responses[i])) return message;
+    return { ...message, parts: message.parts.map((part: any, partIndex: number) => {
+      if (!part.functionCall || recentCalls.has(`${index}:${partIndex}`)) return part;
+      const compact = compactCompletedArguments(part.functionCall.args);
+      return compact ? { ...part, functionCall: { ...part.functionCall, args: compact } } : part;
+    }) };
+  });
+  return projected;
 }
 
 export function assertContextFits(messages: unknown, tools: unknown, budget: ModelContextBudget): void {

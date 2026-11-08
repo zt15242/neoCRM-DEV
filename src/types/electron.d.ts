@@ -1,3 +1,4 @@
+import type { ProjectTextFile } from '../../shared/editorTypes';
 import type { RestrictedFeatureStatus, AccessCommand } from '../../shared/restrictedFeatures';
 import type { WorkflowListParams, WorkflowListResult, WorkflowDetailResult } from '../../shared/types';
 import { 
@@ -109,6 +110,8 @@ declare global {
       projectReadDirectory: (params: import('../../shared/types').ProjectDirectoryRequest) => Promise<import('../../shared/types').ProjectDirectoryResult>;
       projectGetRecentArtifacts: (folderPath?: string, limit?: number) => Promise<WorkspaceArtifactItem[]>;
       projectGetWorkspaceChanges?: (folderPath?: string) => Promise<WorkspaceGitChangesSummary>;
+      editorRead: (root: string, file: string) => Promise<ProjectTextFile>;
+      editorSave: (root: string, file: string, content: string, revision: string) => Promise<ProjectTextFile>;
       projectGetFileDiff?: (filePath: string, folderPath?: string) => Promise<{ success: boolean; diff: string; error?: string }>;
       projectDiscardFileChanges?: (filePath: string, folderPath?: string) => Promise<{ success: boolean; message: string }>;
       jobsList?: () => Promise<{ total: number; jobs: Array<{ id: string; command: string; status: string; durationMs: number; exitCode?: number; hasUnread: boolean }> }>;

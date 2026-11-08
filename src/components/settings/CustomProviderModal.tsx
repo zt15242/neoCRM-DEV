@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ModelCatalog } from './ModelCatalog';
 import { AiProviderConfig, AiModelItem, AiProtocol } from '../../../shared/types';
 import { 
   Cpu, 
@@ -46,6 +47,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
   // 探测状态
   const [fetchingModels, setFetchingModels] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // 关键：当 initialProvider 或 isOpen 变化时，完整同步表单状态
@@ -73,6 +75,10 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
       setShowApiKey(false);
     }
   }, [initialProvider, isOpen]);
+
+  const handleRemoveModel = useCallback((id: string) => {
+    setModels(previous => previous.filter(model => model.id !== id));
+  }, []);
 
   if (!isOpen) return null;
 
@@ -157,12 +163,9 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
     setNewModelReasoning(false);
   };
 
-  const handleRemoveModel = (id: string) => {
-    setModels(models.filter((m) => m.id !== id));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     if (!name.trim()) {
       showToast('error', '请输入供应商名称');
       return;
@@ -190,8 +193,13 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
       models,
     };
 
-    await onSave(payload);
-    onClose();
+    setSaving(true);
+    try {
+      await onSave(payload);
+      onClose();
+    } catch (error: any) {
+      showToast('error', `保存失败：${error.message || '请重试'}`);
+    } finally { setSaving(false); }
   };
 
   return (
@@ -335,33 +343,7 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
             </div>
 
             {/* 模型列表 */}
-            <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-slate-50/50">
-              {models.length === 0 ? (
-                <div className="py-6 text-center text-slate-400">暂无模型，请在下方手动添加或点击探测</div>
-              ) : (
-                models.map((m) => (
-                  <div key={m.id} className="flex items-center justify-between px-3 py-1.5 bg-white">
-                    <div className="flex items-center space-x-2 truncate">
-                      <span className="font-mono text-slate-800 text-[11px] truncate">{m.id}</span>
-                      {m.name !== m.id && <span className="text-slate-400 text-[10px]">({m.name})</span>}
-                      {m.reasoning && (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-600 border border-indigo-200 flex items-center space-x-0.5">
-                          <BrainCircuit className="w-2.5 h-2.5" />
-                          <span>思考推理</span>
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveModel(m.id)}
-                      className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
+            <ModelCatalog models={models} onRemove={handleRemoveModel} />
 
             {/* 手动添加单条模型输入行 */}
             <div className="flex items-center space-x-2 mt-2 pt-1">
@@ -409,9 +391,10 @@ export const CustomProviderModal: React.FC<CustomProviderModalProps> = ({
             </button>
             <button
               type="submit"
+              disabled={saving}
               className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium shadow-xs"
             >
-              {isEditing ? '保存修改' : '添加供应商'}
+              {saving ? '保存中…' : isEditing ? '保存修改' : '添加供应商'}
             </button>
           </div>
         </form>

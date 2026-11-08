@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { AiChatMessage, SchemaPlanPayload, WorkflowDeployPlan, ApprovalDeployPlan } from '../../../shared/types';
+import { AiChatMessage, AiSkillItem, SchemaPlanPayload, WorkflowDeployPlan, ApprovalDeployPlan } from '../../../shared/types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { MessageMediaContext, MessageMediaLink } from './MessageMedia';
 import { mediaKind } from './messageMediaModel';
@@ -23,6 +23,7 @@ interface AiMessageItemProps {
   isLastMessage?: boolean;
   projectPath?: string;
   sessionId?: string;
+  mentionSkills?: AiSkillItem[];
   onOpenCreateSchema?: (plan: SchemaPlanPayload) => void;
   onOpenDeployWorkflow?: (plan: WorkflowDeployPlan) => void;
   onOpenDeployApproval?: (plan: ApprovalDeployPlan) => void;
@@ -37,6 +38,7 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
   isLastMessage = false,
   projectPath,
   sessionId,
+  mentionSkills = [],
   onOpenCreateSchema,
   onOpenDeployWorkflow,
   onOpenDeployApproval,
@@ -89,8 +91,9 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
     return (
       <div className="group flex justify-end my-4 pl-12">
         <div className="min-w-0 max-w-[85%] md:max-w-[75%] space-y-1.5">
-          {((message.entityRefs && message.entityRefs.length > 0) || (message.attachments && message.attachments.length > 0)) && (
+          {((message.entityRefs && message.entityRefs.length > 0) || (message.attachments && message.attachments.length > 0) || (message.skillIds && message.skillIds.length > 0)) && (
             <div className="flex flex-wrap gap-1.5 justify-end">
+              {message.skillIds?.map(id => <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-50 text-purple-800 text-[11px] font-medium border border-purple-200"><Sparkles className="w-3 h-3" />{mentionSkills.find(skill => skill.id === id)?.name || '技能不可用'}</span>)}
               {message.attachments?.map((att) => (
                 <span
                   key={att.id}
@@ -370,6 +373,7 @@ export const AiMessageItem = React.memo(AiMessageItemComponent, (prevProps, next
   if (prevProps.isLastMessage !== nextProps.isLastMessage) return false;
   if (prevProps.projectPath !== nextProps.projectPath || prevProps.sessionId !== nextProps.sessionId) return false;
   if (prevProps.message.attachments !== nextProps.message.attachments) return false;
+  if (prevProps.message.skillIds !== nextProps.message.skillIds || prevProps.mentionSkills !== nextProps.mentionSkills) return false;
   if (prevProps.message.id !== nextProps.message.id) return false;
   if (prevProps.message.content !== nextProps.message.content) return false;
   if (prevProps.message.reasoningContent !== nextProps.message.reasoningContent) return false;

@@ -29,8 +29,9 @@ import {
 } from 'lucide-react';
 
 function preserveConfiguredModelLimits(models: AiModelItem[], configured: AiModelItem[] = []): AiModelItem[] {
+  const configuredById = new Map(configured.map(item => [item.id, item]));
   return models.map((model) => {
-    const previous = configured.find((item) => item.id === model.id);
+    const previous = configuredById.get(model.id);
     return { ...model, contextWindow: model.contextWindow ?? previous?.contextWindow,
       maxOutputTokens: model.maxOutputTokens ?? previous?.maxOutputTokens };
   });
@@ -53,16 +54,7 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProviderConfig | null>(null);
 
-  // DeepSeek 官方配置表单本地状态
-  const deepseek = providers.find((p) => p.id === 'deepseek') || providers[0];
-  const [dsKey, setDsKey] = useState(deepseek?.apiKey || '');
-  const [dsBaseUrl, setDsBaseUrl] = useState(deepseek?.baseUrl || 'https://api.deepseek.com');
-  const [showDsKey, setShowDsKey] = useState(false);
-  const [savingDs, setSavingDs] = useState(false);
-  const [testingDs, setTestingDs] = useState(false);
-  const [dsTestResult, setDsTestResult] = useState<{ success: boolean; message: string } | null>(null);
-
-  // 展开的第三方供应商 ID (默认展开 gemini 方便查看)
+  // 展开的内置供应商 ID
   const [expandedThirdPartyId, setExpandedThirdPartyId] = useState<string | null>('gemini');
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
@@ -85,13 +77,9 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
         } else {
           setWbAccount(null);
         }
-        if (Array.isArray(res.models) && res.models.length > 0) {
+        if (refresh && Array.isArray(res.models) && res.models.length > 0) {
           const currentProvider = providers.find((provider) => provider.id === 'workbuddy');
           res.models = preserveConfiguredModelLimits(res.models, currentProvider?.models);
-          const limits = (models: AiModelItem[]) => JSON.stringify(models.map(({ id, contextWindow, maxOutputTokens }) => ({ id, contextWindow, maxOutputTokens })));
-          if (currentProvider && limits(currentProvider.models) !== limits(res.models)) {
-            await onSaveProvider({ ...currentProvider, models: res.models });
-          }
         }
         return res;
       }
@@ -100,60 +88,20 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
   };
 
   React.useEffect(() => {
-    fetchWbStatus(true);
+    void fetchWbStatus();
   }, []);
 
 
-  const handleSaveDeepSeek = async () => {
-    setSavingDs(true);
-    try {
-      const updated: AiProviderConfig = {
-        ...deepseek,
-        apiKey: dsKey.trim(),
-        baseUrl: dsBaseUrl.trim(),
-        enabled: true,
-      };
-      await onSaveProvider(updated);
-      showToast('success', 'DeepSeek 官方配置已成功保存');
-    } catch (e: any) {
-      showToast('error', `保存失败: ${e.message}`);
-    } finally {
-      setSavingDs(false);
-    }
-  };
-
-  const handleTestDeepSeek = async () => {
-    setTestingDs(true);
-    setDsTestResult(null);
-    try {
-      const temp: AiProviderConfig = {
-        ...deepseek,
-        apiKey: dsKey.trim(),
-        baseUrl: dsBaseUrl.trim(),
-      };
-      const res = await window.neoApi.aiTestProvider(temp);
-      setDsTestResult(res);
-    } catch (e: any) {
-      setDsTestResult({ success: false, message: e.message || '连接失败' });
-    } finally {
-      setTestingDs(false);
-    }
-  };
-
   const handleSaveThirdParty = async (provider: AiProviderConfig, key: string, url: string, customModels?: AiModelItem[]) => {
-    try {
-      const updated = {
-        ...provider,
-        apiKey: key.trim(),
-        baseUrl: url.trim(),
-        models: customModels || provider.models,
-        enabled: true,
-      };
-      await onSaveProvider(updated);
-      showToast('success', `${provider.name} 配置已保存`);
-    } catch (e: any) {
-      showToast('error', `保存失败: ${e.message}`);
-    }
+    const updated = {
+      ...provider,
+      apiKey: key.trim(),
+      baseUrl: url.trim(),
+      models: customModels || provider.models,
+      enabled: true,
+    };
+    await onSaveProvider(updated);
+    showToast('success', `${provider.name} 配置已保存`);
   };
 
   const handleTestProvider = async (provider: AiProviderConfig, key: string, url: string) => {
@@ -172,13 +120,13 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
     }
   };
 
-  const builtinThirdParty = providers.filter((p) => p.type === 'builtin-thirdparty');
+  const builtinProviders = providers.filter((p) => p.type === 'official-deepseek' || p.type === 'builtin-thirdparty');
   const customProviders = providers.filter((p) => p.type === 'custom');
 
   return (
-    <div className="space-y-6">
+    <div className="model-settings space-y-6">
       {/* 顶部操作区 */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+      <div className="model-settings__header flex items-center justify-between gap-4 pb-3 border-b border-slate-200">
         <div>
           <h3 className="text-base font-bold text-slate-800">模型供应商 (Models & Providers)</h3>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -199,183 +147,18 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
 
       <ModelContextSettings providers={providers} onSave={onSaveProvider} showToast={showToast} />
 
-      {/* 1. DeepSeek 官方卡片 (推荐) */}
-      <div className="rounded-2xl border-2 border-sky-300 dark:border-sky-500/40 bg-gradient-to-br from-sky-50/60 via-white to-blue-50/40 dark:from-slate-900/90 dark:via-slate-900/80 dark:to-slate-900/90 p-5 shadow-xs relative overflow-hidden">
-        <div className="flex items-start justify-between">
-          <div className="flex items-start space-x-3.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-blue-600 flex items-center justify-center text-white shadow-md shadow-sky-500/20 shrink-0">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h4 className="text-sm font-bold text-slate-900">DeepSeek 官方平台</h4>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 font-semibold border border-sky-200 dark:border-sky-800">
-                  官方直连 • 推荐
-                </span>
-                {deepseek?.apiKey ? (
-                  <span className="text-[10px] text-emerald-600 flex items-center space-x-0.5">
-                    <CheckCircle2 className="w-3 h-3" />
-                    <span>已激活</span>
-                  </span>
-                ) : (
-                  <span className="text-[10px] text-amber-600 flex items-center space-x-0.5">
-                    <AlertCircle className="w-3 h-3" />
-                    <span>待配置 API Key</span>
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
-                包含 <strong>DeepSeek-V3</strong> (通用对话与工具调用) 与 <strong>DeepSeek-R1</strong> (深度思考推理)，开箱即用支持流式思维链展示。
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={() => window.neoApi.openExternal('https://platform.deepseek.com/')}
-            className="text-xs text-sky-600 hover:text-sky-700 flex items-center space-x-1 font-medium"
-          >
-            <span>获取 API Key</span>
-            <ExternalLink className="w-3 h-3" />
-          </button>
-        </div>
-
-        {/* DeepSeek 表单 */}
-        <div className="mt-4 pt-4 border-t border-sky-100 dark:border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          <div>
-            <label className="block text-slate-700 font-medium mb-1">
-              DeepSeek API Key <span className="text-rose-500">*</span>
-            </label>
-            <div className="relative">
-              <input
-                type={showDsKey ? 'text' : 'password'}
-                value={dsKey}
-                onChange={(e) => setDsKey(e.target.value)}
-                placeholder="sk-..."
-                className="w-full pl-3 pr-9 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono"
-              />
-              <button
-                type="button"
-                onClick={() => setShowDsKey(!showDsKey)}
-                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
-              >
-                {showDsKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-slate-700 font-medium mb-1">
-              Base URL 接口地址
-            </label>
-            <input
-              type="text"
-              value={dsBaseUrl}
-              onChange={(e) => setDsBaseUrl(e.target.value)}
-              placeholder="https://api.deepseek.com"
-              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:border-sky-500 font-mono"
-            />
-          </div>
-        </div>
-
-        {/* 测速结果 */}
-        {dsTestResult && (
-          <div
-            className={`mt-3 p-2.5 rounded-xl border flex items-center space-x-2 text-xs ${
-              dsTestResult.success
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                : 'bg-rose-50 border-rose-200 text-rose-800'
-            }`}
-          >
-            {dsTestResult.success ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            ) : (
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-            )}
-            <span>{dsTestResult.message}</span>
-          </div>
-        )}
-
-        {/* DeepSeek 操作按钮 */}
-        <div className="mt-4 flex items-center justify-between">
-          <div className="flex items-center space-x-2 text-[11px] text-slate-500">
-            <span className="font-mono bg-white dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">deepseek-chat</span>
-            <span className="font-mono bg-white dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">deepseek-reasoner</span>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleTestDeepSeek}
-              disabled={testingDs}
-              className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center space-x-1"
-            >
-              {testingDs ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-              <span>测试连接</span>
-            </button>
-            <button
-              onClick={handleSaveDeepSeek}
-              disabled={savingDs}
-              className="px-4 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-xs"
-            >
-              {savingDs ? '保存中...' : '保存 DeepSeek 配置'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* 2. 预置第三方供应商列表 */}
-      <div className="space-y-3">
-        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-          内置主流供应商目录 (Built-in Providers · 含 Google Gemini / OpenAI 等)
-        </h4>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {builtinThirdParty.map((provider) => {
-            const isExpanded = expandedThirdPartyId === provider.id;
-            const hasKey = !!provider.apiKey;
-            const isTesting = testingId === provider.id;
-            const testRes = testResults[provider.id];
-            const isKeyVisible = showKeysMap[provider.id] || false;
-
-            return (
-              <ThirdPartyProviderCard
-                key={provider.id}
-                provider={provider}
-                isExpanded={isExpanded}
-                hasKey={hasKey}
-                isTesting={isTesting}
-                testRes={testRes}
-                isKeyVisible={isKeyVisible}
-                onToggleExpand={() =>
-                  setExpandedThirdPartyId(isExpanded ? null : provider.id)
-                }
-                onToggleKeyVisible={() =>
-                  setShowKeysMap((prev) => ({ ...prev, [provider.id]: !isKeyVisible }))
-                }
-                onSave={handleSaveThirdParty}
-                onTest={handleTestProvider}
-                showToast={showToast}
-                wbAccount={provider.id === 'workbuddy' ? wbAccount : undefined}
-                wbStatus={provider.id === 'workbuddy' ? wbStatus : undefined}
-                onRefreshWbStatus={() => fetchWbStatus(true)}
-                onOpenWbAuth={() => setWbAuthModalOpen(true)}
-              />
-            );
-          })}
-        </div>
-      </div>
-
       {/* 3. 自定义模型 API 列表 */}
       {customProviders.length > 0 && (
         <div className="space-y-3 pt-2">
-          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-            已添加的自定义模型 API (Custom APIs)
+          <h4 className="text-sm font-semibold text-slate-800">
+            自定义供应商
           </h4>
 
           <div className="space-y-2">
             {customProviders.map((cp) => (
               <div
                 key={cp.id}
-                className="p-4 rounded-xl border border-slate-200 bg-white flex items-center justify-between"
+                className="model-settings__custom p-4 rounded-xl border border-slate-200 bg-white flex items-center justify-between gap-3"
               >
                 <div className="flex items-center space-x-3">
                   <div className="p-2 rounded-lg bg-slate-100 text-slate-600">
@@ -421,12 +204,59 @@ export const ModelProviderSettings: React.FC<ModelProviderSettingsProps> = ({
       )}
 
 
+      {/* 2. 预置第三方供应商列表 */}
+      <div className="space-y-3">
+        <h4 className="text-sm font-semibold text-slate-800">
+          内置供应商
+        </h4>
+
+        <div className="grid grid-cols-1 gap-2">
+          {builtinProviders.map((provider) => {
+            const isExpanded = expandedThirdPartyId === provider.id;
+            const hasKey = !!provider.apiKey;
+            const isTesting = testingId === provider.id;
+            const testRes = testResults[provider.id];
+            const isKeyVisible = showKeysMap[provider.id] || false;
+
+            return (
+              <ThirdPartyProviderCard
+                key={provider.id}
+                provider={provider}
+                isExpanded={isExpanded}
+                hasKey={hasKey}
+                isTesting={isTesting}
+                testRes={testRes}
+                isKeyVisible={isKeyVisible}
+                onToggleExpand={() =>
+                  setExpandedThirdPartyId(isExpanded ? null : provider.id)
+                }
+                onToggleKeyVisible={() =>
+                  setShowKeysMap((prev) => ({ ...prev, [provider.id]: !isKeyVisible }))
+                }
+                onSave={handleSaveThirdParty}
+                onTest={handleTestProvider}
+                showToast={showToast}
+                wbAccount={provider.id === 'workbuddy' ? wbAccount : undefined}
+                wbStatus={provider.id === 'workbuddy' ? wbStatus : undefined}
+                onRefreshWbStatus={() => fetchWbStatus(true)}
+                onOpenWbAuth={() => setWbAuthModalOpen(true)}
+              />
+            );
+          })}
+        </div>
+      </div>
+
       {/* WorkBuddy 扫码登录模态框 */}
       <WorkBuddyAuthModal
         isOpen={wbAuthModalOpen}
         onClose={() => setWbAuthModalOpen(false)}
-        onSuccess={() => {
-          fetchWbStatus(true);
+        onSuccess={async () => {
+          const status = await fetchWbStatus(true);
+          const provider = providers.find(item => item.id === 'workbuddy');
+          if (provider && status?.models?.length) {
+            try { await onSaveProvider({ ...provider, models: status.models }); }
+            catch (error: any) { showToast('error', `模型目录保存失败：${error.message}`); }
+          }
         }}
         showToast={showToast}
       />
@@ -490,14 +320,24 @@ const ThirdPartyProviderCard: React.FC<{
   const [localModels, setLocalModels] = useState<AiModelItem[]>(provider.models || []);
   const [saving, setSaving] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [modelsDirty, setModelsDirty] = useState(false);
+
+  React.useEffect(() => {
+    if (!modelsDirty) setLocalModels(provider.models || []);
+  }, [provider.models, modelsDirty]);
 
   const isGemini = provider.id === 'gemini';
   const isWorkBuddy = provider.id === 'workbuddy';
 
   const handleSave = async () => {
+    if (saving) return;
     setSaving(true);
-    await onSave(provider, localKey, localUrl, localModels);
-    setSaving(false);
+    try {
+      await onSave(provider, localKey, localUrl, modelsDirty ? localModels : provider.models);
+      setModelsDirty(false);
+    } catch (error: any) {
+      showToast('error', `保存失败：${error.message}`);
+    } finally { setSaving(false); }
   };
 
   const handleFetchModels = async () => {
@@ -541,6 +381,7 @@ const ThirdPartyProviderCard: React.FC<{
           await onSave(provider, localKey, localUrl, res.models);
           showToast('success', `成功从 ${provider.name} 同步并保存了 ${res.models.length} 个模型！`);
         } else {
+          setModelsDirty(true);
           showToast('success', `成功从 ${provider.name} 探测到 ${res.models.length} 个模型！请点击保存生效。`);
         }
       } else {
@@ -555,12 +396,21 @@ const ThirdPartyProviderCard: React.FC<{
 
   return (
     <div
-      className={`rounded-xl border bg-white overflow-hidden shadow-2xs transition-all ${
-        isGemini ? 'border-indigo-200 ring-1 ring-indigo-50' : isWorkBuddy ? 'border-cyan-300 ring-1 ring-cyan-50' : 'border-slate-200'
-      }`}
+      data-provider-id={provider.id}
+      className="model-settings__provider rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs transition-all"
     >
       <div
         onClick={onToggleExpand}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? '收起' : '展开'} ${provider.name} 配置`}
+        onKeyDown={event => {
+          if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            onToggleExpand();
+          }
+        }}
         className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-slate-50/80 transition-colors"
       >
         <div className="flex items-center space-x-2.5 truncate">

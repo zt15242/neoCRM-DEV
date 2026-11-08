@@ -1,5 +1,4 @@
 import { useRestrictedFeatures } from '../../security/RestrictedFeatures';
-import { requiresRoleLicense } from '../../../shared/licensePolicy';
 import React, { useState } from 'react';
 import { AiChatSession, AiAgentPreset, WorkflowLicenseStatus, SessionState } from '../../../shared/types';
 import { 
@@ -56,53 +55,23 @@ interface AiSidebarProps {
 export const AiSidebar: React.FC<AiSidebarProps> = ({
   sessions,
   activeSessionId,
-  presets,
-  selectedPresetId,
   crmSession,
   onSelectSession,
   onNewChatDraft,
   onDeleteSession,
   onUpdateSessionTitle,
   onClearSessions,
-  onSelectPreset,
   onOpenMetadata,
   onOpenData,
   onOpenSettings,
-  workflowLicenseStatus,
   streamingSessionIds = [],
 }) => {
   const { isRoleVisible } = useRestrictedFeatures();
-  const visiblePresets = presets.filter((preset) => isRoleVisible(preset.id));
   const [keyword, setKeyword] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [isProjectExpanded, setIsProjectExpanded] = useState(true);
-  const [presetDropdownOpen, setPresetDropdownOpen] = useState(false);
-
-  const getPresetIcon = (iconName: string) => {
-    switch (iconName) {
-      case 'Printer':
-        return Printer;
-      case 'Workflow':
-        return Workflow;
-      case 'FileCheck':
-        return FileCheck;
-      case 'Database':
-        return Database;
-      case 'Box':
-        return Box;
-      case 'Code2':
-        return Code2;
-      case 'BarChart3':
-        return BarChart3;
-      case 'LayoutTemplate':
-        return LayoutTemplate;
-      default:
-        return Sparkles;
-    }
-  };
-
   const handleStartRename = (session: AiChatSession, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingId(session.id);
@@ -125,7 +94,6 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     return s.title.toLowerCase().includes(keyword.toLowerCase());
   });
 
-  const currentPreset = visiblePresets.find((p) => p.id === selectedPresetId) || visiblePresets[0];
   const activeTenantName = crmSession?.tokenData?.userInfo?.tenantName || crmSession?.environment?.name || 'neoCRM-DEV';
   const activeUserName = crmSession?.tokenData?.userInfo?.name || '开发者';
 
@@ -133,51 +101,9 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     <div className="w-64 bg-slate-50/80 border-r border-slate-200/90 flex flex-col h-full select-none shrink-0 font-sans">
       {/* 1. 顶部 Header (Codex 样式品牌下拉与搜索) */}
       <div className="h-12 px-3 border-b border-slate-200/60 flex items-center justify-between shrink-0">
-        <div className="relative">
-          <button
-            onClick={() => setPresetDropdownOpen(!presetDropdownOpen)}
-            className="flex items-center space-x-1.5 px-2 py-1 rounded-lg hover:bg-slate-200/60 transition-colors text-slate-800 text-sm font-bold cursor-pointer"
-          >
-            <span>NeoCRM</span>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
-          </button>
-
-          {/* 角色与环境切换下拉菜单 */}
-          {presetDropdownOpen && (
-            <div className="absolute left-0 top-full mt-1 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-              <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                选择智能体角色
-              </div>
-              {visiblePresets.map((p) => {
-                const Icon = getPresetIcon(p.iconName);
-                const isSelected = p.id === selectedPresetId;
-                const isLocked = requiresRoleLicense(p.id) && !workflowLicenseStatus?.isAuthorized;
-
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => {
-                      onSelectPreset(p.id);
-                      setPresetDropdownOpen(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between cursor-pointer ${
-                      isSelected ? 'bg-sky-50 text-sky-700 font-semibold' : 'hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2 truncate">
-                      <Icon className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">{p.name.split(' (')[0]}</span>
-                    </div>
-                    {isLocked ? (
-                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 font-mono">锁</span>
-                    ) : (
-                      p.badge && <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">{p.badge}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex items-center gap-1.5 px-2 py-1 text-sm font-bold text-slate-800" aria-label="当前助手">
+          <Sparkles className="w-4 h-4 text-sky-600" />
+          <span>全能 CRM 架构师</span>
         </div>
 
         <button

@@ -542,6 +542,12 @@ html[data-dark-mode="true"] .bg-emerald-50 {
 .connector-hub__quick button { min-height: 43px; border-radius: 9px; font-size: 12px; }
 .connector-hub__card { border-radius: 12px; }
 
+/* Keep connector variants in one stable shell; only their form content scrolls. */
+.connector-dialog { height: min(720px, calc(100dvh - 32px)); min-height: 0; }
+.connector-dialog__form { min-height: 0; overscroll-behavior: contain; }
+.connector-dialog__footer { background: var(--theme-bg-layer-1, #fff); }
+.connector-dialog__footer .connector-hub__primary { width: auto; }
+
 .ai-composer {
   background: var(--theme-input-bg, #fff);
   border-color: var(--theme-border-strong, #d4dfe8);

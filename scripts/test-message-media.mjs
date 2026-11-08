@@ -22,11 +22,21 @@ try {
   const subject = path.join(fixture, 'subject.cjs');
   await build({ stdin: { resolveDir: root, loader: 'ts', contents: `
     export * from './electron/services/messagePreviewService';
+    export * from './electron/services/diagramDelivery';
     export * from './src/components/ai/messageMediaModel';
     export { DocumentService } from './electron/services/documentService';
   ` }, bundle: true, platform: 'node', format: 'cjs', outfile: subject,
     external: ['pdfjs-dist/*', 'word-extractor'], logLevel: 'silent' });
-  const { parseXMind, readMessagePreview, findMarkdownLink, mediaKind, safeRemoteUrl, isLocalSource, diagramFileSource, diagramRecoverySources, DocumentService } = require(subject);
+  const { parseXMind, readMessagePreview, readMessagePreviewResult, findMarkdownLink, mediaKind, safeRemoteUrl, isLocalSource, diagramFileSource, diagramRecoverySources, diagramDeliverySources, messagePreviewError, checkDiagramDelivery, DocumentService } = require(subject);
+  assert.deepEqual(diagramDeliverySources('[图](<docs/架构图 (1).svg>) ![图](docs/b.svg?raw=1) [重复](docs/b.svg)'), ['docs/架构图 (1).svg', 'docs/b.svg']);
+  assert.deepEqual(diagramDeliverySources('```diagram\nchart.html\n```\n~~~diagram\nflow.svg\n~~~~'), ['chart.html', 'flow.svg']);
+  assert.deepEqual(diagramDeliverySources('````text\n[例](example.svg)\n```\n[例](inside.svg)\n````\n[真](real.svg)'), ['real.svg']);
+  assert.deepEqual(diagramDeliverySources('```text\n[例](unfinished.svg)'), []);
+  assert.deepEqual(diagramDeliverySources('```diagram\nunfinished.svg'), []);
+  assert.deepEqual(diagramDeliverySources('[远程](https://example.com/a.svg)\n```diagram\nhttps://example.com/a.html\n```'), []);
+  assert.equal(diagramDeliverySources(Array.from({ length: 40 }, (_, i) => `[图](chart-${i}.svg)`).join(' ')).length, 32);
+  assert.match(messagePreviewError(new Error("Error invoking remote method 'file:previewMessage': Error: ENOENT: no such file or directory")), /尚未生成/);
+  assert.equal(messagePreviewError(new Error("Error invoking remote method 'file:previewMessage': Error: 文件不在当前项目")), '文件不在当前项目');
   assert.equal(findMarkdownLink('前 ![图片](<目录/图片 (1).png> "说明") 后').source, '目录/图片 (1).png');
   assert.equal(findMarkdownLink('[图](https://example.com/image(1).png?size=2)').source, 'https://example.com/image(1).png?size=2');
   assert.equal(findMarkdownLink('![尚未完成](https://example.com/image.png'), undefined);
@@ -88,6 +98,22 @@ try {
   await fs.writeFile(path.join(project, 'wrong-size.svg'), fullDiagram.replace('0 0 760 220', '0 0 700 220'));
   await fs.writeFile(path.join(project, 'wrong-desc.svg'), fullDiagram.replace('完整图表的本地预览', '其他描述'));
   assert.deepEqual(await readMessagePreview('架构图 (1).svg', { projectPath: project, diagram: true }), { kind: 'diagram', name: '架构图 (1).svg', content: fullDiagram, format: 'svg' });
+  for (const source of ['missing.svg', '架构图 (1).svg/child.svg']) {
+    await assert.rejects(() => readMessagePreview(source, { projectPath: project, diagram: true }), error => {
+      assert.match(error.message, /尚未生成/);
+      assert.doesNotMatch(error.message, /ENOENT|ENOTDIR|realpath/);
+      return true;
+    });
+  }
+  assert.deepEqual(await checkDiagramDelivery('[图](<架构图 (1).svg>)', project), []);
+  const missingIssues = await checkDiagramDelivery('[图](missing.svg)', project);
+  const missingResult = await readMessagePreviewResult('missing.svg', { projectPath: project, diagram: true });
+  assert.equal(missingResult.ok, false);
+  assert.match(missingResult.message, /尚未生成/);
+  await assert.rejects(() => readMessagePreviewResult('../outside.svg', { projectPath: project }), /不在当前项目/);
+  assert.equal(missingIssues.length, 1);
+  assert.equal(missingIssues[0].source, 'missing.svg');
+  assert.match(missingIssues[0].reason, /尚未生成/);
   for (const ext of ['html', 'htm']) {
     assert.equal((await readMessagePreview(`diagram.${ext}`, { projectPath: project, diagram: true })).format, 'html');
     await assert.rejects(() => readMessagePreview(`diagram.${ext}`, { projectPath: project }), /文件类型/);
@@ -148,14 +174,14 @@ try {
   ` }, bundle: true, splitting: true, platform: 'browser', format: 'esm', outdir: out, entryNames: 'renderer', logLevel: 'silent' });
   await fs.writeFile(path.join(out, 'index.html'), '<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="renderer.css"><style>*{box-sizing:border-box}body{margin:0;background:#f4f6f9;font:13px/1.7 system-ui,sans-serif;color:#1e293b}#root{max-width:860px;margin:30px auto;padding:24px;background:white;border:1px solid #e2e8f0;border-radius:12px}h2{font-size:20px}p{margin:12px 0}button,select{font:inherit;border:0;background:transparent}html[data-dark-mode="true"] body{background:#101827;color:#e2e8f0}html[data-dark-mode="true"] #root{background:#172033;border-color:#3b4b63}@media(max-width:480px){#root{margin:10px;padding:12px}}</style><div id="root"></div><script type="module" src="renderer.js"></script></html>');
   const preload = path.join(fixture, 'preload.cjs');
-  await fs.writeFile(preload, `const {contextBridge, ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('neoApi',{filePreviewMessage:request=>ipcRenderer.invoke('test:preview',request),clipboardWriteText:text=>ipcRenderer.invoke('test:copy',text)});`);
+  await fs.writeFile(preload, `const {contextBridge, ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('neoApi',{filePreviewMessage:async request=>{const result=await ipcRenderer.invoke('test:preview',request);if(!result.ok)throw new Error(result.message);return result.preview},clipboardWriteText:text=>ipcRenderer.invoke('test:copy',text)});`);
   const host = path.join(fixture, 'host.cjs');
   await fs.writeFile(host, `
     const {app,BrowserWindow,ipcMain}=require('electron');const assert=require('node:assert/strict');const fs=require('node:fs');
-    const {readMessagePreview}=require(${JSON.stringify(subject)});
+    const {readMessagePreviewResult}=require(${JSON.stringify(subject)});
     app.setPath('userData',${JSON.stringify(path.join(fixture, 'browser-data'))});
     const previewRequests=[];
-    ipcMain.handle('test:preview',(_,request)=>{previewRequests.push(request);return readMessagePreview(request.source,{projectPath:${JSON.stringify(project)},diagram:request.diagram===true})});
+    ipcMain.handle('test:preview',(_,request)=>{previewRequests.push(request);return readMessagePreviewResult(request.source,{projectPath:${JSON.stringify(project)},diagram:request.diagram===true})});
     let copied='';ipcMain.handle('test:copy',(_,text)=>{copied=text});
     app.whenReady().then(async()=>{
       const win=new BrowserWindow({show:false,width:1050,height:1000,webPreferences:{preload:${JSON.stringify(preload)},backgroundThrottling:false}});
@@ -173,8 +199,9 @@ try {
         assert.equal(await run('document.querySelector("a")?.textContent'),'普通链接');
         assert.equal(await run('document.querySelectorAll(".message-media__status--error").length'),0);
         await click('.message-media button[aria-label="放大预览"]');await wait('document.querySelector("dialog[open]")');
+        assert.equal(await run('getComputedStyle(document.querySelector("dialog[open]")).webkitAppRegion'),'no-drag');
         await click('dialog[open] button[aria-label="放大"]');assert.match(await run('document.querySelector("dialog[open]").innerText'),/125%/);
-        await run('document.querySelector("dialog[open]").close()');await wait('!document.querySelector("dialog[open]")');
+        await click('dialog[open] button[aria-label="关闭放大预览"]');await wait('!document.querySelector("dialog[open]")');
         await click('button[title="复制图表源码"]');await wait('document.body.innerText.includes("已复制")');assert.match(copied,/flowchart LR/);
         await click('button[title="查看源码"]');await wait('document.querySelector(".message-media__source")');assert.match(await run('document.querySelector(".message-media__source").textContent'),/开发验证/);
         await click('button[title="查看图形"]');
@@ -283,6 +310,17 @@ try {
         }
         await set('\`\`\`diagram\\nmissing.svg\\n\`\`\`');await wait('document.body.innerText.includes("图表暂时无法显示")');
         requests=previewRequests.length;await click('.message-media__fallback button');await wait('document.body.innerText.includes("图表暂时无法显示")');assert.equal(previewRequests.length,requests+1);
+        assert.match(await run('document.body.innerText'),/尚未生成/);
+        assert.doesNotMatch(await run('document.body.innerText'),/ENOENT|realpath|Error invoking remote method/);
+        if(${JSON.stringify(process.env.NEO_MEDIA_PREVIEW_DIR || '')}){
+          fs.writeFileSync(${JSON.stringify(path.join(process.env.NEO_MEDIA_PREVIEW_DIR || '', 'diagram-missing.png'))},(await win.webContents.capturePage()).toPNG());
+        }
+        fs.writeFileSync(${JSON.stringify(path.join(project, 'missing.svg'))},${JSON.stringify(fullDiagram)});
+        await click('.message-media__fallback button');await wait('document.querySelector(".message-media__diagram")?.naturalWidth===760');
+        await set('[未生成的图](missing-image.svg)');await wait('document.body.innerText.includes("尚未生成")');
+        assert.doesNotMatch(await run('document.body.innerText'),/ENOENT|realpath|Error invoking remote method/);
+        fs.writeFileSync(${JSON.stringify(path.join(project, 'missing-image.svg'))},${JSON.stringify(fullDiagram)});
+        await click('.message-media__fallback button');await wait('document.querySelector(".message-media__image")?.naturalWidth===760');
         requests=previewRequests.length;
         await set('\`\`\`diagram\\nhttps://example.com/chart.svg\\n\`\`\`');
         await wait('document.body.innerText.includes("图表暂时无法显示")');assert.equal(previewRequests.length,requests);

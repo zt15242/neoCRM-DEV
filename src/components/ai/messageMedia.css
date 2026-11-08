@@ -44,7 +44,7 @@ html[data-dark-mode="true"] .message-media__status--error { color: #fbbf24; }
 .message-media__error-detail { display: block; padding: 0 8px; color: var(--media-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-media__source { display: block; padding: 14px; white-space: pre; color: var(--media-ink); font: 12px/1.7 ui-monospace, monospace; }
 .message-media__note { display: block; padding: 10px 14px; color: var(--media-muted); font-size: 11px; line-height: 1.6; border-top: 1px solid var(--media-border); }
-.message-media__dialog { width: 95vw; max-width: 1600px; height: 92vh; max-height: 92vh; margin: auto; padding: 0; border: none; border-radius: 12px; background: transparent; box-shadow: 0 16px 60px #0004; }
+.message-media__dialog { -webkit-app-region: no-drag; width: 95vw; max-width: 1600px; height: 92vh; max-height: 92vh; margin: auto; padding: 0; border: none; border-radius: 12px; background: transparent; box-shadow: 0 16px 60px #0004; }
 .message-media__dialog::backdrop { background: #0f172ab3; }
 .message-media--expanded { display: flex; flex-direction: column; height: 100%; margin: 0; }
 .message-media--expanded .message-media__viewport { flex: 1; max-height: none; }

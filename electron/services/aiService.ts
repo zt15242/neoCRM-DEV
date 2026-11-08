@@ -1,10 +1,10 @@
 import { restrictedFeatureService } from '../security/restrictedFeatureService';
 import { isRestrictedRole, isRestrictedSkill } from '../../shared/restrictedFeatures';
 import { getRestrictedSkillDiscovery, readRestrictedSkillPackage } from '../security/restrictedSkillPackages';
-import { requiresFlowLicense } from '../../shared/licensePolicy';
+import { requiresFlowLicense, requiresRoleLicense } from '../../shared/licensePolicy';
 import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
-import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
+import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, isCompletedWorkSummaryRequest, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
 import { NeoMetadataCliReader } from './neoMetadataCli';
 import { NeoBusinessTypeService } from './neoBusinessTypeService';
 import { NeoOpenApiService } from './neoOpenApiService';
@@ -14,6 +14,7 @@ import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '.
 import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../security/documentTools';
 import { DIAGRAM_SKILL_ID, DIAGRAM_ROUTING_INSTRUCTION, isDiagramDesignSkill, readDiagramDesignSkill } from '../security/diagramDesignSkill';
 import { formatAttachmentContext } from './attachmentContext';
+import { checkDiagramDelivery, diagramDeliveryFeedback, diagramDeliveryWarning } from './diagramDelivery';
 const connectorKey = (session: any) => JSON.stringify([session.environment?.id, session.environment?.productType,
   session.tokenData?.tenant_id, session.tokenData?.userInfo?.userId,
   session.tokenData?.instance_uri || session.environment?.neoBaseURL]);
@@ -83,7 +84,7 @@ import { SessionStore } from './sessionStore';
 import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
-import { assertNeoConnectorToolAccess, filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, isBusinessTypeConversation, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
+import { assertNeoConnectorToolAccess, filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, shouldLoadBusinessTypeSkill, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
@@ -196,31 +197,32 @@ export class AiService {
       return { success: false, error: res.error || "未读取到有效技能" };
     }
 
-    const config = this.getAiConfig();
-    const existingPersonal = (config.skills || []).filter((s) => s.category === "personal");
-    const importedNames: string[] = [];
+    const config = await this.updateAiConfig((config) => {
+      const existingPersonal = (config.skills || []).filter((s) => s.category === "personal");
+      const importedNames: string[] = [];
 
-    for (const newSkill of res.skills) {
-      const existingIdx = existingPersonal.findIndex((p) => p.name === newSkill.name);
-      if (existingIdx >= 0) {
-        existingPersonal[existingIdx] = { ...newSkill, id: existingPersonal[existingIdx].id };
-      } else {
-        existingPersonal.push(newSkill);
+      for (const newSkill of res.skills) {
+        const existingIdx = existingPersonal.findIndex((p) => p.name === newSkill.name);
+        if (existingIdx >= 0) {
+          existingPersonal[existingIdx] = { ...newSkill, id: existingPersonal[existingIdx].id };
+        } else {
+          existingPersonal.push(newSkill);
+        }
+        importedNames.push(newSkill.name);
       }
-      importedNames.push(newSkill.name);
-    }
 
-    config.skills = [
-      ...(config.skills || []).filter((s) => s.category === "builtin"),
-      ...existingPersonal,
-    ];
-    this.saveAiConfig(config);
+      config.skills = [
+        ...(config.skills || []).filter((s) => s.category === "builtin"),
+        ...existingPersonal,
+      ];
+      return { skills: config.skills, importedNames };
+    });
 
     return {
       success: true,
       skills: config.skills,
       importedCount: res.skills.length,
-      importedNames,
+      importedNames: config.importedNames,
     };
   }
 
@@ -239,31 +241,32 @@ export class AiService {
       return { success: false, error: res.error || "未读取到有效技能" };
     }
 
-    const config = this.getAiConfig();
-    const existingPersonal = (config.skills || []).filter((s) => s.category === "personal");
-    const importedNames: string[] = [];
+    const config = await this.updateAiConfig((config) => {
+      const existingPersonal = (config.skills || []).filter((s) => s.category === "personal");
+      const importedNames: string[] = [];
 
-    for (const newSkill of res.skills) {
-      const existingIdx = existingPersonal.findIndex((p) => p.name === newSkill.name);
-      if (existingIdx >= 0) {
-        existingPersonal[existingIdx] = { ...newSkill, id: existingPersonal[existingIdx].id };
-      } else {
-        existingPersonal.push(newSkill);
+      for (const newSkill of res.skills) {
+        const existingIdx = existingPersonal.findIndex((p) => p.name === newSkill.name);
+        if (existingIdx >= 0) {
+          existingPersonal[existingIdx] = { ...newSkill, id: existingPersonal[existingIdx].id };
+        } else {
+          existingPersonal.push(newSkill);
+        }
+        importedNames.push(newSkill.name);
       }
-      importedNames.push(newSkill.name);
-    }
 
-    config.skills = [
-      ...(config.skills || []).filter((s) => s.category === "builtin"),
-      ...existingPersonal,
-    ];
-    this.saveAiConfig(config);
+      config.skills = [
+        ...(config.skills || []).filter((s) => s.category === "builtin"),
+        ...existingPersonal,
+      ];
+      return { skills: config.skills, importedNames };
+    });
 
     return {
       success: true,
       skills: config.skills,
       importedCount: res.skills.length,
-      importedNames,
+      importedNames: config.importedNames,
     };
   }
 
@@ -298,263 +301,274 @@ export class AiService {
 
   // ================= 配置管理 (安全隔离与脱敏) =================
 
+  private configWrites: Promise<unknown> = Promise.resolve();
+
   public getAiConfig(): AiConfigData {
+    try {
+      return this.normalizeAiConfig(JSON.parse(fs.readFileSync(this.getConfigPath(), 'utf-8')));
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') console.error('读取 AI 配置失败:', error);
+      return this.normalizeAiConfig({});
+    }
+  }
+
+  private async readAiConfig(): Promise<AiConfigData> {
+    try {
+      return this.normalizeAiConfig(JSON.parse(await fs.promises.readFile(this.getConfigPath(), 'utf-8')));
+    } catch (error: any) {
+      if (error.code === 'ENOENT') return this.normalizeAiConfig({});
+      throw error; // Never overwrite an unreadable configuration with defaults.
+    }
+  }
+
+  public async getAiConfigAsync(): Promise<AiConfigData> {
+    await this.configWrites;
+    return this.readAiConfig();
+  }
+
+  // Serialize read-modify-write operations so concurrent panels cannot lose each other's changes.
+  private updateAiConfig<T>(update: (config: AiConfigData) => T): Promise<T> {
+    const operation = this.configWrites.then(async () => {
+      const config = await this.readAiConfig();
+      const result = update(config);
+      await this.writeAiConfig(config);
+      return result;
+    });
+    this.configWrites = operation.catch(() => {});
+    return operation;
+  }
+
+  private normalizeAiConfig(data: any): AiConfigData {
+    const existingProviders: AiProviderConfig[] = data.providers || [];
+    const mergedProviders: AiProviderConfig[] = [];
+
+    // 1. 先按 BUILTIN_AI_PROVIDERS 顺序对齐内置供应商
+    for (const builtin of BUILTIN_AI_PROVIDERS) {
+      const found = existingProviders.find((p) => p.id === builtin.id);
+      if (!found) {
+        mergedProviders.push(structuredClone(builtin));
+      } else {
+        if (!found.models || found.models.length === 0) {
+          found.models = structuredClone(builtin.models);
+        }
+        mergedProviders.push(found);
+      }
+    }
+
+    // 2. 追加用户自定义的供应商
+    for (const ep of existingProviders) {
+      if (!mergedProviders.some((m) => m.id === ep.id)) {
+        mergedProviders.push(ep);
+      }
+    }
+
+    const mergedSettings: AiHarnessSettings = {
+      ...DEFAULT_AI_SETTINGS,
+      ...(data.settings || {}),
+    };
+
+    // 3. 处理 MCP 服务器列表合并 (内置 MCP 绝不向前端暴露内部工具列表)
+    const customMcp: any[] = Array.isArray(data.customMcpServers)
+      ? data.customMcpServers
+      : Array.isArray(data.mcpServers)
+      ? data.mcpServers.filter((m: any) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp")
+      : [];
+
+    const builtinMcpEnabled = typeof data.builtinMcpEnabled === "boolean"
+      ? data.builtinMcpEnabled
+      : (data.mcpServers?.find((m: any) => m.id === "neocrm-paas-mcp")?.enabled ?? true);
+
+    const mergedMcp: any[] = [
+      {
+        ...BUILTIN_MCP_SERVERS[0],
+        enabled: builtinMcpEnabled,
+        tools: [], // 绝不暴露内部工具定义
+      },
+      ...customMcp,
+    ];
+
+    // 4. 处理 Skill 技能列表合并 (内置系统技能脱敏，绝不向渲染进程发送明文指令)
+    const rawPersonalSkills: AiSkillItem[] = Array.isArray(data.personalSkills)
+      ? data.personalSkills
+      : Array.isArray(data.skills)
+      ? data.skills.filter((s: any) => s.category === "personal")
+      : [];
+
+    const builtinSkillStates: Record<string, boolean> = data.builtinSkillStates || {};
+    if (Array.isArray(data.skills)) {
+      for (const s of data.skills) {
+        if (s.category === "builtin" && typeof s.enabled === "boolean") {
+          builtinSkillStates[s.id] = s.enabled;
+        }
+      }
+    }
+
+    const mergedSkills: AiSkillItem[] = [];
+    // (1) 内置技能：强制脱敏，不传输 systemInstruction
+    for (const bs of BUILTIN_AI_SKILLS) {
+      const isEnabled = typeof builtinSkillStates[bs.id] === "boolean" ? builtinSkillStates[bs.id] : bs.enabled;
+      mergedSkills.push({
+        ...bs,
+        enabled: isEnabled,
+        systemInstruction: undefined, // 严格脱敏
+      });
+    }
+    // (2) 个人技能：保留用户自定义指令
+    for (const ps of rawPersonalSkills) {
+      if (!isProtectedBuiltinSkill(ps.id)) mergedSkills.push(ps);
+    }
+
+    return {
+      providers: mergedProviders,
+      settings: mergedSettings,
+      mcpServers: mergedMcp,
+      skills: mergedSkills,
+    };
+  }
+
+  private async writeAiConfig(config: AiConfigData): Promise<void> {
+    // 1. 过滤只保留纯个人自定义技能，绝不落盘任何系统内置技能的 Prompt 指令
+    const personalSkills = (config.skills || []).filter((s) => s.category === "personal" && !isProtectedBuiltinSkill(s.id));
+
+    // 2. 提取内置技能的开关状态字典
+    const builtinSkillStates: Record<string, boolean> = {};
+    for (const s of (config.skills || [])) {
+      if (s.category === "builtin" || isProtectedBuiltinSkill(s.id)) {
+        builtinSkillStates[s.id] = Boolean(s.enabled);
+      }
+    }
+
+    // 3. 过滤只保留自定义外部 MCP，绝不落盘内置 MCP 服务
+    const customMcpServers = (config.mcpServers || []).filter(
+      (m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp"
+    );
+    const builtinMcp = (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp");
+    const builtinMcpEnabled = builtinMcp ? Boolean(builtinMcp.enabled) : true;
+
+    // 4. 组装干净的持久化数据结构落盘
+    const sanitizedData = {
+      providers: config.providers,
+      settings: config.settings,
+      personalSkills,
+      builtinSkillStates,
+      customMcpServers,
+      builtinMcpEnabled,
+    };
+
     const filePath = this.getConfigPath();
-    if (!fs.existsSync(filePath)) {
-      const initial: AiConfigData = {
-        providers: BUILTIN_AI_PROVIDERS,
-        settings: DEFAULT_AI_SETTINGS,
-      };
-      this.saveAiConfig(initial);
-      return {
-        ...initial,
-        mcpServers: BUILTIN_MCP_SERVERS,
-        skills: BUILTIN_AI_SKILLS.map((s) => ({ ...s, systemInstruction: undefined })),
-      };
-    }
-
+    const temporary = `${filePath}.${process.pid}.tmp`;
     try {
-      const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      const existingProviders: AiProviderConfig[] = data.providers || [];
-      const mergedProviders: AiProviderConfig[] = [];
-
-      // 1. 先按 BUILTIN_AI_PROVIDERS 顺序对齐内置供应商
-      for (const builtin of BUILTIN_AI_PROVIDERS) {
-        const found = existingProviders.find((p) => p.id === builtin.id);
-        if (!found) {
-          mergedProviders.push(builtin);
-        } else {
-          if (!found.models || found.models.length === 0) {
-            found.models = builtin.models;
-          }
-          mergedProviders.push(found);
-        }
-      }
-
-      // 2. 追加用户自定义的供应商
-      for (const ep of existingProviders) {
-        if (!mergedProviders.some((m) => m.id === ep.id)) {
-          mergedProviders.push(ep);
-        }
-      }
-
-      const mergedSettings: AiHarnessSettings = {
-        ...DEFAULT_AI_SETTINGS,
-        ...(data.settings || {}),
-      };
-
-      // 3. 处理 MCP 服务器列表合并 (内置 MCP 绝不向前端暴露内部工具列表)
-      const customMcp: any[] = Array.isArray(data.customMcpServers)
-        ? data.customMcpServers
-        : Array.isArray(data.mcpServers)
-        ? data.mcpServers.filter((m: any) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp")
-        : [];
-      
-      const builtinMcpEnabled = typeof data.builtinMcpEnabled === "boolean"
-        ? data.builtinMcpEnabled
-        : (data.mcpServers?.find((m: any) => m.id === "neocrm-paas-mcp")?.enabled ?? true);
-
-      const mergedMcp: any[] = [
-        {
-          ...BUILTIN_MCP_SERVERS[0],
-          enabled: builtinMcpEnabled,
-          tools: [], // 绝不暴露内部工具定义
-        },
-        ...customMcp,
-      ];
-
-      // 4. 处理 Skill 技能列表合并 (内置系统技能脱敏，绝不向渲染进程发送明文指令)
-      const rawPersonalSkills: AiSkillItem[] = Array.isArray(data.personalSkills)
-        ? data.personalSkills
-        : Array.isArray(data.skills)
-        ? data.skills.filter((s: any) => s.category === "personal")
-        : [];
-
-      const builtinSkillStates: Record<string, boolean> = data.builtinSkillStates || {};
-      if (Array.isArray(data.skills)) {
-        for (const s of data.skills) {
-          if (s.category === "builtin" && typeof s.enabled === "boolean") {
-            builtinSkillStates[s.id] = s.enabled;
-          }
-        }
-      }
-
-      const mergedSkills: AiSkillItem[] = [];
-      // (1) 内置技能：强制脱敏，不传输 systemInstruction
-      for (const bs of BUILTIN_AI_SKILLS) {
-        const isEnabled = typeof builtinSkillStates[bs.id] === "boolean" ? builtinSkillStates[bs.id] : bs.enabled;
-        mergedSkills.push({
-          ...bs,
-          enabled: isEnabled,
-          systemInstruction: undefined, // 严格脱敏
-        });
-      }
-      // (2) 个人技能：保留用户自定义指令
-      for (const ps of rawPersonalSkills) {
-        if (!isProtectedBuiltinSkill(ps.id)) mergedSkills.push(ps);
-      }
-
-      return {
-        providers: mergedProviders,
-        settings: mergedSettings,
-        mcpServers: mergedMcp,
-        skills: mergedSkills,
-      };
-    } catch (e) {
-      console.error("读取 AI 配置失败，恢复默认:", e);
-      return {
-        providers: BUILTIN_AI_PROVIDERS,
-        settings: DEFAULT_AI_SETTINGS,
-        mcpServers: BUILTIN_MCP_SERVERS,
-        skills: BUILTIN_AI_SKILLS.map((s) => ({ ...s, systemInstruction: undefined })),
-      };
+      await fs.promises.writeFile(temporary, JSON.stringify(sanitizedData, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      await fs.promises.rename(temporary, filePath);
+    } finally {
+      await fs.promises.rm(temporary, { force: true }).catch(() => {});
     }
   }
 
-  public saveAiConfig(config: AiConfigData): boolean {
-    try {
-      // 1. 过滤只保留纯个人自定义技能，绝不落盘任何系统内置技能的 Prompt 指令
-      const personalSkills = (config.skills || []).filter((s) => s.category === "personal" && !isProtectedBuiltinSkill(s.id));
+  public saveAiSettings(settings: Partial<AiHarnessSettings>): Promise<AiHarnessSettings> {
+    return this.updateAiConfig((config) => {
+      config.settings = { ...config.settings, ...settings };
+      return config.settings;
+    });
+  }
 
-      // 2. 提取内置技能的开关状态字典
-      const builtinSkillStates: Record<string, boolean> = {};
-      for (const s of (config.skills || [])) {
-        if (s.category === "builtin" || isProtectedBuiltinSkill(s.id)) {
-          builtinSkillStates[s.id] = Boolean(s.enabled);
-        }
+  public saveProvider(provider: AiProviderConfig): Promise<AiProviderConfig[]> {
+    return this.updateAiConfig((config) => {
+      const idx = config.providers.findIndex((p) => p.id === provider.id);
+      const now = Date.now();
+      const item = { ...provider, updatedAt: now };
+
+      if (idx >= 0) {
+        config.providers[idx] = item;
+      } else {
+        item.createdAt = now;
+        config.providers.push(item);
       }
 
-      // 3. 过滤只保留自定义外部 MCP，绝不落盘内置 MCP 服务
-      const customMcpServers = (config.mcpServers || []).filter(
-        (m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp"
-      );
-      const builtinMcp = (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp");
-      const builtinMcpEnabled = builtinMcp ? Boolean(builtinMcp.enabled) : true;
-
-      // 4. 组装干净的持久化数据结构落盘
-      const sanitizedData = {
-        providers: config.providers,
-        settings: config.settings,
-        personalSkills,
-        builtinSkillStates,
-        customMcpServers,
-        builtinMcpEnabled,
-      };
-
-      fs.writeFileSync(this.getConfigPath(), JSON.stringify(sanitizedData, null, 2), "utf-8");
-      return true;
-    } catch (e) {
-      console.error("保存 AI 配置失败:", e);
-      return false;
-    }
-  }
-
-  public saveAiSettings(settings: Partial<AiHarnessSettings>): AiHarnessSettings {
-    const config = this.getAiConfig();
-    config.settings = { ...config.settings, ...settings };
-    this.saveAiConfig(config);
-    return config.settings;
-  }
-
-  public saveProvider(provider: AiProviderConfig): AiProviderConfig[] {
-    const config = this.getAiConfig();
-    const idx = config.providers.findIndex((p) => p.id === provider.id);
-    const now = Date.now();
-    const item = { ...provider, updatedAt: now };
-
-    if (idx >= 0) {
-      config.providers[idx] = item;
-    } else {
-      item.createdAt = now;
-      config.providers.push(item);
-    }
-
-    this.saveAiConfig(config);
-    return config.providers;
+      return config.providers;
+    });
   }
 
   // ================= MCP 服务器管理 (内核保护) =================
 
-  public saveMcpServer(server: any): any[] {
-    const config = this.getAiConfig();
-    if (server.id === "neocrm-paas-mcp" || server.type === "builtin") {
-      const found = (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp");
-      if (found) {
-        found.enabled = Boolean(server.enabled);
+  public saveMcpServer(server: any): Promise<any[]> {
+    return this.updateAiConfig((config) => {
+      if (server.id === "neocrm-paas-mcp" || server.type === "builtin") {
+        const found = (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp");
+        if (found) {
+          found.enabled = Boolean(server.enabled);
+        }
+        return config.mcpServers || [];
       }
-      this.saveAiConfig(config);
-      return config.mcpServers || [];
-    }
 
-    const list = (config.mcpServers || []).filter((m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp");
-    const idx = list.findIndex((m) => m.id === server.id);
-    if (idx >= 0) {
-      list[idx] = server;
-    } else {
-      list.push(server);
-    }
-    config.mcpServers = [
-      (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp") || BUILTIN_MCP_SERVERS[0],
-      ...list,
-    ];
-    this.saveAiConfig(config);
-    return config.mcpServers;
+      const list = (config.mcpServers || []).filter((m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp");
+      const idx = list.findIndex((m) => m.id === server.id);
+      if (idx >= 0) {
+        list[idx] = server;
+      } else {
+        list.push(server);
+      }
+      config.mcpServers = [
+        (config.mcpServers || []).find((m) => m.id === "neocrm-paas-mcp") || BUILTIN_MCP_SERVERS[0],
+        ...list,
+      ];
+      return config.mcpServers;
+    });
   }
 
-  public deleteMcpServer(serverId: string): any[] {
-    if (serverId === "neocrm-paas-mcp") {
-      // 内置 MCP 严禁删除
-      return this.getAiConfig().mcpServers || [];
-    }
-    const config = this.getAiConfig();
-    config.mcpServers = (config.mcpServers || []).filter((m) => m.id !== serverId);
-    this.saveAiConfig(config);
-    return config.mcpServers;
+  public deleteMcpServer(serverId: string): Promise<any[]> {
+    return this.updateAiConfig((config) => {
+      if (serverId === "neocrm-paas-mcp") {
+        // 内置 MCP 严禁删除
+        return config.mcpServers || [];
+      }
+      config.mcpServers = (config.mcpServers || []).filter((m) => m.id !== serverId);
+      return config.mcpServers;
+    });
   }
 
   // ================= Skill 技能管理 (系统内置严格受保护 + 个人自定义) =================
 
-  public saveSkill(skill: any): any[] {
-    const config = this.getAiConfig();
-    if (skill.category === "builtin" || isProtectedBuiltinSkill(skill.id)) {
-      // 内置技能受保护，仅允许更新启停状态，绝不接受来自客户端的任何指令篡改
-      const found = (config.skills || []).find((s) => s.id === skill.id);
-      if (found) {
-        found.enabled = Boolean(skill.enabled);
+  public saveSkill(skill: any): Promise<any[]> {
+    return this.updateAiConfig((config) => {
+      if (skill.category === "builtin" || isProtectedBuiltinSkill(skill.id)) {
+        // 内置技能受保护，仅允许更新启停状态，绝不接受来自客户端的任何指令篡改
+        const found = (config.skills || []).find((s) => s.id === skill.id);
+        if (found) {
+          found.enabled = Boolean(skill.enabled);
+        }
+        return config.skills || [];
       }
-      this.saveAiConfig(config);
-      return config.skills || [];
-    }
 
-    // 个人自定义技能保存
-    const list = (config.skills || []).filter((s) => s.category === "personal");
-    const idx = list.findIndex((s) => s.id === skill.id);
-    const now = Date.now();
-    const item = { ...skill, category: "personal", updatedAt: now };
+      // 个人自定义技能保存
+      const list = (config.skills || []).filter((s) => s.category === "personal");
+      const idx = list.findIndex((s) => s.id === skill.id);
+      const now = Date.now();
+      const item = { ...skill, category: "personal", updatedAt: now };
 
-    if (idx >= 0) {
-      list[idx] = item;
-    } else {
-      item.createdAt = now;
-      list.push(item);
-    }
-    config.skills = [
-      ...(config.skills || []).filter((s) => s.category === "builtin"),
-      ...list,
-    ];
-    this.saveAiConfig(config);
-    return config.skills;
+      if (idx >= 0) {
+        list[idx] = item;
+      } else {
+        item.createdAt = now;
+        list.push(item);
+      }
+      config.skills = [
+        ...(config.skills || []).filter((s) => s.category === "builtin"),
+        ...list,
+      ];
+      return config.skills;
+    });
   }
 
-  public deleteSkill(skillId: string): any[] {
-    if (isProtectedBuiltinSkill(skillId)) {
-      // 系统内置技能严禁删除
-      return this.getAiConfig().skills || [];
-    }
-    const config = this.getAiConfig();
-    config.skills = (config.skills || []).filter((s) => s.id !== skillId);
-    this.saveAiConfig(config);
-    return config.skills;
+  public deleteSkill(skillId: string): Promise<any[]> {
+    return this.updateAiConfig((config) => {
+      if (isProtectedBuiltinSkill(skillId)) {
+        // 系统内置技能严禁删除
+        return config.skills || [];
+      }
+      config.skills = (config.skills || []).filter((s) => s.id !== skillId);
+      return config.skills;
+    });
   }
 
   // ================= 上下文长对话压缩 (Context Compaction) =================
@@ -621,15 +635,15 @@ export class AiService {
     return latest;
   }
 
-  public deleteProvider(providerId: string): AiProviderConfig[] {
-    const config = this.getAiConfig();
-    config.providers = config.providers.filter((p) => p.id !== providerId);
-    if (config.settings.defaultProviderId === providerId) {
-      config.settings.defaultProviderId = config.providers[0]?.id || 'deepseek';
-      config.settings.defaultModelId = config.providers[0]?.models?.[0]?.id || 'deepseek-chat';
-    }
-    this.saveAiConfig(config);
-    return config.providers;
+  public deleteProvider(providerId: string): Promise<AiProviderConfig[]> {
+    return this.updateAiConfig((config) => {
+      config.providers = config.providers.filter((p) => p.id !== providerId);
+      if (config.settings.defaultProviderId === providerId) {
+        config.settings.defaultProviderId = config.providers[0]?.id || 'deepseek';
+        config.settings.defaultModelId = config.providers[0]?.models?.[0]?.id || 'deepseek-chat';
+      }
+      return config.providers;
+    });
   }
 
   // ================= 供应商连接与模型探测 =================
@@ -1122,7 +1136,7 @@ export class AiService {
             throwIfAborted();
             if (discoverRes.success && discoverRes.tools.length > 0) {
               srv.tools = discoverRes.tools;
-              this.saveMcpServer(srv);
+              await this.saveMcpServer(srv);
             }
           } catch (discoverErr) {
             if (controller.signal.aborted) throw discoverErr;
@@ -1212,10 +1226,12 @@ export class AiService {
         } });
       }
 
-      const businessTypeConversation = isNeoConnector && (messages.slice(-8).some((message) => isBusinessTypeConversation(message.content || '')) ||
-        isBusinessTypeConversation(currentCompactionSummary?.summary || ''));
+      const latestUserContent = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
+      const summaryOnly = isCompletedWorkSummaryRequest(latestUserContent);
+      if (summaryOnly) systemParts.push('用户只要求总结已有的执行记录。本次不能调用工具；依据现有对话与检查点说明已完成、失败和未验证的事项，证据不足时明确指出，不要补造执行结果。');
+      const businessTypeConversation = isNeoConnector && shouldLoadBusinessTypeSkill(latestUserContent,
+        messages.slice(-8).map(message => message.content || ''), currentCompactionSummary?.summary);
       if (isNeoConnector) {
-        const latestUserContent = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
         const cliSkillNames = new Set<string>(['neo-cli-usage']);
         if (isNexConversation(latestUserContent) || presetPrompt?.includes('[PROTECTED_PRESET::nex-architect]')) {
           cliSkillNames.add('neo-cli-usage');
@@ -1513,6 +1529,38 @@ systemParts.push(`【自定义工作台页面创建规则】
         }
       }
 
+      // Explicit @skill references belong only to the current user message.
+      // Resolve in the main process so disabled/locked skills and protected bodies
+      // cannot be bypassed or exposed to the renderer.
+      const mentionedSkillIds = [...new Set([...messages].reverse().find(message => message.role === 'user')?.skillIds || [])];
+      for (const sid of mentionedSkillIds) {
+        const selected = (config.skills || []).find(item => item.id === sid && item.enabled);
+        if (!selected || !restrictedFeatureService.canUseSkill(sid)) throw new Error('引用的技能不存在、已停用或当前不可用，请重新选择技能。');
+        if (requiresRoleLicense(sid.replace(/^skill-/, '')) && !licenseService.getLicenseStatus().isAuthorized)
+          throw new Error(`技能 ${selected.name} 需要先完成设备授权。`);
+        if (selected.category === 'personal') {
+          if (!selected.systemInstruction?.trim()) throw new Error(`技能 ${selected.name} 没有可加载的内容，请先在技能设置中完善。`);
+          if (!activeSkillIds?.includes(sid))
+            systemParts.push(`【本次引用的个人技能: ${selected.name}】\n${selected.systemInstruction.trim()}`);
+          continue;
+        }
+        const documentInstruction = getDocumentReadingSkill(sid);
+        const loaded = documentInstruction ? { instruction: documentInstruction } :
+          (await this.executeUnifiedTool('skill', { name: sid }, [], currentSession.environment, currentSession.tokenData, projectPath, currentSession.projectId, sessionAllowedFiles, controller.signal)).data;
+        if (typeof loaded?.instruction !== 'string' || !loaded.instruction.trim()) throw new Error(`技能 ${selected.name} 无法加载，请检查技能设置。`);
+        if (!systemParts.some(part => part.includes(loaded.instruction))) {
+          const resourceNames = Array.isArray(loaded.resources) ? loaded.resources.map((resource: any) => resource.resource).filter((name: unknown) => typeof name === 'string') : [];
+          systemParts.push(`【本次引用技能: ${selected.name}】\n${loaded.instruction}${resourceNames.length ? `\n可通过 skill 工具按需读取的资源：${resourceNames.join('、')}` : ''}`);
+        }
+        sendEvent({ requestId, sessionId, messageId, type: 'tool_start', toolCall: {
+          id: `${requestId}_explicit_${sid}`, name: 'skill', arguments: { name: sid }, status: 'running',
+        } });
+        sendEvent({ requestId, sessionId, messageId, type: 'tool_update', toolCall: {
+          id: `${requestId}_explicit_${sid}`, name: 'skill', arguments: { name: sid }, status: 'success',
+          resultSummary: `已按本次引用加载技能 ${selected.name}`, resultData: { name: sid }, durationMs: 0,
+        } });
+      }
+
       // 注入已挂载的外部 MCP 扩展服务说明与引导
       if (activeCustomMcp.length > 0) {
         const mcpInfoText = activeCustomMcp
@@ -1761,6 +1809,7 @@ ${mcpInfoText}
         lowerModelId.includes('qwq');
       const canUseTools =
         !isMinimalMode &&
+        !summaryOnly &&
         (enableTools !== false) &&
         config.settings.enableCrmTools &&
         (modelObj?.tools ?? !isPureReasoner) &&
@@ -1797,7 +1846,8 @@ ${mcpInfoText}
           console.warn('[Context] Checkpoint unavailable; retaining conversation history:', error.message);
         }
       };
-      if (estimateContextTokens({ messages: conversationHistory, tools: contextTools }) >= contextBudget.triggerTokens) {
+      const needsCheckpoint = () => estimateContextTokens({ messages: pruneToolMessages(conversationHistory, contextTools, contextBudget), tools: contextTools }) >= contextBudget.triggerTokens;
+      if (needsCheckpoint()) {
         await compactForBudget();
       }
 
@@ -1811,7 +1861,7 @@ ${mcpInfoText}
           modelId,
           systemPromptText,
           recentMessages,
-          enableTools: (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
+          enableTools: !summaryOnly && (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
           activeToolsSpec,
           activeCustomMcp,
           settings: config.settings,
@@ -1820,6 +1870,7 @@ ${mcpInfoText}
           sendEvent,
           projectPath,
           sessionAllowedFiles,
+          mode: sessionMode,
           compactionSummary: currentCompactionSummary,
           contextBudget,
         });
@@ -1833,6 +1884,7 @@ ${mcpInfoText}
       let hasMoreIterations = true;
       let finalContentGenerated = '';
       let consecutiveDuplicates = 0;
+      let diagramRepairAttempts = 0;
       const calledToolSignatures = new Set<string>();
       const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
 
@@ -1840,7 +1892,7 @@ ${mcpInfoText}
         throwIfAborted();
         stepCount++;
         const isSafetyFuseTurn = stepCount >= maxSafetySteps; // 仅在达到60步安全熔断时强制收敛
-        if (stepCount > 1 && estimateContextTokens({ messages: conversationHistory, tools: contextTools }) >= contextBudget.triggerTokens) {
+        if (stepCount > 1 && needsCheckpoint()) {
           await compactForBudget();
         }
 
@@ -2100,6 +2152,20 @@ ${mcpInfoText}
 
         // 如果本步没有发起任何工具调用，说明大模型已经执行完所有前置动作，本步输出的是最终答复！
         if (toolCallsList.length === 0) {
+          const issues = await checkDiagramDelivery(assistantContent, projectPath, sessionAllowedFiles);
+          throwIfAborted();
+          if (issues.length) {
+            const repair = canUseTools && !isSafetyFuseTurn && sessionMode !== 'plan' && diagramRepairAttempts < 2;
+            const warning = diagramDeliveryWarning(issues, repair);
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
+            if (repair) {
+              diagramRepairAttempts++;
+              conversationHistory.push({ role: 'assistant', content: assistantContent });
+              conversationHistory.push({ role: 'user', content: diagramDeliveryFeedback(issues) });
+              continue;
+            }
+            assistantContent += warning;
+          }
           finalContentGenerated += assistantContent;
           hasMoreIterations = false;
           break; // DSH 核心语义：任务自然完成，退出循环
@@ -2115,7 +2181,7 @@ ${mcpInfoText}
             try {
               parsedArgs = JSON.parse(tc.arguments || '{}');
             } catch {}
-            if (tc.name === 'run_code' && /\btools\.(?:wait_agents|list_agents)\b/.test((parsedArgs as any).code || '')) return false;
+            if (tc.name === 'run_code' && /\btools\.(?:wait_agents|list_agents)\b/.test((parsedArgs as any)?.code || '')) return false;
             return calledToolSignatures.has(`${tc.name}:${JSON.stringify(parsedArgs)}`);
           });
 
@@ -2145,10 +2211,13 @@ ${mcpInfoText}
 
           for (const tc of toolCallsList) {
             let args: any = {};
+            let argumentError = '';
             try {
               args = JSON.parse(tc.arguments || '{}');
+              if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('工具参数必须是 JSON 对象');
             } catch {
               args = {};
+              argumentError = '工具参数 JSON 不完整或无效，尚未执行工具。可能输出被截断，请缩短或拆分 content/code 后重新调用；write 必须提供 file_path 和 content。';
             }
 
             const signature = `${tc.name}:${JSON.stringify(args)}`;
@@ -2176,6 +2245,7 @@ ${mcpInfoText}
 
             try {
               throwIfAborted();
+              if (argumentError) throw new Error(argumentError);
               const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath, currentSession.projectId, sessionAllowedFiles, controller.signal);
               throwIfAborted();
               toolResult = res.data;
@@ -2191,6 +2261,7 @@ ${mcpInfoText}
               isError = true;
               toolResult = { error: toolErr.message };
               resultSummary = `调用失败: ${toolErr.message}`;
+              executedToolsLog.push({ name: tc.name, args, summary: resultSummary, data: toolResult });
             }
 
             toolRecord.status = isError ? 'error' : 'success';
@@ -2421,12 +2492,18 @@ ${currentCompactionSummary.summary}
           sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
         }
 
-        // 若大模型接口在收敛轮因网络未能生成文本，直接以已成功执行的真实数据生成保底结构化 Markdown 报告
+        const synthesisIssues = await checkDiagramDelivery(synthesisStreamed, projectPath, sessionAllowedFiles);
+        throwIfAborted();
+        if (synthesisIssues.length) {
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: diagramDeliveryWarning(synthesisIssues, false) });
+        }
+
+        // 收敛轮没有正文时，保留真实工具收据，包括失败原因。
         if (!controller.signal.aborted && !synthesisStreamed.trim()) {
           const formattedReceipts = executedToolsLog
             .map((t, idx) => `**${idx + 1}. \`${t.name}\`**: ${t.summary || '已执行完成'}`)
             .join("\n");
-          const fallbackText = `本轮工具调用收据（${executedToolsLog.length} 项）：\n\n${formattedReceipts}\n\n当前未能生成最终分析结论。工具调用成功只代表单次工具运行结束，不代表用户要求的业务目标或产物已经完成；例如工作台组件必须以 workspace_save_page 成功为准。`;
+          const fallbackText = `本轮工具调用收据（${executedToolsLog.length} 项）：\n\n${formattedReceipts}\n\n当前未能生成最终分析结论。请以各项收据的成功或失败状态为准；单次工具成功不代表用户要求的业务目标或产物已经完成，例如工作台组件必须以 workspace_save_page 成功为准。`;
           sendEvent({
             requestId,
             sessionId,
@@ -2489,6 +2566,7 @@ ${currentCompactionSummary.summary}
     sendEvent: (event: AiStreamEvent) => void;
     projectPath?: string;
     sessionAllowedFiles?: string[];
+    mode?: AiSessionMode;
     compactionSummary?: AiChatSession['compactionSummary'];
     contextBudget: ModelContextBudget;
   }): Promise<void> {
@@ -2579,7 +2657,7 @@ ${currentCompactionSummary.summary}
     }
 
     // 2. 判断是否支持工具调用
-    const sessionMode: AiSessionMode = (opts as any).mode || currentSession.mode || 'standard';
+    const sessionMode: AiSessionMode = opts.mode || currentSession.mode || 'standard';
     const isPtcMode = sessionMode === 'ptc';
     const isMinimalMode = sessionMode === 'minimal';
 
@@ -2609,6 +2687,7 @@ ${currentCompactionSummary.summary}
     const maxSafetySteps = 60; // DSH 标准无限制迭代，60步安全熔断底线
     let hasMoreIterations = true;
 
+    let diagramRepairAttempts = 0;
     while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
       stepCount++;
       const isFinalSummaryTurn = stepCount >= maxSafetySteps;
@@ -2635,23 +2714,39 @@ ${currentCompactionSummary.summary}
 
       const endpoint = `${cleanBaseUrl}/models/${cleanModelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-        },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
+      let response: Response | undefined;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+        if (response.ok) break;
         const errText = await response.text();
         const parsedError = this.cleanHttpError(response.status, errText);
+        if (attempt === 0 && isContextLimitError(response.status, errText)) {
+          const before = estimateContextTokens({ contents: requestBody.contents, system: requestBody.systemInstruction, tools: requestBody.tools || [] });
+          const reported = reportedContextWindow(errText);
+          if (reported && reported < contextBudget.contextWindow) {
+            const model = provider.models.find(item => item.id === modelId);
+            const corrected = { ...provider, models: [{ ...model, id: modelId, name: model?.name || modelId, contextWindow: reported }] };
+            Object.assign(contextBudget, getModelContextBudget(corrected, modelId, settings.maxTokens));
+            requestBody.generationConfig.maxOutputTokens = contextBudget.maxOutputTokens;
+          }
+          const reduced = pruneGeminiContents(geminiContents, requestBody.systemInstruction, requestBody.tools || [], contextBudget, true);
+          const after = estimateContextTokens({ contents: reduced, system: requestBody.systemInstruction, tools: requestBody.tools || [] });
+          if (after < before) {
+            assertContextFits({ contents: reduced, systemInstruction: requestBody.systemInstruction }, requestBody.tools || [], contextBudget);
+            requestBody.contents = reduced;
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n> 上下文接近上限，正在整理已完成的工具记录后重试。\n\n' });
+            continue;
+          }
+        }
         throw new Error(`Gemini 接口响应异常 (HTTP ${response.status}): ${parsedError}`);
       }
 
-      if (!response.body) {
+      if (!response?.body) {
         throw new Error('未获取到 Gemini 流式响应主体');
       }
 
@@ -2765,6 +2860,9 @@ ${currentCompactionSummary.summary}
           let isError = false;
 
           try {
+            if (!fc.args || typeof fc.args !== 'object' || Array.isArray(fc.args)) {
+              throw new Error('工具参数必须是 JSON 对象，尚未执行工具。write 必须提供 file_path 和完整 content。');
+            }
             const res = await this.executeUnifiedTool(
               fc.name,
               fc.args,
@@ -2823,6 +2921,19 @@ ${currentCompactionSummary.summary}
 
         hasMoreIterations = true;
       } else {
+        const content = modelTurnParts.filter(part => typeof part.text === 'string').map(part => part.text).join('');
+        const issues = await checkDiagramDelivery(content, projectPath, sessionAllowedFiles);
+        if (controller.signal.aborted) break;
+        if (issues.length) {
+          const repair = canUseTools && !isFinalSummaryTurn && sessionMode !== 'plan' && diagramRepairAttempts < 2;
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: diagramDeliveryWarning(issues, repair) });
+          if (repair) {
+            diagramRepairAttempts++;
+            geminiContents.push({ role: 'model', parts: modelTurnParts });
+            geminiContents.push({ role: 'user', parts: [{ text: diagramDeliveryFeedback(issues) }] });
+            continue;
+          }
+        }
         hasMoreIterations = false;
       }
     }
@@ -2859,7 +2970,7 @@ ${currentCompactionSummary.summary}
     }
 
     srv.tools = res.tools;
-    this.saveMcpServer(srv);
+    await this.saveMcpServer(srv);
     return {
       success: true,
       server: srv,

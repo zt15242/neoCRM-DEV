@@ -52,6 +52,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
   const [description, setDescription] = useState('');
   const [triggerKeywordsStr, setTriggerKeywordsStr] = useState('');
   const [systemInstruction, setSystemInstruction] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const handleOpenAdd = () => {
     setEditingSkill(null);
@@ -86,6 +87,7 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     if (!name.trim()) {
       showToast('error', '请输入技能名称');
       return;
@@ -110,9 +112,14 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
       systemInstruction: systemInstruction.trim(),
     };
 
-    await onSaveSkill(payload);
-    setModalOpen(false);
-    showToast('success', `个人技能 [${payload.name}] 已保存`);
+    setSaving(true);
+    try {
+      await onSaveSkill(payload);
+      setModalOpen(false);
+      showToast('success', `个人技能 [${payload.name}] 已保存`);
+    } catch (error: any) {
+      showToast('error', `保存失败：${error.message || '请重试'}`);
+    } finally { setSaving(false); }
   };
 
   // ================= ZIP 技能包导入与导出 =================
@@ -591,9 +598,10 @@ export const SkillSettings: React.FC<SkillSettingsProps> = ({
                 </button>
                 <button
                   type="submit"
+                  disabled={saving}
                   className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold cursor-pointer"
                 >
-                  保存个人技能
+                  {saving ? '保存中…' : '保存个人技能'}
                 </button>
               </div>
             </form>

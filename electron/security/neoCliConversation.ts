@@ -92,6 +92,13 @@ export function isBusinessTypeConversation(content: string): boolean {
   return /业务类型|busi_?types?|business[\s_-]*types?/i.test(content);
 }
 
+export function shouldLoadBusinessTypeSkill(latestUserContent: string, recentContents: string[], summary = ''): boolean {
+  if (isBusinessTypeConversation(latestUserContent)) return true;
+  const text = latestUserContent.trim();
+  const continuation = text.length <= 32 && /^(?:继续|接着|确认|同意|好的|可以|是的|按(?:照)?(?:上述|上面|之前|刚才)|执行|部署|重新|再试|重试)/.test(text);
+  return continuation && (recentContents.some(isBusinessTypeConversation) || isBusinessTypeConversation(summary));
+}
+
 export const NEO_BUSINESS_TYPE_ROUTING = `【销售易业务类型创建与部署】
 当前已加载 neo-entity-management。用户要求查询、创建、修改或部署业务类型时，主动调用 list_business_types 查询真实目标对象的业务类型。创建业务类型与启用对象的 enableBusitype、配置业务类型子表单是不同操作。
 CLI 1.0.8 没有业务类型写入命令，使用宿主 deploy_business_type；它复用连接器登录态，不重新鉴权，不用 bash/curl 读取凭证或手写 HTTP。

@@ -1,5 +1,6 @@
 import { useRestrictedFeatures } from './security/RestrictedFeatures';
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useRef, useState, useEffect } from 'react';
+import { AppActivityRail } from './components/AppActivityRail';
 import { AppSidebar, AppNavTab } from './components/AppSidebar';
 import { EnvironmentSelector } from './components/EnvironmentSelector';
 import { LoginCard } from './components/LoginCard';
@@ -8,8 +9,8 @@ import { ConnectorDetailView } from './components/ConnectorDetailView';
 import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
 import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
-import { MailClientView } from './components/mail/MailClientView';
-import { MeetingAssistantView } from './components/meeting/MeetingAssistantView';
+const MailClientView = lazy(() => import('./components/mail/MailClientView').then(module => ({ default: module.MailClientView })));
+const MeetingAssistantView = lazy(() => import('./components/meeting/MeetingAssistantView').then(module => ({ default: module.MeetingAssistantView })));
 import { WorkspacePageView } from './components/workspace/WorkspacePageView';
 import { SettingsManager, SettingsSubTab } from './components/settings/SettingsManager';
 import { CustomEnvModal } from './components/CustomEnvModal';
@@ -20,7 +21,8 @@ import { CreateProjectModal } from './components/ai/CreateProjectModal';
 import { WorkflowLicenseModal } from './components/ai/WorkflowLicenseModal';
 import { UpdateInfo, NeoEnvironment, SessionState, AccountRecord, AiChatSession, WorkflowLicenseStatus, WorkspaceProject, McpServerConfig, AiSkillItem } from '../shared/types';
 import { BUILTIN_MCP_SERVERS, BUILTIN_AI_SKILLS } from '../shared/constants';
-import { ShieldAlert, LogIn, PanelLeftOpen } from 'lucide-react';
+import { ShieldAlert, LogIn } from 'lucide-react';
+import { readWorkspaceSelection, resolveWorkspaceSelection, WORKSPACE_SELECTION_KEY } from './utils/workspaceSelection';
 
 export const App: React.FC = () => {
   const { visible: privateFeaturesVisible, isRoleVisible } = useRestrictedFeatures();
@@ -69,7 +71,12 @@ export const App: React.FC = () => {
   };
 
   // 页面导航 Tab
-  const [activeTab, setActiveTab] = useState<AppNavTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<AppNavTab>('ai');
+  const [visitedApps, setVisitedApps] = useState({ mail: false, meeting: false });
+  const navigationChanged = useRef(false);
+  useEffect(() => {
+    if (activeTab === 'mail' || activeTab === 'meeting') setVisitedApps(previous => ({ ...previous, [activeTab]: true }));
+  }, [activeTab]);
   const [activeDetailEnvId, setActiveDetailEnvId] = useState<string | null>(null);
   const [dataTargetEntity, setDataTargetEntity] = useState<string>('account');
 
@@ -92,6 +99,8 @@ export const App: React.FC = () => {
   // 本地工程工作区项目列表与活动项目
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const selectionChangedDuringLoad = useRef(false);
+  const [workspaceRestored, setWorkspaceRestored] = useState(false);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<WorkspaceProject | null>(null);
 
@@ -150,6 +159,8 @@ export const App: React.FC = () => {
   const loadInitialData = async () => {
     try {
       if (window.neoApi) {
+        const savedWorkspace = readWorkspaceSelection(window.localStorage);
+        let loadedSessions: AiChatSession[] = [];
         const plat = await window.neoApi.getPlatform();
         setPlatform(plat);
 
@@ -169,7 +180,8 @@ export const App: React.FC = () => {
         if (window.neoApi?.aiGetSessions) {
           const sList = await window.neoApi.aiGetSessions();
           if (Array.isArray(sList)) {
-            setSessions(sList.filter((s) => s.messages && s.messages.length > 0));
+            loadedSessions = sList.filter((s) => s.messages && s.messages.length > 0);
+            setSessions(loadedSessions);
           }
         }
 
@@ -183,18 +195,20 @@ export const App: React.FC = () => {
           if (Array.isArray(pList)) {
             const cleanList = pList.filter((p) => p && p.id !== 'proj_default' && !(p.name === 'neoCRM-DEV' && p.isDefault));
             setProjects(cleanList);
-            if (cleanList.length > 0) {
-              if (!activeProjectId || !cleanList.some((p) => p.id === activeProjectId)) {
-                setActiveProjectId(cleanList[0].id);
-              }
-            } else {
-              setActiveProjectId(null);
+            if (!selectionChangedDuringLoad.current) {
+              const selection = resolveWorkspaceSelection(savedWorkspace, cleanList, loadedSessions, isRoleVisible);
+              setActiveProjectId(selection.projectId);
+              setActiveSessionId(selection.sessionId);
+              const selected = loadedSessions.find(item => item.id === selection.sessionId);
+              if (selected?.presetId) setSelectedPresetId(selected.presetId);
             }
+            setWorkspaceRestored(true);
           }
         }
 
         if (window.neoApi?.aiGetConfig) {
           const cfg = await window.neoApi.aiGetConfig();
+          if (!navigationChanged.current && ['dashboard', 'ai', 'mail', 'meeting', 'workspace'].includes(cfg.settings?.defaultStartupTab)) setActiveTab(cfg.settings.defaultStartupTab as AppNavTab);
           if (cfg.mcpServers) setMcpServers(cfg.mcpServers);
           if (cfg.skills) setSkills(cfg.skills);
         }
@@ -214,6 +228,12 @@ export const App: React.FC = () => {
       return unsub;
     }
   }, []);
+
+  useEffect(() => {
+    if (!workspaceRestored) return;
+    try { window.localStorage.setItem(WORKSPACE_SELECTION_KEY, JSON.stringify({ projectId: activeProjectId, sessionId: activeSessionId })); }
+    catch { /* Storage may be unavailable; the current workspace remains usable. */ }
+  }, [workspaceRestored, activeProjectId, activeSessionId]);
 
   useEffect(() => {
     const activeProject = projects.find((project) => project.id === activeProjectId);
@@ -453,7 +473,9 @@ export const App: React.FC = () => {
         const pList = await window.neoApi.projectGetProjects();
         const cleanList = pList.filter((p) => p && p.id !== 'proj_default' && !(p.name === 'neoCRM-DEV' && p.isDefault));
         setProjects(cleanList);
+        selectionChangedDuringLoad.current = true;
         setActiveProjectId(saved.id);
+        if (saved.id !== activeProjectId) setActiveSessionId(null);
         showToast('success', `本地项目工作区 [${saved.name}] 保存成功`);
       }
     } catch (e: any) {
@@ -470,6 +492,7 @@ export const App: React.FC = () => {
         setProjects(cleanList);
         if (activeProjectId === projectId) {
           setActiveProjectId(cleanList.length > 0 ? cleanList[0].id : null);
+          setActiveSessionId(null);
         }
         showToast('info', '已移除项目工作区');
       }
@@ -529,6 +552,7 @@ export const App: React.FC = () => {
 
   // 导航处理
   const handleTabChange = (tab: AppNavTab) => {
+    navigationChanged.current = true;
     if ((tab === 'metadata' || tab === 'data') && !session.isLoggedIn) {
       showToast('info', '请先选择环境并完成登录授权，以访问实体与业务数据');
       setActiveTab('dashboard');
@@ -544,9 +568,17 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-row bg-white text-slate-900 overflow-hidden font-sans">
+    <div className="desktop-suite h-screen w-screen bg-white text-slate-900 overflow-hidden font-sans">
+      <header className={`suite-titlebar window-drag ${platform === 'darwin' ? 'is-mac' : ''}`}>
+        <span className="suite-brand">NeoCRM</span><span className="suite-title-divider">/</span>
+        <span>{activeTab === 'ai' ? (projects.find(project => project.id === activeProjectId)?.name || '代码工作区') : ({ meeting: '会议助手', mail: '邮件', dashboard: 'CRM 连接器', metadata: '对象与字段', data: '数据中心', workspace: '工作台' }[activeTab])}</span>
+      </header>
+      <div className="suite-body">
+      <AppActivityRail activeTab={activeTab} onSelectTab={handleTabChange} onOpenSettings={() => handleOpenSettings('models')} />
+      <div className={activeTab === 'ai' ? 'suite-sidebar-slot' : 'hidden'}>
       {/* 全局 Codex 经典左侧项目树与功能导航栏 (彻底替代原顶部横条) */}
       <AppSidebar
+        contextOnly
         platform={platform}
         activeTab={activeTab}
         onSelectTab={handleTabChange}
@@ -558,6 +590,7 @@ export const App: React.FC = () => {
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={(id) => {
+          selectionChangedDuringLoad.current = true;
           setActiveSessionId(id);
           const targetSess = sessions.find((s) => s.id === id);
           if (targetSess?.projectId) {
@@ -566,7 +599,9 @@ export const App: React.FC = () => {
           setActiveTab('ai');
         }}
         onNewChatDraft={() => {
+          selectionChangedDuringLoad.current = true;
           setActiveSessionId(null);
+          setSelectedPresetId('harness-agent');
           setActiveTab('ai');
         }}
         onDeleteSession={handleDeleteSession}
@@ -584,6 +619,7 @@ export const App: React.FC = () => {
         projects={projects}
         activeProjectId={activeProjectId}
         onSelectProject={(projId) => {
+          selectionChangedDuringLoad.current = true;
           setActiveProjectId(projId);
           // 严格按项目隔离会话上下文：自动切换至该项目下的最近对话，或开启该项目专属新会话
           const projSessions = sessions.filter((s) => s.projectId === projId);
@@ -591,6 +627,7 @@ export const App: React.FC = () => {
             setActiveSessionId(projSessions[0].id);
           } else {
             setActiveSessionId(null);
+            setSelectedPresetId('harness-agent');
           }
           setActiveTab('ai');
         }}
@@ -607,42 +644,33 @@ export const App: React.FC = () => {
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
+      </div>
 
       {/* 右侧无缝主工作区 */}
       <main className="flex-1 h-full min-h-0 overflow-hidden flex flex-col min-w-0 bg-white relative">
         {/* 当侧边栏折叠时，为非 AI 页面提供顶部统一标题栏与展开操作 (安全避开 macOS 红绿灯窗口控制按钮，杜绝重叠覆盖) */}
-        {sidebarCollapsed && activeTab !== 'ai' && (
+        {!['ai', 'mail', 'meeting', 'workspace'].includes(activeTab) && (
           <header className={`h-11 px-4 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 select-none z-30 ${
-            platform === 'darwin' ? 'pl-20 window-drag' : 'window-drag'
+            'window-drag'
           }`}>
             <div className="flex items-center space-x-2 window-no-drag min-w-0">
-              <button
-                type="button"
-                onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 -ml-1 rounded-lg hover:bg-slate-100 text-slate-600 hover:text-slate-900 cursor-pointer mr-1 transition-colors flex items-center space-x-1.5 shrink-0"
-                title="展开左侧工具栏 (Cmd+B / Ctrl+B)"
-              >
-                <PanelLeftOpen className="w-4 h-4 text-slate-700" />
-                <span className="text-xs font-semibold text-slate-800">展开侧边栏</span>
-              </button>
-              <span className="text-slate-300">/</span>
               <span className="text-xs font-medium text-slate-500 truncate">
                 {activeTab === 'dashboard'
                   ? (activeDetailEnvId ? '连接器详情' : 'CRM 连接器中心')
                   : activeTab === 'metadata'
                   ? '对象与字段管理'
                   : activeTab === 'mail'
-                  ? '智能邮件中心 (Foxmail)'
+                  ? '邮件'
                   : activeTab === 'workspace'
                   ? '自定义工作台'
                   : activeTab === 'meeting'
-                  ? '会议助手 (飞书妙计级)'
+                  ? '会议助手'
                   : '数据中心 (DML/SQL)'}
               </span>
             </div>
             <div className="flex items-center space-x-2 window-no-drag shrink-0">
               <span className="text-[11px] text-slate-400 font-mono">
-                {platform === 'darwin' ? '⌘B 折叠/展开' : 'Ctrl+B 折叠/展开'}
+                NeoCRM 工作空间
               </span>
             </div>
           </header>
@@ -761,7 +789,12 @@ export const App: React.FC = () => {
           <AiHarnessStudio
             crmSession={session}
             activeSessionId={activeSessionId}
-            onSelectSession={setActiveSessionId}
+            onSelectSession={(id) => {
+              selectionChangedDuringLoad.current = true;
+              setActiveSessionId(id);
+              const target = sessions.find(item => item.id === id);
+              if (target?.projectId && projects.some(project => project.id === target.projectId)) setActiveProjectId(target.projectId);
+            }}
             sessions={sessions}
             onSessionsChange={setSessions}
             selectedPresetId={selectedPresetId}
@@ -780,17 +813,17 @@ export const App: React.FC = () => {
         </div>
 
         {/* Tab 5: Foxmail 风格智能邮件客户端与 AI 人物画像中心 */}
-        {activeTab === 'mail' && (
-          <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
-            <MailClientView showToast={showToast} />
+        {(visitedApps.mail || activeTab === 'mail') && (
+          <div className={activeTab === 'mail' ? "flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden" : "hidden"}>
+            <Suspense fallback={<div className="suite-loading" role="status">正在打开邮件…</div>}><MailClientView showToast={showToast} /></Suspense>
           </div>
         )}
 
 
         {/* Tab 6: 飞书妙计风格会议助手与 AI 转写/语艺/图表 */}
-        {activeTab === 'meeting' && (
-          <div className="flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden">
-            <MeetingAssistantView showToast={showToast} />
+        {(visitedApps.meeting || activeTab === 'meeting') && (
+          <div className={activeTab === 'meeting' ? "flex-1 h-full w-full min-h-0 flex flex-col overflow-hidden" : "hidden"}>
+            <Suspense fallback={<div className="suite-loading" role="status">正在打开会议助手…</div>}><MeetingAssistantView showToast={showToast} /></Suspense>
           </div>
         )}
 
@@ -805,6 +838,7 @@ export const App: React.FC = () => {
 
 
       </main>
+      </div>
 
       {/* 自定义环境创建/编辑弹窗 */}
       <CustomEnvModal

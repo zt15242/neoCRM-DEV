@@ -15,17 +15,18 @@ import { ApiService } from './services/apiService';
 import { MetadataService } from './services/metadataService';
 import { DataService } from './services/dataService';
 import { UpdateService } from './services/updateService';
-import { configureWindowLifecycle } from './services/windowLifecycle';
+import { configureWindowLifecycle, configureUnsavedFileGuard } from './services/windowLifecycle';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
 import { FileService } from './services/fileService';
-import { readMessagePreview } from './services/messagePreviewService';
+import { readMessagePreviewResult } from './services/messagePreviewService';
 import type { MessagePreviewRequest } from '../shared/messagePreview';
 import { getClipboardFilePaths } from './services/clipboardFiles';
 import { WorkflowService } from './services/workflowService';
 import { PrintTemplateService } from './services/printTemplateService';
 import { NexService } from './services/nexService';
 import { WorkBuddyService } from './services/workbuddyService';
+import { ProjectEditorService } from './services/projectEditorService';
 import { ProjectService } from './services/projectService';
 import { DshToolService } from './services/dshToolService';
 import { EmailService } from './services/emailService';
@@ -76,6 +77,7 @@ const handleTokenRefresh = (env: any, newToken: any) => {
 metadataService.setTokenRefreshCallback(handleTokenRefresh);
 dataService.setTokenRefreshCallback(handleTokenRefresh);
 
+const dshToolService = new DshToolService();
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
 aiService.onAgentSessionChanged((session) => {
   if (win && !win.isDestroyed() && restrictedFeatureService.canUseRole(session.presetId)) {
@@ -94,10 +96,10 @@ meetingService.onTranscriptionTaskUpdated((task) => {
   win?.webContents.send('meeting:transcriptionTaskUpdated', task);
 });
 const projectService = new ProjectService();
+const projectEditorService = new ProjectEditorService(() => projectService.getProjects().map(project => project.localPath));
 const workspaceService = new WorkspaceService(sessionStore, dataService, emailService, metadataService, projectService);
 aiService.setWorkspaceService(workspaceService);
 const feishuService = new FeishuService(workspaceService);
-const dshToolService = new DshToolService();
 const codeSyncService = new CodeSyncService(metadataService, dataService);
 
 // Renderer catalogs exclude undisclosed assets; internal configuration remains intact.
@@ -138,6 +140,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200,
     height: 840,
+    fullscreen: true,
     minWidth: 1000,
     minHeight: 700,
     title: 'NeoCRM 开发者客户端',
@@ -155,6 +158,11 @@ function createWindow() {
   });
   const mainWindow = win;
   windowLifecycle.registerWindow(mainWindow);
+  configureUnsavedFileGuard(mainWindow.webContents, () => dialog.showMessageBoxSync(mainWindow, {
+    type: 'question', title: '文件尚未保存', message: '有未保存的文件修改',
+    detail: '退出或重新加载会放弃这些修改。请选择继续编辑，或放弃修改并继续。',
+    buttons: ['继续编辑', '放弃修改并继续'], defaultId: 0, cancelId: 0, noLink: true,
+  }) === 1, windowLifecycle.cancelQuit);
   mainWindow.once('closed', () => {
     if (win === mainWindow) win = null;
   });
@@ -224,6 +232,11 @@ function createWindow() {
   win.webContents.on("did-finish-load", normalizeWindowScale);
   win.webContents.on("did-navigate", normalizeWindowScale);
   win.webContents.on("before-input-event", (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      event.preventDefault();
+      win?.setFullScreen(!win.isFullScreen());
+      return;
+    }
     if (!(input.control || input.meta) || input.alt) return;
     if (["+", "=", "-", "_", "0"].includes(input.key)) {
       event.preventDefault();
@@ -265,7 +278,8 @@ app.whenReady().then(() => {
 // 窗口控制
 ipcMain.handle('window:minimize', () => win?.minimize());
 ipcMain.handle('window:maximize', () => {
-  if (win?.isMaximized()) win.unmaximize();
+  if (win?.isFullScreen()) win.setFullScreen(false);
+  else if (win?.isMaximized()) win.unmaximize();
   else win?.maximize();
 });
 ipcMain.handle('window:close', () => win?.close());
@@ -626,7 +640,7 @@ ipcMain.handle('data:deleteRecord', async (_, entityApiKey: string, id: string |
 
 // ================= AI 对话平台与模型设置 =================
 
-ipcMain.handle('ai:getConfig', async () => visibleConfig(aiService.getAiConfig()));
+ipcMain.handle('ai:getConfig', async () => visibleConfig(await aiService.getAiConfigAsync()));
 ipcMain.handle('ai:saveSettings', async (_, settings) => aiService.saveAiSettings(settings));
 ipcMain.handle('ai:saveProvider', async (_, provider) => aiService.saveProvider(provider));
 ipcMain.handle('ai:deleteProvider', async (_, providerId: string) => aiService.deleteProvider(providerId));
@@ -679,15 +693,15 @@ ipcMain.handle('file:previewMessage', async (_, request: MessagePreviewRequest) 
   const project = session?.projectId ? projects.find(item => item.id === session.projectId) : undefined;
   const root = project?.localPath || projects.find(item => path.resolve(item.localPath) === path.resolve(request.projectPath || '.'))?.localPath;
   const allowedFiles = session?.messages.flatMap(message => message.attachments || []).map(file => file.fullPath).filter((file): file is string => !!file) || [];
-  return readMessagePreview(request.source, { projectPath: root, allowedFiles, diagram: request.diagram === true });
+  return readMessagePreviewResult(request.source, { projectPath: root, allowedFiles, diagram: request.diagram === true });
 });
 
 // ================= MCP 与 Skill 技能管理 =================
 ipcMain.handle('ai:saveMcpServer', async (_, server) => aiService.saveMcpServer(server));
 ipcMain.handle('ai:deleteMcpServer', async (_, id: string) => aiService.deleteMcpServer(id));
 ipcMain.handle('ai:syncMcpTools', async (_, id: string) => aiService.syncMcpTools(id));
-ipcMain.handle('ai:saveSkill', async (_, skill) => visibleSkills(aiService.saveSkill(skill)));
-ipcMain.handle('ai:deleteSkill', async (_, id: string) => visibleSkills(aiService.deleteSkill(id)));
+ipcMain.handle('ai:saveSkill', async (_, skill) => visibleSkills(await aiService.saveSkill(skill)));
+ipcMain.handle('ai:deleteSkill', async (_, id: string) => visibleSkills(await aiService.deleteSkill(id)));
 ipcMain.handle("ai:compactSession", async (_, sessionId: string) => {
   const target = aiService.getSessions().find((item) => item.id === sessionId);
   if (!restrictedFeatureService.canUseRole(target?.presetId)) return null;
@@ -947,6 +961,8 @@ ipcMain.handle("project:getRecentArtifacts", async (_, folderPath?: string, limi
 ipcMain.handle("project:getWorkspaceChanges", async (_, folderPath?: string) => {
   return dshToolService.getWorkspaceChanges(folderPath);
 });
+ipcMain.handle('editor:read', (_, root: string, file: string) => projectEditorService.read(root, file));
+ipcMain.handle('editor:save', (_, root: string, file: string, content: string, revision: string) => projectEditorService.save(root, file, content, revision));
 ipcMain.handle("project:getFileDiff", async (_, filePath: string, folderPath?: string) => {
   return dshToolService.getFileDiff(filePath, folderPath);
 });

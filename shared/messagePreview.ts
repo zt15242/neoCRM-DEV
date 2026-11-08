@@ -22,3 +22,7 @@ export type MessageFilePreview =
   | { kind: 'mindmap'; name: string; sheets: MindMapSheet[]; warnings: string[] }
   | { kind: 'diagram'; name: string; content: string; format: 'svg' | 'html' }
   | { kind: 'mermaid'; name: string; content: string };
+
+export type MessagePreviewResult =
+  | { ok: true; preview: MessageFilePreview }
+  | { ok: false; message: string };

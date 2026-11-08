@@ -94,7 +94,8 @@ interface AiInputComposerProps {
     entityRefs?: AiContextEntityRef[], 
     attachments?: AiFileAttachment[], 
     skillIds?: string[],
-    mcpServerIds?: string[]
+    mcpServerIds?: string[],
+    mentionedSkillIds?: string[]
   ) => void;
   onStop: () => void;
   entityRefs: AiContextEntityRef[];
@@ -103,6 +104,7 @@ interface AiInputComposerProps {
   enableTools: boolean;
   onToggleTools: () => void;
   availableSkills?: AiSkillItem[];
+  mentionSkills?: AiSkillItem[];
   activeSkillIds?: string[];
   onToggleSkill?: (skillId: string) => void;
   availableMcpServers?: McpServerConfig[];
@@ -146,13 +148,14 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   enableTools,
   onToggleTools,
   availableSkills = [],
+  mentionSkills = [],
   activeSkillIds = [],
   onToggleSkill,
   availableMcpServers = [],
   activeMcpServerIds = [],
   onToggleMcpServer,
   onOpenMcpSettings,
-  placeholder = '输入问题或任务，使用 / 调用指令，使用 @ 添加上下文…',
+  placeholder = '输入问题或任务，使用 / 调用指令，使用 @ 引用技能或文件…',
   quickPrompts = [],
   showToast,
   configuredProviders = [],
@@ -190,7 +193,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     {
       id: 'standard' as AiSessionMode,
       label: '标准模式',
-      shortLabel: '⚡️ 标准模式',
+      shortLabel: '标准模式',
       badge: '全量工具',
       desc: '处理代码、文件和资料，适合大多数任务。Agent 按需使用检索、编辑和终端等全量工具。',
       icon: Sparkles,
@@ -199,7 +202,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     {
       id: 'ptc' as AiSessionMode,
       label: 'PTC 模式',
-      shortLabel: '🧬 PTC 模式',
+      shortLabel: 'PTC 模式',
       badge: '程序化执行',
       desc: '包含标准模式的所有能力，更适合批量调用工具，通过编写脚本对结果进行筛选与汇总。',
       icon: Code2,
@@ -208,7 +211,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     {
       id: 'minimal' as AiSessionMode,
       label: '极简模式',
-      shortLabel: '🍃 极简模式',
+      shortLabel: '极简模式',
       badge: '终端基线',
       desc: '仅使用终端 Shell 工具完成任务，不加载复杂 Skills 与附加辅助，适合基准测试与对比。',
       icon: Zap,
@@ -217,7 +220,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     {
       id: 'plan' as AiSessionMode,
       label: '方案规划',
-      shortLabel: '📋 方案规划',
+      shortLabel: '方案规划',
       badge: '方案规划',
       desc: '先做技术调研与架构设计，生成完整方案经您评审确认后再执行。',
       icon: Layers,
@@ -233,6 +236,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [slashQuery, setSlashQuery] = useState('');
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionedSkillIds, setMentionedSkillIds] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   // 实体字典缓存
@@ -248,7 +252,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     setText,
     focusTextarea,
     onSend: (msg: string) => {
-      if (pendingImportsRef.current === 0) onSend(msg, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
+      if (pendingImportsRef.current === 0) onSend(msg, entityRefs, attachments, activeSkillIds, activeMcpServerIds, mentionedSkillIds);
     },
     showToast,
     onClearSession,
@@ -276,17 +280,20 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
 
   // 2. 动态搜索项目文件 (当输入 @ 时)
   useEffect(() => {
+    let cancelled = false;
     if (mentionMenuOpen) {
+      setMatchedFiles([]);
       if (window.neoApi?.projectListFiles) {
         window.neoApi.projectListFiles({
           folderPath: activeProject?.localPath,
           query: mentionQuery,
           maxFiles: 30,
         }).then((res) => {
-          if (Array.isArray(res)) setMatchedFiles(res);
+          if (!cancelled && Array.isArray(res)) setMatchedFiles(res);
         }).catch(() => {});
       }
     }
+    return () => { cancelled = true; };
   }, [mentionMenuOpen, mentionQuery, activeProject?.localPath]);
 
   // 2b. 外部拖入或侧边栏点击挂载附件
@@ -301,12 +308,12 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     }
   }, [externalAttachmentToAdd]);
 
-  // 3. 高度自适应 (严格保底 minHeight: 36px，彻底杜绝隐藏或切换 Tab 时 scrollHeight 为 0 导致输入框坍塌消失！)
+  // 隐藏或切换 Tab 时 scrollHeight 可能为 0，保留可点击的输入区域。
   const adjustTextareaHeight = () => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       const scrollH = textareaRef.current.scrollHeight;
-      const targetH = scrollH && scrollH > 32 ? Math.min(scrollH, 180) : 36;
+      const targetH = Math.max(52, Math.min(scrollH || 52, 180));
       textareaRef.current.style.height = `${targetH}px`;
     }
   };
@@ -610,6 +617,10 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     const q = mentionQuery.toLowerCase();
     return e.label.toLowerCase().includes(q) || e.apiKey.toLowerCase().includes(q);
   }).slice(0, 15);
+  const filteredSkills = mentionSkills.filter(skill => {
+    const query = mentionQuery.trim().toLowerCase();
+    return skill.enabled && (!query || [skill.id, skill.name, skill.description, ...(skill.triggerKeywords || [])].some(value => value.toLowerCase().includes(query)));
+  }).slice(0, 15);
 
   // 5. 监听输入内容中的 @ 与 /
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -672,7 +683,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       }
     }
 
-    const totalMentions = matchedFiles.length + filteredEntities.length;
+    const totalMentions = filteredSkills.length + matchedFiles.length + filteredEntities.length;
     if (mentionMenuOpen && totalMentions > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -686,10 +697,12 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        if (selectedIndex < matchedFiles.length) {
-          handleSelectFileMention(matchedFiles[selectedIndex]);
+        if (selectedIndex < filteredSkills.length) {
+          handleSelectSkillMention(filteredSkills[selectedIndex]);
+        } else if (selectedIndex < filteredSkills.length + matchedFiles.length) {
+          handleSelectFileMention(matchedFiles[selectedIndex - filteredSkills.length]);
         } else {
-          const entityIdx = selectedIndex - matchedFiles.length;
+          const entityIdx = selectedIndex - filteredSkills.length - matchedFiles.length;
           handleSelectEntityMention(filteredEntities[entityIdx]);
         }
         return;
@@ -760,6 +773,15 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
     // 将工具激活为专属工具标签
     setActiveCommand(cmd);
     cmd.action(composerContext);
+    focusTextarea();
+  };
+
+  const handleSelectSkillMention = (skill: AiSkillItem) => {
+    setMentionMenuOpen(false);
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    const textBefore = text.slice(0, caret).replace(/(?:^|\s)@[^\s@]*$/, '');
+    setText(`${textBefore} ${text.slice(caret)}`.trimStart());
+    setMentionedSkillIds(previous => previous.includes(skill.id) ? previous : [...previous, skill.id]);
     focusTextarea();
   };
 
@@ -841,14 +863,15 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       globalInputHistory.add(trimmed);
       historyCursorRef.current.reset();
     }
-    onSend(messageToSend, entityRefs, attachments, activeSkillIds, activeMcpServerIds);
+    onSend(messageToSend, entityRefs, attachments, activeSkillIds, activeMcpServerIds, mentionedSkillIds);
     setText('');
     setAttachments([]);
+    setMentionedSkillIds([]);
     setActiveCommand(null);
     setSlashMenuOpen(false);
     setMentionMenuOpen(false);
     if (textareaRef.current) {
-      textareaRef.current.style.height = '36px';
+      textareaRef.current.style.height = '52px';
     }
   };
 
@@ -1031,19 +1054,28 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       )}
 
       {/* ================= 浮层 B: 文件与实体智能发现菜单 (@ Mentions & Files) ================= */}
-      {mentionMenuOpen && (matchedFiles.length > 0 || filteredEntities.length > 0) && (
+      {mentionMenuOpen && (filteredSkills.length > 0 || matchedFiles.length > 0 || filteredEntities.length > 0) && (
         <div className="absolute left-0 bottom-full mb-2 w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
           <div className="px-3.5 py-2 border-b border-slate-100 bg-slate-50/80 flex items-center justify-between">
             <div className="flex items-center space-x-1.5 font-bold text-slate-800">
               <FolderOpen className="w-3.5 h-3.5 text-amber-600" />
-              <span>工作区文件与业务对象 (@ Mentions)</span>
+              <span>技能、项目文件与业务对象</span>
             </div>
             <span className="text-[10px] text-slate-400 font-mono">
-              找到 {matchedFiles.length} 文件 / {filteredEntities.length} 对象
+              {filteredSkills.length} 技能 / {matchedFiles.length} 文件 / {filteredEntities.length} 对象
             </span>
           </div>
 
           <div className="max-h-72 overflow-y-auto divide-y divide-slate-100/80 p-1">
+            {filteredSkills.length > 0 && <div className="py-1">
+              <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 flex items-center gap-1"><Sparkles className="w-3 h-3" /><span>技能 · 仅本次引用</span></div>
+              {filteredSkills.map((skill, idx) => <button type="button" key={skill.id} onClick={() => handleSelectSkillMention(skill)}
+                data-testid="skill-mention-option" aria-label={`引用技能 ${skill.name}`} title={skill.description}
+                className={`w-full px-2.5 py-1.5 rounded-xl flex items-center gap-2 text-left cursor-pointer ${selectedIndex === idx ? 'bg-purple-50 text-purple-950' : 'hover:bg-slate-50 text-slate-700'}`}>
+                <Sparkles className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                <span className="font-semibold truncate">{skill.name}</span><span className="text-[10px] text-slate-500 truncate">{skill.id}</span>
+              </button>)}
+            </div>}
             {/* 1. 工作区文件候选 */}
             {matchedFiles.length > 0 && (
               <div className="py-1">
@@ -1053,7 +1085,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                 </div>
                 {matchedFiles.map((file, idx) => {
                   const Icon = getFileIcon(file.name);
-                  const isSelected = selectedIndex === idx;
+                  const isSelected = selectedIndex === filteredSkills.length + idx;
 
                   return (
                     <div
@@ -1085,7 +1117,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                   <span>销售易业务对象 (@Entity)</span>
                 </div>
                 {filteredEntities.map((ent, idx) => {
-                  const itemIndex = matchedFiles.length + idx;
+                  const itemIndex = filteredSkills.length + matchedFiles.length + idx;
                   const isSelected = selectedIndex === itemIndex;
 
                   return (
@@ -1114,8 +1146,12 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       )}
 
       {/* 活跃工具胶囊、附件与引用实体 */}
-      {(activeCommand || attachments.length > 0 || entityRefs.length > 0) && (
+      {(activeCommand || attachments.length > 0 || entityRefs.length > 0 || mentionedSkillIds.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-1 max-h-36 overflow-y-auto">
+          {mentionedSkillIds.map(id => { const skill = mentionSkills.find(item => item.id === id); return skill && <span key={id} data-testid="skill-mention-chip" className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs border border-purple-200">
+            <Sparkles className="w-3.5 h-3.5" /><span>{skill.name}</span><span className="text-[10px]">本次</span>
+            <button type="button" aria-label={`移除技能 ${skill.name}`} onClick={() => setMentionedSkillIds(previous => previous.filter(item => item !== id))}><X className="w-3 h-3" /></button>
+          </span>; })}
           {/* 选中的工具胶囊 (只显示工具，不填入冗余示例) */}
           {activeCommand && (
             <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-mono border border-purple-200 shadow-2xs animate-in fade-in duration-150">
@@ -1133,15 +1169,17 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             </span>
           )}
           {attachments.map((att) => {
-            const Icon = getFileIcon(att.name);
+            const Icon = att.contentKind === 'directory' ? FolderOpen : getFileIcon(att.name);
             return (
               <span
                 key={att.id}
                 title={`${att.name}\n${att.summaryText || ''}${att.parseWarnings?.length ? '\n' + att.parseWarnings.join('\n') : ''}`}
+                data-testid={att.contentKind === 'directory' ? 'directory-attachment' : 'file-attachment'}
                 className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-mono border border-slate-200"
               >
                 <Icon className="w-3.5 h-3.5 text-slate-500" />
                 <span className="truncate max-w-[140px]">{att.name}</span>
+                {att.contentKind === 'directory' && <span className="text-[10px] text-slate-500 font-sans">文件夹</span>}
                 {att.contentKind === 'binary' && <span className="text-[10px] text-slate-400 font-sans">暂无预览</span>}
                 <button
                   type="button"
@@ -1173,7 +1211,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         </div>
       )}
 
-      {/* 主输入文本域 (强约束 min-h-[36px] 与 minHeight 样式，确保永远可见可点) */}
+      {/* 主输入文本域 */}
       <textarea
         ref={textareaRef}
         aria-label="输入消息"
@@ -1183,18 +1221,18 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         onFocus={adjustTextareaHeight}
         placeholder={activeCommand ? `已选中【${activeCommand.command} ${activeCommand.badge || activeCommand.name}】，请输入具体内容...` : placeholder}
         rows={1}
-        style={{ minHeight: '36px' }}
-        className="w-full min-h-[36px] resize-none border-none focus:outline-none text-[13px] md:text-sm text-slate-800 placeholder-slate-400 bg-transparent leading-relaxed max-h-44 block"
+        style={{ minHeight: '52px' }}
+        className="composer-input w-full resize-none border-none text-[13px] md:text-sm text-slate-800 placeholder-slate-400 bg-transparent leading-relaxed max-h-44 block"
       />
 
       {/* 底部操作工具栏 (Codex 经典布局: 左侧 + 与权限药丸，右侧模型与黑圆箭头发送键) */}
-      <div className="flex items-center gap-1.5 text-[10px] text-slate-400" aria-live="polite" role="status">
+      <div className="composer-hint flex items-center gap-1.5 text-[10px] text-slate-400" aria-live="polite" role="status">
         {isUploading ? <><LoaderCircle className="w-3 h-3 animate-spin" /><span>正在添加文件…</span></>
           : <><Paperclip className="w-3 h-3" /><span>支持粘贴文件、截图或拖入文件 · 单文件最大 50 MB</span></>}
       </div>
-      <div className="flex items-center justify-between pt-1">
+      <div className="composer-toolbar flex items-center justify-between pt-1">
         {/* 左侧控制区 */}
-        <div className="flex items-center space-x-2">
+        <div className="composer-controls flex items-center">
           {/* 圆形加号菜单 */}
           <div className="relative">
             <button
@@ -1274,7 +1312,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           </div>
 
           {/* 账号与环境连接器身份胶囊 (动态感知多平台品牌与账号) */}
-          <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-100/90 text-slate-700 text-xs font-medium border border-slate-200/80">
+          <div className="composer-tenant flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-100/90 text-slate-700 text-xs font-medium border border-slate-200/80" title={tenantName}>
             {productType === 'salesforce' ? (
               <Cloud className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
             ) : productType === 'fxiaoke' ? (
@@ -1284,7 +1322,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
             ) : (
               <Layers className="w-3.5 h-3.5 text-sky-600 shrink-0" />
             )}
-            <span className="truncate max-w-[130px] font-semibold text-slate-800">{tenantName}</span>
+            <span className="composer-tenant-name truncate font-semibold text-slate-800">{tenantName}</span>
           </div>
 
           {/* DSH 4 种运行模式选择器 (标准模式 / PTC模式 / 极简模式 / 方案规划) */}
@@ -1347,7 +1385,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
 
           {/* 角色标识徽标 */}
           {currentPresetName && isRoleVisible(currentPresetId) && (
-            <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-mono">
+            <span className="composer-role hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-mono">
               {currentPresetName.split(' (')[0]}
             </span>
           )}
@@ -1379,25 +1417,27 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           )}
         </div>
 
-        {/* 右侧控制区: 模型选择器 + Codex 经典圆黑向上发送箭头 */}
-        <div className="flex items-center space-x-2">
+        {/* 右侧控制区: 模型选择器 + 发送 */}
+        <div className="composer-tools-right flex items-center space-x-2">
           {/* 模型下拉选择器 */}
           {globalInputHistory.getEntries().length > 0 && !activeCommand && (
             <span
-              className="hidden lg:inline-flex items-center text-[10px] text-slate-400 font-mono px-1.5 py-0.5 rounded bg-slate-100/80 cursor-help"
+              className="composer-history hidden lg:inline-flex items-center text-[10px] text-slate-400 font-mono px-1.5 py-0.5 rounded bg-slate-100/80 cursor-help"
               title="按方向键 ↑ / ↓ 可快速召回前序历史发送过的提示词草稿"
             >
               ↑↓ 历史
             </span>
           )}
           {configuredProviders.length > 0 && onSelectModel && (
-            <div className="relative">
+            <div className="composer-model relative">
               <button
                 type="button"
                 onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+                title={`选择模型：${currentModelDisplay}`}
+                aria-label={`选择模型：${currentModelDisplay}`}
                 className="flex items-center space-x-1 px-2.5 py-1 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
               >
-                <span className="truncate max-w-[130px] font-mono">{currentModelDisplay}</span>
+                <span className="composer-model-name truncate font-mono">{currentModelDisplay}</span>
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
               </button>
 
@@ -1460,6 +1500,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
               title={isUploading ? '文件添加完成后即可发送' : '发送 (Enter)'}
+              aria-label={isUploading ? '文件添加完成后即可发送' : '发送消息'}
             >
               <ArrowUp className="w-4 h-4 stroke-[2.5]" />
             </button>
