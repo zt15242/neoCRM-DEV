@@ -25,6 +25,7 @@ export function isCompletedWorkSummaryRequest(text: string): boolean {
 }
 
 export function readModelTokenLimits(item: any, configured?: AiModelItem): Pick<AiModelItem, 'contextWindow' | 'maxOutputTokens'> {
+  if (configured?.tokenLimitsSource === 'user') return { contextWindow: configured.contextWindow, maxOutputTokens: configured.maxOutputTokens };
   return {
     contextWindow: positiveTokenLimit(item?.contextWindow, item?.context_window, item?.context_length,
       item?.contextLength, item?.max_context_length, item?.max_context_tokens, item?.maxInputTokens,
@@ -51,13 +52,24 @@ export function getModelContextBudget(provider: AiProviderConfig, modelId: strin
 // An estimate, not a tokenizer: conservatively count non-ASCII characters and JSON framing.
 // Request-level accounting includes system instructions, attachments, tools and function arguments.
 export function estimateContextTokens(value: unknown): number {
-  const text = typeof value === 'string' ? value : JSON.stringify(value) || '';
+  let imageTokens = 0;
+  const text = typeof value === 'string' ? value : JSON.stringify(value, (key, item) => {
+    if (key === 'image_url' && typeof item?.url === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(item.url)) {
+      imageTokens += 4096;
+      return { ...item, url: '[image]' };
+    }
+    if ((key === 'inlineData' || key === 'inline_data') && typeof item?.data === 'string' && /^image\//.test(item.mimeType || item.mime_type || '')) {
+      imageTokens += 4096;
+      return { ...item, data: '[image]' };
+    }
+    return item;
+  }) || '';
   let ascii = 0, other = 0;
   for (const character of text) {
     if (character.codePointAt(0)! < 128) ascii += 1;
     else other += 1;
   }
-  return Math.ceil(ascii / 3 + other * 2);
+  return imageTokens + Math.ceil(ascii / 3 + other * 2);
 }
 
 export function uncompactedMessages(messages: AiChatMessage[], summary?: AiCompactedSummary): AiChatMessage[] {
@@ -155,6 +167,19 @@ export function pruneToolMessages(messages: any[], tools: unknown, budget: Model
     });
     return changed ? { ...message, tool_calls } : message;
   });
+  // Large completed writes can dominate even after older calls are compacted.
+  // Only as a last resort, also shrink the newest completed arguments; the call
+  // IDs, names, paths and matching results remain intact and no tool is rerun.
+  if (estimateContextTokens({ messages: projected, tools }) > budget.inputTokens) {
+    projected = projected.map(message => {
+      if (message.role !== 'assistant' || !Array.isArray(message.tool_calls)) return message;
+      return { ...message, tool_calls: message.tool_calls.map((call: any) => {
+        if (!completed.has(call.id)) return call;
+        const compact = compactCompletedArguments(call.function?.arguments);
+        return compact ? { ...call, function: { ...call.function, arguments: JSON.stringify(compact) } } : call;
+      }) };
+    });
+  }
   return projected;
 }
 
@@ -190,6 +215,21 @@ export function pruneGeminiContents(contents: any[], system: unknown, tools: unk
       return compact ? { ...part, functionCall: { ...part.functionCall, args: compact } } : part;
     }) };
   });
+  if (estimateContextTokens({ contents: projected, system, tools }) > budget.inputTokens) {
+    projected = projected.map((message, index) => {
+      if (!callTurns.includes(index)) return message;
+      const next = contents[index + 1];
+      if (!next || next.role !== 'user') return message;
+      const responses = next.parts.filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.name);
+      const calls = message.parts.filter((part: any) => part.functionCall);
+      if (!calls.length || calls.length !== responses.length || calls.some((part: any, i: number) => part.functionCall.name !== responses[i])) return message;
+      return { ...message, parts: message.parts.map((part: any) => {
+        if (!part.functionCall) return part;
+        const compact = compactCompletedArguments(part.functionCall.args);
+        return compact ? { ...part, functionCall: { ...part.functionCall, args: compact } } : part;
+      }) };
+    });
+  }
   return projected;
 }
 

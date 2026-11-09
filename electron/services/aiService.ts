@@ -1,3 +1,4 @@
+import { PAGE_CODE_SKILL_ID, isPageCodeSkill, readPageCodeSkill } from '../security/pageCodeSkill';
 import { restrictedFeatureService } from '../security/restrictedFeatureService';
 import { isRestrictedRole, isRestrictedSkill } from '../../shared/restrictedFeatures';
 import { getRestrictedSkillDiscovery, readRestrictedSkillPackage } from '../security/restrictedSkillPackages';
@@ -14,6 +15,8 @@ import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '.
 import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../security/documentTools';
 import { DIAGRAM_SKILL_ID, DIAGRAM_ROUTING_INSTRUCTION, isDiagramDesignSkill, readDiagramDesignSkill } from '../security/diagramDesignSkill';
 import { formatAttachmentContext } from './attachmentContext';
+import { applyModelTokenReference } from '../../shared/modelTokenCatalog';
+import { VisionImageLoader, openAiImagePart, geminiImagePart } from './visionAttachments';
 import { checkDiagramDelivery, diagramDeliveryFeedback, diagramDeliveryWarning } from './diagramDelivery';
 const connectorKey = (session: any) => JSON.stringify([session.environment?.id, session.environment?.productType,
   session.tokenData?.tenant_id, session.tokenData?.userInfo?.userId,
@@ -360,6 +363,11 @@ export class AiService {
       if (!mergedProviders.some((m) => m.id === ep.id)) {
         mergedProviders.push(ep);
       }
+    }
+
+    // Enrich only missing limits; existing configurations are never overwritten.
+    for (const provider of mergedProviders) {
+      provider.models = (provider.models || []).map(model => applyModelTokenReference(provider, model));
     }
 
     const mergedSettings: AiHarnessSettings = {
@@ -788,6 +796,7 @@ export class AiService {
       const result = await this.workbuddyService.fetchLiveModels();
       return { ...result, models: result.models.map((model: AiModelItem) => ({ ...model,
         ...readModelTokenLimits(model, provider.models.find((configured) => configured.id === model.id)),
+        tokenLimitsSource: provider.models.find((configured) => configured.id === model.id)?.tokenLimitsSource,
       })) };
     }
 
@@ -829,6 +838,7 @@ export class AiService {
               reasoning: isReasoning,
               tools: !lowerId.includes('thinking'),
               ...readModelTokenLimits(item, provider.models?.find((model) => model.id === id)),
+              tokenLimitsSource: provider.models?.find((model) => model.id === id)?.tokenLimitsSource,
             };
           });
 
@@ -866,6 +876,7 @@ export class AiService {
           reasoning: isReasoning,
           tools: !lowerId.includes('reasoner') && !lowerId.includes('thinking'),
           ...readModelTokenLimits(item, provider.models?.find((model) => model.id === id)),
+              tokenLimitsSource: provider.models?.find((model) => model.id === id)?.tokenLimitsSource,
         };
       });
 
@@ -1289,7 +1300,7 @@ declare const tools: {
   list_entities(args?: { keyword?: string; isCustomOnly?: boolean }): Promise<{ totalCount: number; entities: Array<{ apiKey: string; label: string }> }>;
   get_entity_fields(args: { entityApiKey: string }): Promise<{ entityApiKey: string; totalFields: number; fields: any[] }>;
   list_business_types(args: { entityApiKey: string }): Promise<any>;
-  execute_open_api(args: { method: 'GET'|'POST'|'PUT'|'PATCH'|'DELETE'; url: string; queryParams?: Record<string, any>; body?: any; bodyEncoding?: 'json'|'form'; mutates?: boolean; confirm?: boolean }): Promise<any>;
+  execute_open_api(args: { method: 'GET'|'POST'|'PUT'|'PATCH'|'DELETE'; url: string; queryParams?: Record<string, any>; body?: any; bodyEncoding?: 'json'|'form'|'multipart'; authMode?: 'auto'|'cookie'|'oauth'; file?: {fieldName:string; filePath:string; contentType?:string}; mutates?: boolean; confirm?: boolean }): Promise<any>;
   deploy_business_type(args: { entityApiKey: string; apiKey?: string; label?: string; description?: string; active?: boolean; sourceFile?: string; dryRun?: boolean; confirm?: boolean }): Promise<any>;
   create_print_template(args: { file_path: string; entityApiKey: string; objectId?: number; name: string; printFileName?: string; description?: string; outputType: 0|1|2; confirm: boolean }): Promise<any>;
   execute_sql_query(args: { sql: string }): Promise<{ records: any[]; totalSize: number; fields: string[] }>;
@@ -1338,6 +1349,7 @@ declare const tools: {
       if (!isMinimalMode) {
         systemParts.push(`<available_skills>
 ${diagramSkillAvailable ? '- diagram-design: 架构图、流程图、时序图、ER 图等设计与 SVG 交付；绘图前调用 skill({ name: "diagram-design" })，再按 resource 读取类型参考。' : ''}
+${config.skills?.find(skill => skill.id === PAGE_CODE_SKILL_ID)?.enabled === false ? '' : '- neo-page-code-management: 销售易页面代码 ZIP 下载、修改、上传和回读；需核实浏览器能力及接口，不得声称未执行的操作。'}
 - document-reader: Excel、Word、PDF、PPT、XMind 和文本阅读；通过 read_document 按工作表、页码、幻灯片、思维导图画布与行号读取，核对来源、公式缓存及扫描件限制。
 - salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
 - salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
@@ -1717,6 +1729,7 @@ ${mcpInfoText}
         ? `${cleanBaseUrl}/chat/completions`
         : `${cleanBaseUrl}/v1/chat/completions`;
 
+      const visionImages = new VisionImageLoader();
       // 3. 构建 OpenAI 兼容对话上下文列表 (完全对齐 DSH：完整保留前序历史的 tool_calls 与工具结果)
       const buildConversationHistory = () => {
         const conversationHistory: any[] = [];
@@ -1741,7 +1754,7 @@ ${mcpInfoText}
             let text = msg.content || '';
             // 参照 DSH 规范结构化注入挂载/引用的文件信息，带绝对路径与相对路径，赋予大模型分析与精准编辑能力
             if (msg.attachments && msg.attachments.length > 0) {
-              const fileDescriptions = msg.attachments.map(formatAttachmentContext).join('\n\n');
+              const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
               text = `${fileDescriptions}\n\n${text}`;
             }
 
@@ -1752,7 +1765,9 @@ ${mcpInfoText}
               text = `${refDesc}\n\n${text}`;
             }
 
-            conversationHistory.push({ role: 'user', content: text });
+            const images = (msg.attachments || []).filter(file => file.contentKind === 'image' && file.fullPath)
+              .map(file => openAiImagePart(visionImages.load(file.fullPath!)));
+            conversationHistory.push({ role: 'user', content: images.length ? [{ type: 'text', text }, ...images] : text });
           } else if (msg.role === 'assistant') {
             // 关键修复：如果前序轮次调用过工具，严格按照标准时序复原：assistant(tool_calls) -> tool(result) -> assistant(content)！
             // 若缺少 tool 之后的最终 assistant 回答，大模型在下一轮看到历史在 tool 结果处截止，会误以为前序工具调用尚未作答，导致在新提问时重复回答上一轮的问题！
@@ -1873,6 +1888,7 @@ ${mcpInfoText}
           mode: sessionMode,
           compactionSummary: currentCompactionSummary,
           contextBudget,
+          visionImages,
         });
         return;
       }
@@ -1885,6 +1901,7 @@ ${mcpInfoText}
       let finalContentGenerated = '';
       let consecutiveDuplicates = 0;
       let diagramRepairAttempts = 0;
+      let contextPruneNotified = false;
       const calledToolSignatures = new Set<string>();
       const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
 
@@ -1931,6 +1948,10 @@ ${mcpInfoText}
           }
           requestBody.max_tokens = contextBudget.maxOutputTokens;
           requestBody.messages = pruneToolMessages(conversationHistory, requestBody.tools || [], contextBudget, contextRecovery);
+          if (!contextPruneNotified && estimateContextTokens(requestBody.messages) < estimateContextTokens(conversationHistory)) {
+            contextPruneNotified = true;
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n> 上下文接近上限，已精简已完成的工具参数和结果，保留调用关系与必要路径。\n\n' });
+          }
           assertContextFits(requestBody.messages, requestBody.tools || [], contextBudget);
 
           try {
@@ -1977,7 +1998,7 @@ ${mcpInfoText}
               continue;
             }
             if ([429, 502, 503, 504, 524].includes(resp.status) && attempt < maxRetries) continue;
-            throw Object.assign(new Error(`模型接口响应异常 (HTTP ${resp.status}): ${lastErrorMsg}`), { nonRetryable: true });
+            throw Object.assign(new Error(`模型接口响应异常 (HTTP ${resp.status}): ${lastErrorMsg}${visionImages.hasImages && [400, 415, 422].includes(resp.status) && !contextRecovery ? '。本次请求包含图片，请确认所选模型及接口支持图片输入，或更换支持视觉的模型。' : ''}`), { nonRetryable: true });
           } catch (fetchErr: any) {
             if (fetchErr.name === 'AbortError' || controller.signal.aborted || fetchErr.nonRetryable) throw fetchErr;
             lastErrorMsg = fetchErr.message;
@@ -2209,6 +2230,7 @@ ${mcpInfoText}
             })),
           });
 
+          const toolImages: any[] = [];
           for (const tc of toolCallsList) {
             let args: any = {};
             let argumentError = '';
@@ -2250,6 +2272,12 @@ ${mcpInfoText}
               throwIfAborted();
               toolResult = res.data;
               resultSummary = res.summary;
+              if (tc.name === 'read_image') {
+                const image = visionImages.load(res.data.path);
+                toolImages.push(openAiImagePart(image));
+                toolResult = { ...res.data, imageIncluded: true };
+                resultSummary = `图片已发送模型: ${path.basename(res.data.path)}`;
+              }
               executedToolsLog.push({
                 name: tc.name,
                 args,
@@ -2283,6 +2311,10 @@ ${mcpInfoText}
               content: this.formatSafeToolResultString(toolResult, Number.MAX_SAFE_INTEGER),
             });
           }
+
+          if (toolImages.length) conversationHistory.push({ role: 'user', content: [
+            { type: 'text', text: '以下是刚才 read_image 读取的图片，请直接结合图片内容分析。' }, ...toolImages
+          ] });
 
           // DSH 交互确认与方案评审挂起守护：如果本轮工具调用包含 ask_user_question 或 exit_plan_mode，立即挂起自主循环等待用户操作
           const hasInteractivePause = toolCallsList.some((tc) => tc.name === 'ask_user_question' || tc.name === 'exit_plan_mode');
@@ -2569,6 +2601,7 @@ ${currentCompactionSummary.summary}
     mode?: AiSessionMode;
     compactionSummary?: AiChatSession['compactionSummary'];
     contextBudget: ModelContextBudget;
+    visionImages: VisionImageLoader;
   }): Promise<void> {
     const {
       requestId,
@@ -2589,6 +2622,7 @@ ${currentCompactionSummary.summary}
       sessionAllowedFiles,
       compactionSummary,
       contextBudget,
+      visionImages,
     } = opts;
 
     const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
@@ -2606,7 +2640,7 @@ ${currentCompactionSummary.summary}
       if (msg.role === 'user') {
         let text = msg.content || '';
         if (msg.attachments && msg.attachments.length > 0) {
-          const fileDescriptions = msg.attachments.map(formatAttachmentContext).join('\n\n');
+          const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
           text = `${fileDescriptions}\n\n${text}`;
         }
 
@@ -2617,7 +2651,9 @@ ${currentCompactionSummary.summary}
           text = `${refDesc}\n\n${text}`;
         }
 
-        geminiContents.push({ role: 'user', parts: [{ text }] });
+        const images = (msg.attachments || []).filter(file => file.contentKind === 'image' && file.fullPath)
+          .map(file => geminiImagePart(visionImages.load(file.fullPath!)));
+        geminiContents.push({ role: 'user', parts: [{ text }, ...images] });
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           // Gemini 协议严格时序：model(functionCall) -> user(functionResponse) -> model(final text answer)
@@ -2688,6 +2724,7 @@ ${currentCompactionSummary.summary}
     let hasMoreIterations = true;
 
     let diagramRepairAttempts = 0;
+    let contextPruneNotified = false;
     while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
       stepCount++;
       const isFinalSummaryTurn = stepCount >= maxSafetySteps;
@@ -2710,6 +2747,10 @@ ${currentCompactionSummary.summary}
         requestBody.tools = [{ functionDeclarations: geminiFunctionDeclarations }];
       }
       requestBody.contents = pruneGeminiContents(geminiContents, requestBody.systemInstruction, requestBody.tools || [], contextBudget);
+      if (!contextPruneNotified && estimateContextTokens(requestBody.contents) < estimateContextTokens(geminiContents)) {
+        contextPruneNotified = true;
+        sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n> 上下文接近上限，已精简已完成的工具参数和结果，保留调用关系与必要路径。\n\n' });
+      }
       assertContextFits({ contents: requestBody.contents, systemInstruction: requestBody.systemInstruction }, requestBody.tools || [], contextBudget);
 
       const endpoint = `${cleanBaseUrl}/models/${cleanModelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
@@ -2743,7 +2784,7 @@ ${currentCompactionSummary.summary}
             continue;
           }
         }
-        throw new Error(`Gemini 接口响应异常 (HTTP ${response.status}): ${parsedError}`);
+        throw new Error(`Gemini 接口响应异常 (HTTP ${response.status}): ${parsedError}${visionImages.hasImages && [400, 415, 422].includes(response.status) && !isContextLimitError(response.status, errText) ? '。本次请求包含图片，请确认所选模型及接口支持图片输入。' : ''}`);
       }
 
       if (!response?.body) {
@@ -2837,6 +2878,7 @@ ${currentCompactionSummary.summary}
         });
 
         const functionResponseParts: any[] = [];
+        const toolImages: any[] = [];
 
         for (const fc of pendingFunctionCalls) {
           const toolRecord: AiToolCallRecord = {
@@ -2876,6 +2918,11 @@ ${currentCompactionSummary.summary}
             );
             toolResult = res.data;
             resultSummary = res.summary;
+            if (fc.name === 'read_image') {
+              toolImages.push(geminiImagePart(visionImages.load(res.data.path)));
+              toolResult = { ...res.data, imageIncluded: true };
+              resultSummary = `图片已发送模型: ${path.basename(res.data.path)}`;
+            }
           } catch (toolErr: any) {
             if (controller.signal.aborted || toolErr?.name === 'AbortError') throw toolErr;
             isError = true;
@@ -2916,7 +2963,7 @@ ${currentCompactionSummary.summary}
 
         geminiContents.push({
           role: 'user',
-          parts: functionResponseParts,
+          parts: [...functionResponseParts, ...toolImages],
         });
 
         hasMoreIterations = true;
@@ -3529,6 +3576,10 @@ ${currentCompactionSummary.summary}
       if (typeof skillName !== 'string' || !skillName) throw new Error('缺少技能名称');
       const builtin = BUILTIN_AI_SKILLS.find(skill => skill.id === skillName || skill.name === skillName);
       const resolvedName = builtin?.id || skillName;
+      if (isPageCodeSkill(resolvedName)) {
+        if (this.getAiConfig().skills?.find(skill => skill.id === PAGE_CODE_SKILL_ID)?.enabled === false) throw new Error('页面代码管理技能已停用，请在技能设置中启用');
+        return { data: readPageCodeSkill(resolvedName, args)!, summary: args.resource ? '已读取页面代码管理参考资料' : '已加载页面代码管理技能' };
+      }
       if (isDiagramDesignSkill(resolvedName)) {
         if (this.getAiConfig().skills?.find(skill => skill.id === DIAGRAM_SKILL_ID)?.enabled === false) throw new Error('Diagram Design 技能已停用，请在技能设置中启用');
         const packaged = readDiagramDesignSkill(resolvedName, args)!;
@@ -3871,7 +3922,31 @@ ${currentCompactionSummary.summary}
 
     if (name === 'execute_open_api') {
       if ((env.productType || 'neocrm') !== 'neocrm') throw new Error('execute_open_api 仅支持销售易连接器');
-      const result = await this.neoOpenApi.execute(env, tokenData, args, signal);
+      const result = await this.neoOpenApi.execute(env, tokenData, args, signal, async (requestedPath) => {
+        const allowedPath = this.dshToolService.assertPathWithinProject(requestedPath, projectPath, sessionAllowedFiles);
+        let realPath: string;
+        try { realPath = await fs.promises.realpath(allowedPath); } catch { throw new Error('上传文件不存在或无法读取'); }
+        const isAttachment = (sessionAllowedFiles || []).some(allowed => {
+          try { return fs.realpathSync(allowed) === realPath; } catch { return false; }
+        });
+        if (!isAttachment) this.dshToolService.assertPathWithinProject(realPath, projectPath);
+        const handle = await fs.promises.open(realPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+        try {
+          const stat = await handle.stat();
+          if (!stat.isFile()) throw new Error('上传目标必须是普通文件');
+          if (stat.size > 50 * 1024 * 1024) throw new Error('上传文件超过 50 MB');
+          const bytes = Buffer.alloc(stat.size + 1);
+          let count = 0;
+          while (count < bytes.length) {
+            signal?.throwIfAborted();
+            const read = await handle.read(bytes, count, bytes.length - count, count);
+            if (!read.bytesRead) break;
+            count += read.bytesRead;
+          }
+          if (count !== stat.size) throw new Error('上传文件在读取期间发生变化，请重新确认后重试');
+          return bytes.subarray(0, count);
+        } finally { await handle.close(); }
+      });
       return { data: result, summary: `销售易 Open API ${result.method} ${new URL(result.url).pathname} 返回 HTTP ${result.status}` };
     }
 

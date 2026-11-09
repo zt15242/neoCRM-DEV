@@ -49,7 +49,7 @@ export class FileService {
       const utf16 = sample.subarray(0, 2).equals(Buffer.from([0xff, 0xfe])) || sample.subarray(0, 2).equals(Buffer.from([0xfe, 0xff]));
       const binary = !utf16 && (sample.includes(0) || [...sample].filter(c => c < 9 || (c > 13 && c < 32)).length > sample.length * 0.05);
       if (image || binary || /^(zip|rar|7z|gz|bz2|xz|tar|exe|dll|dmg|pkg|app|mp3|mp4|mov|wav|ogg|flac|webm|woff2?|ttf|ico)$/.test(ext)) {
-        const warning = image ? '图片已添加，尚未识别图像内容；需使用图片查看能力进一步分析。' : '文件已添加，当前格式不支持文本预览，尚未读取内容。';
+        const warning = image ? '图片已添加；识别需要所选模型支持图片输入。' : '文件已添加，当前格式不支持文本预览，尚未读取内容。';
         return { id: `file_${randomUUID()}`, name, fullPath, size: stats.size,
           mimeType: MIME[ext] || 'application/octet-stream', parsedContent: warning,
           summaryText: image ? '图片附件' : '文件附件 · 暂无文本预览',

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { AiProviderConfig } from '../../../shared/types';
 import { ModelOptions } from './ModelOptions';
+import { modelTokenReference } from '../../../shared/modelTokenCatalog';
 
 export const ModelContextSettings = React.memo(function ModelContextSettings({ providers, onSave, showToast }: {
   providers: AiProviderConfig[];
@@ -22,6 +23,7 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
     setAttempted(false);
   }, [provider?.id, model?.id, model?.contextWindow, model?.maxOutputTokens]);
   if (!provider || !model) return null;
+  const reference = modelTokenReference(provider, model.id);
   const capacity = context.trim() ? Number(context) : undefined;
   const limit = output.trim() ? Number(output) : undefined;
   const capacityError = capacity !== undefined && (!Number.isSafeInteger(capacity) || capacity < 1024)
@@ -39,7 +41,7 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
     setSaving(true);
     try {
       await onSave({ ...provider, models: provider.models.map((item) => item.id === model.id
-        ? { ...item, contextWindow: capacity, maxOutputTokens: limit } : item) });
+        ? { ...item, contextWindow: capacity, maxOutputTokens: limit, tokenLimitsSource: 'user' as const } : item) });
       showToast('success', '模型上下文容量已保存，后续请求将按此容量自动管理上下文');
     } catch {
       showToast('error', '保存模型容量失败，请重试');
@@ -47,7 +49,12 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
   };
   return <div className="model-settings__context rounded-2xl border border-slate-200 bg-white p-4 space-y-3 text-xs shadow-2xs">
     <div className="font-semibold text-sm text-slate-800">模型上下文容量</div>
-    <p className="text-slate-500">按当前供应商或网关提供的模型限制填写。未提供上下文容量时，使用 32,768 tokens 保守预算；请求用量为估算值。</p>
+    <p className="text-slate-500">已知官方模型自动提供参考容量，也可根据当前供应商或网关实际限制手动修改。未知容量使用 32,768 tokens 保守预算；请求用量为估算值。</p>
+    {reference ? <div className="flex flex-wrap items-center gap-2 text-slate-500">
+      <span>官方参考：{reference.contextWindow.toLocaleString()} 上下文 / {reference.maxOutputTokens.toLocaleString()} 最大输出</span>
+      <button type="button" className="text-sky-700 hover:underline" onClick={() => { setContext(String(reference.contextWindow)); setOutput(String(reference.maxOutputTokens)); setAttempted(false); }}>采用参考值</button>
+      <a className="text-sky-700 hover:underline" href={reference.source} target="_blank" rel="noreferrer">来源</a>
+    </div> : <p className="text-slate-500">暂无该供应商和模型的官方参考值，请使用接口返回值或手动填写。</p>}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       <label className="space-y-1"><span>供应商</span>
         <select aria-label="上下文容量供应商" className="w-full rounded-lg border border-slate-200 px-2 py-1.5" value={provider.id}

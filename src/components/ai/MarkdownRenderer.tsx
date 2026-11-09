@@ -108,7 +108,7 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, t
 
   return (
     <MessageMediaContext.Provider value={mediaContext}>
-    <div className="space-y-3 min-w-0 text-slate-800 text-[13px] leading-relaxed break-words select-text">
+    <div className="ai-markdown space-y-3 min-w-0 text-slate-800 text-[13px] leading-relaxed break-words select-text">
       {parts.map((part, index) => {
         if (part.type === 'code') {
           const codeId = `code_${index}`;
@@ -305,7 +305,7 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
       });
 
       elements.push(
-        <div key={`table_${elements.length}`} className="my-3 overflow-x-auto rounded-xl border border-slate-200 shadow-2xs">
+        <div key={`table_${elements.length}`} className="my-3 max-w-full overflow-x-auto rounded-xl border border-slate-200 shadow-2xs">
           <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
             <thead className="bg-slate-50 text-slate-700 font-semibold">
               <tr>
@@ -448,7 +448,7 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
             style={{ paddingLeft: `${indent * 8 + 4}px` }}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mt-2 shrink-0" />
-            <div className="flex-1">{parseInline(itemText)}</div>
+            <div className="flex-1 min-w-0">{parseInline(itemText)}</div>
           </div>
         );
         continue;
@@ -471,7 +471,7 @@ const TextBlock: React.FC<{ text: string }> = ({ text }) => {
             <span className="text-[11px] font-bold text-sky-600 bg-sky-50 px-1.5 rounded shrink-0 font-mono mt-0.5">
               {num}.
             </span>
-            <div className="flex-1">{parseInline(itemText)}</div>
+            <div className="flex-1 min-w-0">{parseInline(itemText)}</div>
           </div>
         );
         continue;
@@ -573,7 +573,7 @@ function parseInline(text: string): React.ReactNode[] {
       parts.push(
         <code
           key={`c_${keyIndex++}`}
-          className="px-1.5 py-0.5 mx-0.5 rounded bg-sky-50 text-sky-700 font-mono text-[12px] border border-sky-200/80 font-medium"
+          className="ai-markdown__inline-code px-1.5 py-0.5 mx-0.5 rounded bg-sky-50 text-sky-700 font-mono text-[12px] border border-sky-200/80 font-medium"
         >
           {chosenMatch[2]}
         </code>

@@ -17,6 +17,8 @@ try {
     export * from './electron/services/modelContext';
     export { shouldLoadBusinessTypeSkill } from './electron/security/neoCliConversation';
     export { AiService } from './electron/services/aiService';
+    export { VisionImageLoader } from './electron/services/visionAttachments';
+    export { modelTokenReference, applyModelTokenReference } from './shared/modelTokenCatalog';
   ` }, bundle: true, platform: 'node', format: 'cjs', outfile: output, external: ['esbuild'], logLevel: 'silent',
     plugins: [{ name: 'isolated-model-host', setup(builder) {
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
@@ -26,7 +28,7 @@ try {
       ` }));
     } }],
   });
-  const { AiService, getModelContextBudget: budgetFor, estimateContextTokens: estimate, readModelTokenLimits,
+  const { AiService, VisionImageLoader, modelTokenReference, applyModelTokenReference, getModelContextBudget: budgetFor, estimateContextTokens: estimate, readModelTokenLimits,
     uncompactedMessages, chooseCompactionCutoff, pruneToolMessages, pruneGeminiContents, pruneToolContent,
     assertContextFits, isContextLimitError, isCompletedWorkSummaryRequest, reportedContextWindow, shouldLoadBusinessTypeSkill } = require(output);
   assert(isCompletedWorkSummaryRequest('请结合上述工具执行结果，给出完整详尽的总结分析与最终答复。'));
@@ -47,6 +49,19 @@ try {
   assert.equal(budgetFor(providerFor(undefined), 'fixture').contextWindow, 32768);
   assert.equal(readModelTokenLimits({ context_length: 1048576, top_provider: { max_completion_tokens: 8192 } }).contextWindow, 1048576);
   assert.equal(readModelTokenLimits({}, model(128000)).contextWindow, 128000);
+  const officialGemini = {...providerFor(undefined), baseUrl:'https://generativelanguage.googleapis.com/v1beta'};
+  const blankGemini = {id:'gemini-3.8-flash',name:'Gemini'};
+  assert.equal(applyModelTokenReference(officialGemini, blankGemini).contextWindow, 1048576);
+  assert.equal(applyModelTokenReference(officialGemini, {...blankGemini,contextWindow:65536}).contextWindow,65536);
+  assert.equal(applyModelTokenReference(officialGemini, {...blankGemini,contextWindow:65536}).maxOutputTokens,undefined);
+  assert.equal(applyModelTokenReference(officialGemini, {...blankGemini,tokenLimitsSource:'user'}).contextWindow,undefined);
+  assert.equal(modelTokenReference({...officialGemini,baseUrl:'https://proxy.example/v1'},blankGemini.id),undefined);
+  assert.equal(modelTokenReference(officialGemini,'gemini-3.8-flash-high'),undefined);
+  assert.equal(modelTokenReference({baseUrl:'https://api.deepseek.com'},'deepseek-flash').maxOutputTokens,393216);
+  assert.equal(modelTokenReference({baseUrl:'https://api.openai.com/v1'},'o3-mini').maxOutputTokens,100000);
+  assert.deepEqual(readModelTokenLimits({context_length:1048576,max_output_tokens:65536},{...blankGemini,contextWindow:32000,tokenLimitsSource:'user'}), {contextWindow:32000,maxOutputTokens:undefined});
+  console.log('PASS verified model defaults match exact official providers; existing and manual limits take priority');
+
   assert.equal(readModelTokenLimits({ context_window: -1, max_output_tokens: '2048' }).contextWindow, undefined);
   assert.equal(readModelTokenLimits({ max_output_tokens: '2048' }).maxOutputTokens, 2048);
   assert.equal(isContextLimitError(524, 'timeout'), false);
@@ -78,6 +93,25 @@ try {
   assert.deepEqual(trimmedGemini[0], gemini[0]);
   assert.equal(trimmedGemini[1].parts[0].functionResponse.name, 'read');
   assertContextFits({ contents: trimmedGemini, system: 'system' }, [], small);
+  // A single active turn can have no saved historical turn to summarize. Its
+  // most recent completed writes must still fit without repeating their tools.
+  const recentWrites = [1, 2].map(i => ({id:`write-${i}`,type:'function',function:{name:'write',arguments:JSON.stringify({file_path:`diagram-${i}.svg`,content:'abc '.repeat(50000)})}}));
+  const activeWire = [{role:'user',content:'生成图表'}, {role:'assistant',content:null,tool_calls:recentWrites},
+    ...recentWrites.map(call=>({role:'tool',tool_call_id:call.id,content:'写入成功'}))];
+  const activeOriginal = structuredClone(activeWire);
+  const activeSlim = pruneToolMessages(activeWire, [], small);
+  assertContextFits(activeSlim, [], small);
+  assert.deepEqual(activeWire, activeOriginal);
+  assert.deepEqual(activeSlim[1].tool_calls.map(call=>JSON.parse(call.function.arguments).file_path), ['diagram-1.svg','diagram-2.svg']);
+  assert.deepEqual(activeSlim.slice(2).map(result=>result.tool_call_id), ['write-1','write-2']);
+  const nativeCalls = recentWrites.map(call=>({functionCall:{name:'write',args:JSON.parse(call.function.arguments)}}));
+  const nativeActive = [{role:'user',parts:[{text:'生成图表'}]}, {role:'model',parts:nativeCalls},
+    {role:'user',parts:recentWrites.map(()=>({functionResponse:{name:'write',response:{result:'写入成功'}}}))}];
+  const nativeSlim=pruneGeminiContents(nativeActive,'system',[],small);
+  assertContextFits({contents:nativeSlim,system:'system'},[],small);
+  assert.deepEqual(nativeSlim[1].parts.map(part=>part.functionCall.args.file_path), ['diagram-1.svg','diagram-2.svg']);
+  assert.equal(nativeSlim[2].parts.length,2);
+  console.log('PASS oversized recent completed writes are compacted without losing paths or call/result pairing');
   const oldCall = {id:'old',type:'function',function:{name:'write',arguments:JSON.stringify({file_path:'src/example.ts',content:'data '.repeat(26000)})}};
   const recentCalls = [1,2].map(index => ({id:'new-'+index,type:'function',function:{name:'read',arguments:'{}'}}));
   const heavyWire = [{role:'user',content:'Keep the current request'}, {role:'assistant',content:null,tool_calls:[oldCall,...recentCalls]},
@@ -106,7 +140,7 @@ try {
   console.log('PASS budgets: model limits, output reservation, unknown-capacity fallback, full request accounting, valid tool pairing/JSON, Gemini pruning');
 
   const requests = [];
-  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0;
+  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0, visionToolScenario = false;
   server = http.createServer(async (request, response) => {
     if (request.method === 'GET') {
       response.setHeader('Content-Type', 'application/json');
@@ -114,6 +148,14 @@ try {
     }
     let raw = ''; for await (const part of request) raw += part;
     const body = JSON.parse(raw); requests.push({url: request.url, body});
+    if (visionToolScenario && (body.stream || body.contents)) {
+      visionToolScenario = false;
+      response.setHeader('Content-Type', 'text/event-stream');
+      const call = body.contents
+        ? {candidates:[{content:{parts:[{functionCall:{name:'read_image',args:{file_path:'fixture.png'}}}]}}]}
+        : {choices:[{delta:{tool_calls:[{index:0,id:'image-call',type:'function',function:{name:'read_image',arguments:JSON.stringify({file_path:'fixture.png'})}}]},finish_reason:'tool_calls'}]};
+      response.end('data: ' + JSON.stringify(call) + '\n\ndata: [DONE]\n\n'); return;
+    }
     if (body.contents && nativeFailOnce) { nativeFailOnce=false; response.statusCode=400; response.end(JSON.stringify({error:{message:'maximum context length exceeded'}})); return; }
     if (body.stream && [1, 3].includes(toolScenario)) {
       toolScenario = toolScenario === 1 ? 2 : 0;
@@ -163,6 +205,44 @@ try {
       assert(!events.some(event => event.type === 'error'), JSON.stringify(events.filter(event => event.type === 'error')));
     }};
   };
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aWQAAAAASUVORK5CYII=', 'base64');
+  const pngPath = path.join(fixture, 'fixture.png');
+  await fs.writeFile(pngPath, png);
+  const imageLoader = new VisionImageLoader();
+  assert.equal(imageLoader.load(pngPath).data, png.toString('base64'));
+  const fakePath = path.join(fixture, 'fake.png');
+  await fs.writeFile(fakePath, 'not an image');
+  assert.throws(() => imageLoader.load(fakePath), /格式暂不支持/);
+  assert.throws(() => imageLoader.load(path.join(fixture, 'missing.png')), /无法读取图片/);
+  const oversizedPath = path.join(fixture, 'oversized.png');
+  await fs.writeFile(oversizedPath, Buffer.alloc(8 * 1024 * 1024 + 1));
+  assert.throws(() => imageLoader.load(oversizedPath), /大小限制/);
+  const imageTokens = estimate([{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,' + 'a'.repeat(1000000)}}]}]);
+  assert(imageTokens >= 4096 && imageTokens < 5000);
+  assert(estimate({inlineData:{mimeType:'image/png',data:'a'.repeat(1000000)}}) < 5000);
+  for (const protocol of ['openai-completions', 'google-gemini']) {
+    const imageMessages = [{id:'image-user',role:'user',content:'图片是什么',createdAt:1,attachments:[{name:'fixture.png',size:png.length,contentKind:'image',fullPath:pngPath,parsedContent:'旧提示：尚未识别'}]}];
+    const vision = makeService(1048576,imageMessages,protocol);
+    const from = requests.length;
+    await vision.run();
+    const body = requests.slice(from).find(item => item.body.stream || item.body.contents).body;
+    const content = JSON.stringify(body);
+    assert(content.includes(png.toString('base64')), protocol + ' sends image bytes');
+    assert(!content.includes('旧提示：尚未识别'));
+    assert(!JSON.stringify(vision.events).includes(png.toString('base64')), 'image bytes stay out of events');
+    assert(!JSON.stringify(vision.stored).includes(png.toString('base64')), 'image bytes stay out of saved history');
+    const toolVision = makeService(1048576,[{id:'user',role:'user',content:'查看项目里的图片',createdAt:1}],protocol);
+    toolVision.config.settings.enableCrmTools = true;
+    visionToolScenario = true;
+    const toolFrom = requests.length;
+    await toolVision.run({enableTools:true,mode:'standard',projectPath:await fs.realpath(fixture)});
+    const second = requests.slice(toolFrom).filter(item => item.body.stream || item.body.contents)[1]?.body;
+    assert(second && JSON.stringify(second).includes(png.toString('base64')), protocol + ' read_image sends bytes: ' + JSON.stringify(toolVision.events));
+    assert(toolVision.events.some(event => event.type === 'tool_update' && event.toolCall?.name === 'read_image' && event.toolCall.status === 'success'));
+    assert(!JSON.stringify(toolVision.events).includes(png.toString('base64')));
+  }
+  console.log('PASS image attachments and read_image deliver bytes through both protocols, with limits and context accounting');
+  requests.length = 0;
   const big = makeService(1048576);
   await big.run();
   assert.equal(big.events.filter(event => event.type === 'compaction_done').length, 0);

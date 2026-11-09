@@ -59,3 +59,8 @@ html[data-dark-mode="true"] .message-media__status--error { color: #fbbf24; }
 .message-mindmap__topic > svg { flex-shrink: 0; }
 .message-mindmap__topic small { color: var(--media-muted); margin-inline-start: 4px; }
 @media (max-width: 480px) { .message-media__toolbar { gap: 4px; } .message-media__title { flex-basis: 100%; } .message-media__actions { margin-left: auto; } .message-mindmap__tree { padding: 10px; } }
+
+/* Let long inline paths and links wrap without affecting scrollable code blocks. */
+.ai-markdown { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.ai-markdown__inline-code { white-space: normal; overflow-wrap: anywhere; }
+.ai-markdown a { overflow-wrap: anywhere; }

@@ -182,6 +182,21 @@ try {
     protocol: 'openai', models: [{ id: 'fixture', tools: true, contextWindow: 128000, maxOutputTokens: 8192 }] }],
     settings: { enableCrmTools: true, injectTenantContext: false, maxTokens: 512, contextMessageLimit: 10 }, mcpServers: [], skills: [] };
   ai.getAiConfig = () => fixtureConfig;
+  const pageCode = await ai.executeUnifiedTool('skill', { name: 'neo-page-code-management' }, [], undefined, undefined, project);
+  assert.match(pageCode.data.instruction, /execute_open_api/);
+  assert.match(pageCode.data.instruction, /回读/);
+  const pageRef = await ai.executeUnifiedTool('skill', { name: 'skill-neo-page-code-management', resource: 'references/browser-workflow.md', offset: 1, limit: 5 }, [], undefined, undefined, project);
+  assert.match(pageRef.data.content, /页面代码/);
+  const apiRef = await ai.executeUnifiedTool('skill', { name: 'neo-page-code-management', resource: 'references/browser-workflow.md' }, [], undefined, undefined, project);
+  assert.match(apiRef.data.content, /GET \/rest\/metadata\/v2\.0\/dx\/logic\/lapp\/download/);
+  assert.match(apiRef.data.content, /multipart\/form-data/);
+  assert.match(apiRef.data.content, /commitMsg/);
+  assert.match(apiRef.data.content, /authMode/);
+  await assert.rejects(() => ai.executeUnifiedTool('skill', { name: 'neo-page-code-management', resource: '../private' }, [], undefined, undefined, project), /未找到/);
+  fixtureConfig.skills = [{ id: 'skill-neo-page-code-management', enabled: false }];
+  await assert.rejects(() => ai.executeUnifiedTool('skill', { name: 'neo-page-code-management' }, [], undefined, undefined, project), /停用/);
+  fixtureConfig.skills = [];
+  console.log('PASS page code skill: built-in instruction, resource paging, disabled state and honest browser boundary');
   const diagram = await ai.executeUnifiedTool('skill', { name: 'diagram-design' }, [], undefined, undefined, project);
   assert.equal(diagram.data.name, 'diagram-design');
   assert.match(diagram.data.version, /^2\.6\./);
@@ -237,6 +252,35 @@ try {
   await assert.rejects(() => ai.executeUnifiedTool('execute_open_api',
     { method: 'POST', url: '/admin/translation_v3/fileUpload.action', body: {}, confirm: true }, [], environment,
     { ...token, cookieString: '', cookies: [] }, project), /需要销售易后台会话 Cookie/);
+  const pageZip = path.join(project, 'page.zip');
+  fs.writeFileSync(pageZip, Buffer.from('zip-fixture-content'));
+  const multipart = { method:'POST', url:'/rest/metadata/v2.0/dx/logic/lapp/upload/123', authMode:'cookie', bodyEncoding:'multipart', body:{commitMsg:'fixture'}, file:{fieldName:'file', filePath:pageZip, contentType:'application/zip'} };
+  const beforeMultipart = apiCalls.length;
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', multipart, [], environment, token, project), /明确确认/);
+  assert.equal(apiCalls.length, beforeMultipart);
+  await ai.executeUnifiedTool('execute_open_api', {...multipart, confirm:true}, [], environment, token, project);
+  const multiCall = apiCalls.at(-1);
+  assert.equal(multiCall.headers.Cookie, token.cookieString);
+  assert.equal(multiCall.headers.Authorization, undefined);
+  assert.match(multiCall.headers['content-type'], /^multipart\/form-data; boundary=/);
+  const wire = multiCall.data.getBuffer().toString();
+  assert.match(wire, /name="commitMsg"\r\n\r\nfixture/);
+  assert.match(wire, /name="file"; filename="page.zip"/);
+  assert.match(wire, /Content-Type: application\/zip/);
+  assert.match(wire, /zip-fixture-content/);
+  await ai.executeUnifiedTool('execute_open_api', {method:'GET',url:'/rest/metadata/v2.0/dx/logic/lapp/',authMode:'cookie'}, [], environment, token, project);
+  assert.equal(apiCalls.at(-1).headers.Cookie, token.cookieString);
+  const externalZip = path.join(fixture,'external.zip'); fs.writeFileSync(externalZip, 'external-fixture');
+  const outsideUpload = {...multipart, confirm:true, file:{...multipart.file, filePath:externalZip}};
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', outsideUpload, [], environment, token, project), /沙箱|越界/);
+  await ai.executeUnifiedTool('execute_open_api', outsideUpload, [], environment, token, project, undefined, [externalZip]);
+  assert.match(apiCalls.at(-1).data.getBuffer().toString(), /external-fixture/);
+  const symlinkZip = path.join(project, 'escape.zip'); fs.symlinkSync(externalZip, symlinkZip);
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', {...multipart, confirm:true, file:{...multipart.file,filePath:symlinkZip}}, [], environment, token, project), /沙箱|越界|软链接/);
+  const hugeZip = path.join(project, 'large.zip'); fs.closeSync(fs.openSync(hugeZip, 'w')); fs.truncateSync(hugeZip, 50*1024*1024+1);
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', {...multipart, confirm:true, file:{...multipart.file,filePath:hugeZip}}, [], environment, token, project), /50 MB/);
+  await assert.rejects(() => ai.executeUnifiedTool('execute_open_api', {...multipart, confirm:true}, [], environment, {...token,cookieString:'',cookies:[]}, project), /Cookie/);
+  console.log('PASS Open API explicit cookie and multipart: confirmation, exact wire fields, attachment boundaries, symlinks and size cap');
   console.log('PASS Open API auth routing: /rest uses OAuth Bearer Token; /admin uses the connector web-session Cookie');
 
   const templateFile = path.join(project, 'sample-template.docx');

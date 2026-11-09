@@ -1,4 +1,6 @@
 import axios, { type AxiosRequestConfig, type Method } from 'axios';
+import FormData from 'form-data';
+import path from 'node:path';
 import type { NeoEnvironment, TokenData } from '../../shared/types';
 
 export type NeoOpenApiMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -8,7 +10,9 @@ export interface NeoOpenApiInput {
   url: string;
   queryParams?: Record<string, unknown>;
   body?: unknown;
-  bodyEncoding?: 'json' | 'form';
+  bodyEncoding?: 'json' | 'form' | 'multipart';
+  authMode?: 'auto' | 'cookie' | 'oauth';
+  file?: { fieldName: string; filePath: string; contentType?: string };
   mutates?: boolean;
   confirm?: boolean;
 }
@@ -75,9 +79,9 @@ export function resolveNeoOpenApiUrl(baseUrl: string, suppliedUrl: string): stri
   return resolved.toString();
 }
 
-function authHeadersForUrl(url: string, token: TokenData): Record<string, string> {
+function authHeadersForUrl(url: string, token: TokenData, mode: 'auto' | 'cookie' | 'oauth'): Record<string, string> {
   const parsed = new URL(url);
-  if (parsed.pathname.startsWith('/admin/')) {
+  if (mode === 'cookie' || (mode === 'auto' && parsed.pathname.startsWith('/admin/'))) {
     const cookies = Array.isArray(token.cookies) && token.cookies.length > 0
       ? token.cookies.map(cookie => `${cookie.name}=${cookie.value}`)
       : (token.cookieString || '').split(';').map(cookie => cookie.trim()).filter(Boolean);
@@ -93,7 +97,7 @@ function authHeadersForUrl(url: string, token: TokenData): Record<string, string
 export class NeoOpenApiService {
   constructor(private request: Request = (config) => axios.request(config)) {}
 
-  async execute(env: NeoEnvironment, token: TokenData, input: NeoOpenApiInput, signal?: AbortSignal) {
+  async execute(env: NeoEnvironment, token: TokenData, input: NeoOpenApiInput, signal?: AbortSignal, readAllowedFile?: (filePath: string) => Promise<Buffer>) {
     if ((env.productType || 'neocrm') !== 'neocrm') throw new Error('execute_open_api 仅支持销售易连接器');
     if (!input || !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(input.method)) {
       throw new Error('Open API method 仅支持 GET、POST、PUT、PATCH、DELETE');
@@ -110,8 +114,35 @@ export class NeoOpenApiService {
       throw new Error('Open API body 必须是 JSON 值');
     }
     const bodyEncoding = input.bodyEncoding ?? 'json';
-    if (!['json', 'form'].includes(bodyEncoding)) throw new Error('bodyEncoding 仅支持 json 或 form');
-    const data = method === 'GET' ? undefined : bodyEncoding === 'form' ? formBody(input.body) : input.body;
+    if (!['json', 'form', 'multipart'].includes(bodyEncoding)) throw new Error('bodyEncoding 仅支持 json、form 或 multipart');
+    const authMode = input.authMode ?? 'auto';
+    if (!['auto', 'cookie', 'oauth'].includes(authMode)) throw new Error('authMode 仅支持 auto、cookie 或 oauth');
+    const authHeaders = authHeadersForUrl(url, token, authMode);
+    let data: unknown = method === 'GET' ? undefined : bodyEncoding === 'form' ? formBody(input.body) : input.body;
+    let contentHeaders: Record<string, string> = { 'Content-Type': bodyEncoding === 'form' ? 'application/x-www-form-urlencoded;charset=UTF-8' : 'application/json' };
+    if (bodyEncoding === 'multipart') {
+      if (method === 'GET') throw new Error('GET 不支持 multipart 上传');
+      if (!input.file || typeof input.file.fieldName !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(input.file.fieldName)
+        || typeof input.file.filePath !== 'string' || !input.file.filePath.trim()) throw new Error('multipart 需要有效的 file.fieldName 和 file.filePath');
+      if (!readAllowedFile) throw new Error('当前会话没有可用的文件上传权限');
+      if (/[\r\n\x00-\x1f\x7f]/.test(path.basename(input.file.filePath))) throw new Error('文件名包含不支持的控制字符');
+      if (input.body !== undefined && (!input.body || typeof input.body !== 'object' || Array.isArray(input.body))) throw new Error('multipart body 必须是字段对象');
+      const fields = (input.body || {}) as Record<string, unknown>;
+      if (Object.keys(fields).length > 100 || Object.hasOwn(fields, input.file.fieldName)) throw new Error('multipart 字段过多或与文件字段重名');
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) {
+        if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key) || !['string', 'number', 'boolean'].includes(typeof value) || (typeof value === 'number' && !Number.isFinite(value))) throw new Error('multipart 字段名或字段值无效');
+        if (String(value).length > 100_000) throw new Error('multipart 字段内容过大');
+        form.append(key, String(value));
+      }
+      if (input.file.contentType && !/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(input.file.contentType)) throw new Error('文件 contentType 无效');
+      signal?.throwIfAborted();
+      const bytes = await readAllowedFile(input.file.filePath);
+      if (bytes.length > 50 * 1024 * 1024) throw new Error('上传文件超过 50 MB');
+      form.append(input.file.fieldName, bytes, { filename: path.basename(input.file.filePath), contentType: input.file.contentType || 'application/octet-stream', knownLength: bytes.length });
+      data = form;
+      contentHeaders = form.getHeaders();
+    } else if (input.file !== undefined) throw new Error('文件上传必须使用 multipart 编码');
 
     signal?.throwIfAborted();
     let response;
@@ -122,14 +153,14 @@ export class NeoOpenApiService {
         params: input.queryParams,
         ...(method === 'GET' ? {} : { data }),
         headers: {
-          ...authHeadersForUrl(url, token),
-          'Content-Type': bodyEncoding === 'form' ? 'application/x-www-form-urlencoded;charset=UTF-8' : 'application/json',
+          ...authHeaders,
+          ...contentHeaders,
           'xsy-inner-source': 'bff',
         },
         timeout: 30000,
         maxRedirects: 0,
         maxContentLength: 5 * 1024 * 1024,
-        maxBodyLength: 5 * 1024 * 1024,
+        maxBodyLength: bodyEncoding === 'multipart' ? 52 * 1024 * 1024 : 5 * 1024 * 1024,
         validateStatus: () => true,
         signal,
       });

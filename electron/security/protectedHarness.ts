@@ -1,3 +1,4 @@
+import { getPageCodeInstruction, isPageCodeSkill } from './pageCodeSkill';
 import restrictedSkillAssets from './restrictedSkillAssets.json';
 import { restrictedFeatureService } from './restrictedFeatureService';
 import { isRestrictedSkill } from '../../shared/restrictedFeatures';
@@ -154,6 +155,7 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 
 
 export function getProtectedSkillInstruction(skillId: string): string | null {
+  if (isPageCodeSkill(skillId)) return getPageCodeInstruction(skillId);
   if (isDiagramDesignSkill(skillId)) return getDiagramDesignInstruction(skillId);
   if (isRestrictedSkillPackage(skillId)) return getRestrictedPackageInstruction(skillId);
   const documentSkill = getDocumentReadingSkill(skillId);
@@ -291,6 +293,7 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
  * 判断是否为受保护的系统级内置技能
  */
 export function isProtectedBuiltinSkill(skillId: string): boolean {
+  if (isPageCodeSkill(skillId)) return true;
   if (isDiagramDesignSkill(skillId)) return true;
   if (skillId === 'skill-document-reader' || skillId === 'document-reader') return true;
   const norm = skillId.replace(/^skill-/, "");
@@ -402,7 +405,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'execute_open_api',
-      description: '通过当前销售易连接器执行接口请求。url 的域名始终替换为当前连接器环境。/rest/ 使用连接器 OAuth Token，/admin/ 使用后台 Cookie，宿主按路径注入；不要读取或提供凭据，不用 bash/curl。支持 JSON 和 URL 编码表单，bodyEncoding 指定格式；已编码表单字符串原样发送。fileUpload.action 所需 multipart 文件上传尚不支持。写操作（含有副作用 GET）先展示租户、方法、路径和参数，在用户明确授权范围内设 confirm=true；已有同一范围授权无需重复询问。',
+      description: '通过当前销售易连接器执行接口请求，域名固定为当前连接器实例。默认 /rest/ 使用 OAuth、/admin/ 使用后台 Cookie；authMode=cookie 可对其他路径使用连接器 Cookie，authMode=oauth 可显式使用 OAuth。凭据由宿主注入，禁止读取或提供凭据。支持 JSON、URL 编码表单及 multipart 文件上传；文件仅限项目内或用户明确附加的单个文件，最大 50 MB。写操作（含有副作用 GET）先展示租户、方法、路径和参数，在用户明确授权范围内设 confirm=true；已有同一范围授权无需重复询问。',
       parameters: {
         type: 'object',
         properties: {
@@ -410,7 +413,9 @@ export const CRM_HARNESS_TOOLS_SPEC = [
           url: { type: 'string', description: 'Open API 路径（如 /rest/metadata/v2.0/...）或文档完整 URL；原域名会被替换为当前连接器实例。' },
           queryParams: { type: 'object', description: '可选 URL 查询参数。' },
           body: { description: '可选 JSON 值；表单模式传字段对象或已编码字符串，保留空字段与 JSON 字符串；GET 不发送请求体。', anyOf: [{ type: 'object' }, { type: 'array', items: {} }, { type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }] },
-          bodyEncoding: { type: 'string', enum: ['json', 'form'], description: '默认 json；后台表单合同使用 form，不能将表单字段错误地作为 JSON 发送。' },
+          bodyEncoding: { type: 'string', enum: ['json', 'form', 'multipart'], description: '默认 json；multipart 将 body 作为文本字段，并使用 file 上传一个文件。' },
+          authMode: { type: 'string', enum: ['auto', 'cookie', 'oauth'], description: '默认 auto（/admin/ 使用 Cookie，其余使用 OAuth）；cookie 显式使用当前连接器后台 Cookie。' },
+          file: { type: 'object', description: 'multipart 文件：仅限项目文件或用户明确附加的文件，最大 50 MB。', properties: { fieldName: { type: 'string' }, filePath: { type: 'string' }, contentType: { type: 'string' } }, required: ['fieldName', 'filePath'] },
           mutates: { type: 'boolean', description: '接口有副作用时设 true，尤其发布、保存、复制、启停等 GET。' },
           confirm: { type: 'boolean', description: '所有写操作（含有副作用的 GET）在用户明确授权展示的目标租户、方法、路径和参数后设为 true；沿用同一目标范围的已有授权。' },
         },
@@ -1300,7 +1305,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'read_image',
-      description: '查看或检查当前项目工作区内的本地图片资源文件（必须位于当前项目工作区内）。',
+      description: '读取当前项目或用户明确添加的图片，并将图片内容发送给支持视觉输入的模型。',
       parameters: {
         type: 'object',
         properties: {

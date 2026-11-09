@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.44';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.45';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -77,6 +77,8 @@ export const BUILTIN_AI_PROVIDERS: AiProviderConfig[] = [
     website: 'https://platform.deepseek.com/',
     description: 'DeepSeek 官方大模型 API，支持 DeepSeek-V3 极速通用模型与 DeepSeek-R1 深度推理模型。',
     models: [
+      { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', reasoning: true, tools: true, contextWindow: 1048576, maxOutputTokens: 393216 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', reasoning: true, tools: true, contextWindow: 1048576, maxOutputTokens: 393216 },
       {
         id: 'deepseek-chat',
         name: 'DeepSeek-V3 (deepseek-chat)',
@@ -214,6 +216,7 @@ export const BUILTIN_AI_PROVIDERS: AiProviderConfig[] = [
     website: 'https://aistudio.google.com/app/apikey',
     description: 'Google 官方 Gemini 大模型 (AI Studio)，支持 Gemini 2.5 Pro / Flash 超长上下文、原生深度思考与工具调用。',
     models: [
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', reasoning: true, tools: true, contextWindow: 1048576, maxOutputTokens: 65536 },
       {
         id: 'gemini-2.5-pro',
         name: 'Gemini 2.5 Pro (旗舰推理与编码)',
@@ -732,6 +735,7 @@ export const BUILTIN_MCP_SERVERS: McpServerConfig[] = [
  * 注意: 核心系统指令已移入桌面内核安全沙箱混淆保护，绝不向渲染进程或配置文件明文暴露
  */
 export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
+  { id: 'skill-neo-page-code-management', name: '销售易页面代码管理', description: '页面代码包下载、修改、上传及回读流程；需要可用浏览器或用户在后台操作。', category: 'builtin', iconName: 'FileCode', enabled: true, triggerKeywords: ['页面代码', '页面代码包', 'pageCode', '页面安装包'] },
   {
     id: 'skill-diagram-design', name: 'Diagram Design 图表设计',
     description: '基于 Diagram Design 生成架构图、流程图、时序图、ER 图、泳道图等 SVG 图表，按需读取设计参考，支持重绘 draw.io、Mermaid 和 Excalidraw。',

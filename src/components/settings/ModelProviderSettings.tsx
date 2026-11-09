@@ -32,6 +32,7 @@ function preserveConfiguredModelLimits(models: AiModelItem[], configured: AiMode
   const configuredById = new Map(configured.map(item => [item.id, item]));
   return models.map((model) => {
     const previous = configuredById.get(model.id);
+    if (previous?.tokenLimitsSource === 'user') return { ...model, contextWindow: previous.contextWindow, maxOutputTokens: previous.maxOutputTokens, tokenLimitsSource: 'user' };
     return { ...model, contextWindow: model.contextWindow ?? previous?.contextWindow,
       maxOutputTokens: model.maxOutputTokens ?? previous?.maxOutputTokens };
   });

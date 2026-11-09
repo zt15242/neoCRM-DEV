@@ -247,6 +247,7 @@ export interface AiModelItem {
   tools?: boolean; // 是否支持 Function / Tool Calling
   contextWindow?: number; // 模型上下文容量（tokens）；未提供时使用明确标示的保守预算
   maxOutputTokens?: number;
+  tokenLimitsSource?: 'user'; // 用户保存的容量优先于自动发现和内置参考
 }
 
 export interface AiProviderConfig {
