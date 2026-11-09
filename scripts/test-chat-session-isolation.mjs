@@ -134,7 +134,9 @@ try {
         await wait('window.composer && window.composer.currentProviderId === "fixture"');
         await send('Start A');
         await wait('window.started.length === 1 && window.composer.isStreaming');
-        await run('window.emit(window.started[0], "content_delta", { delta: "A live content" })');
+        await run('window.emit(window.started[0], "content_delta", { delta: "A live content" }); window.emit(window.started[0], "usage", {usage:{source:"estimated",promptTokens:120,completionTokens:20,totalTokens:140,estimatedCost:0.001,costCurrency:"USD"}})');
+        assert.equal(await run('window.snapshot().sessions.find(s=>s.id==="sess-a").messages.at(-1).usage.totalTokens'),140);
+        assert(await run('document.body.innerText.includes("用量含估算 140 tokens")'));
         await select(null);
         assert.equal(await run('window.composer.isStreaming'), false);
         assert.equal(await run('Boolean(document.querySelector("button[title=停止生成]"))'), false);

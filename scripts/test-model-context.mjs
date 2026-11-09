@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { Readable } from 'node:stream';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -18,7 +19,11 @@ try {
     export { shouldLoadBusinessTypeSkill } from './electron/security/neoCliConversation';
     export { AiService } from './electron/services/aiService';
     export { VisionImageLoader } from './electron/services/visionAttachments';
+    export { TextMask } from './electron/services/textMask';
+    export { freeWebSearch } from './electron/services/freeWebSearch';
+    export { currentDateContext } from './electron/services/currentDate';
     export { modelTokenReference, applyModelTokenReference } from './shared/modelTokenCatalog';
+    export { modelPriceReference, modelVendorPriceSuggestion, effectiveModelPrice } from './shared/modelPriceCatalog';
   ` }, bundle: true, platform: 'node', format: 'cjs', outfile: output, external: ['esbuild'], logLevel: 'silent',
     plugins: [{ name: 'isolated-model-host', setup(builder) {
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture' }));
@@ -28,7 +33,7 @@ try {
       ` }));
     } }],
   });
-  const { AiService, VisionImageLoader, modelTokenReference, applyModelTokenReference, getModelContextBudget: budgetFor, estimateContextTokens: estimate, readModelTokenLimits,
+  const { AiService, VisionImageLoader, TextMask, freeWebSearch, currentDateContext, modelTokenReference, applyModelTokenReference, modelPriceReference, modelVendorPriceSuggestion, effectiveModelPrice, getModelContextBudget: budgetFor, estimateContextTokens: estimate, readModelTokenLimits,
     uncompactedMessages, chooseCompactionCutoff, pruneToolMessages, pruneGeminiContents, pruneToolContent,
     assertContextFits, isContextLimitError, isCompletedWorkSummaryRequest, reportedContextWindow, shouldLoadBusinessTypeSkill } = require(output);
   assert(isCompletedWorkSummaryRequest('请结合上述工具执行结果，给出完整详尽的总结分析与最终答复。'));
@@ -59,8 +64,32 @@ try {
   assert.equal(modelTokenReference(officialGemini,'gemini-3.8-flash-high'),undefined);
   assert.equal(modelTokenReference({baseUrl:'https://api.deepseek.com'},'deepseek-flash').maxOutputTokens,393216);
   assert.equal(modelTokenReference({baseUrl:'https://api.openai.com/v1'},'o3-mini').maxOutputTokens,100000);
-  assert.deepEqual(readModelTokenLimits({context_length:1048576,max_output_tokens:65536},{...blankGemini,contextWindow:32000,tokenLimitsSource:'user'}), {contextWindow:32000,maxOutputTokens:undefined});
+  assert.deepEqual(readModelTokenLimits({context_length:1048576,max_output_tokens:65536},{...blankGemini,contextWindow:32000,tokenLimitsSource:'user'}), {contextWindow:32000,maxOutputTokens:undefined,inputPricePerMillion:undefined,outputPricePerMillion:undefined,priceCurrency:undefined,priceSource:undefined});
   console.log('PASS verified model defaults match exact official providers; existing and manual limits take priority');
+  const officialDeepseek={baseUrl:'https://api.deepseek.com'};
+  const flash={id:'deepseek-flash',name:'Flash'};
+  assert.deepEqual(effectiveModelPrice(officialDeepseek,flash),{input:0.3,output:1.2,currency:'USD',source:'reference'});
+  assert.equal(effectiveModelPrice({baseUrl:'https://proxy.test'},flash).input,0.3);
+  assert.equal(effectiveModelPrice(officialDeepseek,{...flash,id:'deepseek-chat'}),undefined);
+  assert.deepEqual(effectiveModelPrice(officialDeepseek,{...flash,inputPricePerMillion:0,outputPricePerMillion:5,priceCurrency:'CNY'}),{input:0,output:5,currency:'CNY',source:'user'});
+  assert.equal(effectiveModelPrice(officialDeepseek,{...flash,priceSource:'user'}),undefined);
+  const priceModel={id:'gemini-3.8-flash',name:'Flash'};
+  assert.equal(effectiveModelPrice(officialGemini,priceModel,new Date('2026-12-31T00:00:00Z')).input,0.75);
+  assert.equal(effectiveModelPrice(officialGemini,priceModel,new Date('2027-01-01T00:00:00Z')),undefined);
+  assert.equal(effectiveModelPrice({baseUrl:'https://dashscope.aliyuncs.com'}, {id:'qwen-plus-2025-12-01',name:'qwen'}).currency,'CNY');
+  assert(modelPriceReference(officialDeepseek,'deepseek-flash').source.startsWith('https://'));
+  assert.equal(modelPriceReference({baseUrl:'https://api.siliconflow.cn/v1'},'deepseek-ai/DeepSeek-R1').output,16);
+  assert.equal(modelPriceReference({baseUrl:'https://dashscope.aliyuncs.com'},'qwen-max').output,9.6);
+  assert.equal(modelVendorPriceSuggestion('DeepSeek-V4.1-Flash').modelId,'deepseek-flash');
+  assert.equal(modelVendorPriceSuggestion('DeepSeek-V4.1-Flash').reference.input,0.3);
+  assert.equal(modelVendorPriceSuggestion('gpt-6-astra').reference.output,50);
+  assert.equal(modelVendorPriceSuggestion('default-model'),undefined);
+  assert.equal(modelVendorPriceSuggestion('deepseek-v4.1-flash-unverified'),undefined);
+  assert.equal(effectiveModelPrice({baseUrl:'http://127.0.0.1:8788/v1'},{id:'deepseek-v4.1-flash',name:'Flash'}).input,0.3);
+  assert.equal(effectiveModelPrice({baseUrl:'http://127.0.0.1:8788/v1'},{id:'unknown-model',name:'Unknown'}),undefined);
+
+  console.log('PASS price catalogue exact match, expired price, user override, zero price and currency');
+
 
   assert.equal(readModelTokenLimits({ context_window: -1, max_output_tokens: '2048' }).contextWindow, undefined);
   assert.equal(readModelTokenLimits({ max_output_tokens: '2048' }).maxOutputTokens, 2048);
@@ -140,7 +169,7 @@ try {
   console.log('PASS budgets: model limits, output reservation, unknown-capacity fallback, full request accounting, valid tool pairing/JSON, Gemini pruning');
 
   const requests = [];
-  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0, visionToolScenario = false;
+  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0, visionToolScenario = false, featureScenario = '';
   server = http.createServer(async (request, response) => {
     if (request.method === 'GET') {
       response.setHeader('Content-Type', 'application/json');
@@ -148,6 +177,31 @@ try {
     }
     let raw = ''; for await (const part of request) raw += part;
     const body = JSON.parse(raw); requests.push({url: request.url, body});
+    if (featureScenario && (body.stream || body.contents)) {
+      const scenario = featureScenario; featureScenario = '';
+      const native = !!body.contents;
+      response.setHeader('Content-Type', 'text/event-stream');
+      if (scenario === 'reject_usage') { response.statusCode = 400; response.end(JSON.stringify({error:{message:'unsupported stream_options include_usage'}})); return; }
+      if (scenario === 'stream_drop') {
+        const output = native ? {candidates:[{content:{parts:[{text:'部分输出'}]}}]} : {choices:[{delta:{content:'部分输出'}}]};
+        response.write('data: '+JSON.stringify(output)+'\n\n');
+        setTimeout(() => response.destroy(), 40); return;
+      }
+      if (scenario === 'mask') {
+        const text = JSON.stringify(body);
+        const tag = text.match(/⟦NEO_EMAIL_\d+⟧/)?.[0] || 'not-found';
+        const output = native ? {candidates:[{content:{parts:[{text:'邮箱：'+tag}]},finishReason:'STOP'}]} : {choices:[{delta:{content:'邮箱：'+tag},finish_reason:'stop'}]};
+        response.end('data: '+JSON.stringify(output)+'\n\ndata: [DONE]\n\n'); return;
+      }
+      if (scenario === 'length') {
+        const output = native ? {candidates:[{content:{parts:[{text:'第一段'}]},finishReason:'MAX_TOKENS'}]} : {choices:[{delta:{content:'第一段'},finish_reason:'length'}]};
+        response.end('data: '+JSON.stringify(output)+'\n\ndata: [DONE]\n\n'); return;
+      }
+      if (scenario === 'usage') {
+        const output = native ? {candidates:[{content:{parts:[{text:'用量测试'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:1000,candidatesTokenCount:200}} : {choices:[{delta:{content:'用量测试'},finish_reason:'stop'}],usage:{prompt_tokens:1000,completion_tokens:200}};
+        response.end('data: '+JSON.stringify(output)+'\n\ndata: [DONE]\n\n'); return;
+      }
+    }
     if (visionToolScenario && (body.stream || body.contents)) {
       visionToolScenario = false;
       response.setHeader('Content-Type', 'text/event-stream');
@@ -242,6 +296,114 @@ try {
     assert(!JSON.stringify(toolVision.events).includes(png.toString('base64')));
   }
   console.log('PASS image attachments and read_image deliver bytes through both protocols, with limits and context accounting');
+  const mask = new TextMask();
+  const raw = '邮箱 test@example.com 电话 13812345678';
+  const masked = mask.mask(raw);
+  assert(!masked.includes('test@example.com') && !masked.includes('13812345678'));
+  assert.equal(mask.restore(masked), raw);
+  assert.equal(mask.mask(raw), masked);
+  assert(!mask.mask('卡号 4111 1111 1111 1111').includes('4111 1111 1111 1111'));
+  assert(mask.mask('编号 1234567890123').includes('1234567890123'));
+  const instant = new Date('2025-12-31T16:30:00Z');
+  assert(currentDateContext(instant, 'Asia/Shanghai').includes('2026-01-01'));
+  assert(currentDateContext(instant, 'America/Los_Angeles').includes('2025-12-31'));
+  assert(currentDateContext(instant, 'Asia/Shanghai').includes('用户明确指定的历史日期保持不变'));
+  let filteredUrl = '';
+  const historicQuery = '2025年3月 国内新闻';
+  const recent = await freeWebSearch([historicQuery], async url => {
+    filteredUrl = url;
+    return '<div class="result"><a class="result__a" href="https://example.com/2025">2025 新闻</a></div>';
+  }, 'month');
+  assert.equal(new URL(filteredUrl).searchParams.get('q'), historicQuery);
+  assert.equal(new URL(filteredUrl).searchParams.get('df'), 'm');
+  assert.match(recent.warnings[0], /核实/);
+  const noDateFilter = await freeWebSearch(['当前新闻'], async url => {
+    if (url.includes('duckduckgo')) throw new Error('unavailable');
+    return '<li class="b_algo"><h2><a href="https://example.com/doc">News</a></h2></li>';
+  }, 'day');
+  assert.match(noDateFilter.warnings[0], /不支持时间过滤/);
+  await assert.rejects(() => freeWebSearch(['news'], async () => '', 'invalid'), /时间范围/);
+  const search = await freeWebSearch(['test'], async url => {
+    if (url.includes('duckduckgo')) throw new Error('unavailable');
+    return '<li class="b_algo"><h2><a href="https://example.com/doc">Test page</a></h2><p>Test result</p></li>';
+  });
+  assert.equal(search.sources[0].url, 'https://example.com/doc');
+  const failedSearch = await freeWebSearch(['test'], async () => { throw new Error('unavailable'); });
+  assert.equal(failedSearch.totalResults,0); assert(failedSearch.warnings?.length);
+  for (const protocol of ['openai-completions','google-gemini']) {
+    const scenarioMessages = [{id:'user',role:'user',content:'查询 test@example.com 的资料',createdAt:1}];
+    const privacy = makeService(1048576,scenarioMessages,protocol);
+    privacy.config.settings.maskModelText=true; privacy.config.settings.enableCrmTools=true;
+    featureScenario='mask'; const start = requests.length;
+    await privacy.run({enableTools:true,mode:'standard'});
+    const request = requests.slice(start).find(item=>item.body.stream || item.body.contents).body;
+    assert(!JSON.stringify(request).includes('test@example.com'), protocol + ' redacts outgoing email');
+    assert(!request.tools, protocol + ' disables tools');
+    assert(JSON.stringify(request).includes(currentDateContext()), protocol + ' receives device date and timezone');
+    assert(privacy.events.filter(event=>event.type==='content_delta').map(event=>event.delta).join('').includes('test@example.com'), 'restores output on device');
+    const blocked = makeService(1048576,scenarioMessages,protocol);
+    blocked.config.settings.maskModelText=true; blocked.config.settings.enableCrmTools=true;
+    let executions=0; blocked.service.executeUnifiedTool=async()=>{ executions++; return {data:{},summary:'unsafe'}; };
+    visionToolScenario=true; await blocked.run({enableTools:true,mode:'standard'});
+    assert.equal(executions,0,'mask mode blocks unsolicited tool calls');
+    assert(blocked.events.some(event=>event.toolCall?.status==='error'));
+    const usage = makeService(1048576,scenarioMessages,protocol);
+    usage.config.providers[0].models[0].inputPricePerMillion=2;
+    usage.config.providers[0].models[0].outputPricePerMillion=5;
+    featureScenario='usage'; await usage.run();
+    const metric=usage.events.find(event=>event.type==='usage')?.usage;
+    assert.equal(metric.promptTokens,1000); assert.equal(metric.completionTokens,200); assert.equal(metric.source,'reported');
+    assert.equal(metric.estimatedCostUsd,0.003);
+    const cny=makeService(1048576,scenarioMessages,protocol);
+    Object.assign(cny.config.providers[0].models[0],{inputPricePerMillion:0.8,outputPricePerMillion:2,priceCurrency:'CNY'});
+    featureScenario='usage'; await cny.run();
+    const yuan=cny.events.find(event=>event.type==='usage')?.usage;
+    assert.equal(yuan.costCurrency,'CNY'); assert.equal(yuan.estimatedCost,0.0012); assert.equal(yuan.estimatedCostUsd,undefined);
+    const missing=makeService(1048576,scenarioMessages,protocol);
+    Object.assign(missing.config.providers[0].models[0],{inputPricePerMillion:2,outputPricePerMillion:5});
+    await missing.run();
+    const estimate=missing.events.find(event=>event.type==='usage')?.usage;
+    assert.equal(estimate.source,'estimated'); assert(estimate.promptTokens>0 && estimate.completionTokens>0);
+    assert(estimate.estimatedCost>0);
+    if (protocol === 'openai-completions') {
+      const unsupported=makeService(1048576,scenarioMessages,protocol);
+      featureScenario='reject_usage'; const retryStart=requests.length;
+      await unsupported.run();
+      const retryBodies=requests.slice(retryStart).filter(item=>item.body.stream).map(item=>item.body);
+      assert.equal(retryBodies.length,2);
+      assert.equal(retryBodies[0].stream_options.include_usage,true);
+      assert.equal(retryBodies[1].stream_options,undefined);
+      assert.equal(unsupported.events.find(event=>event.type==='usage').usage.source,'estimated');
+    }
+    const continuation=makeService(1048576,scenarioMessages,protocol);
+    continuation.config.settings.autoContinueTruncated=true;
+    featureScenario='length'; const offset=requests.length;
+    await continuation.run();
+    assert.equal(requests.slice(offset).filter(item=>item.body.stream||item.body.contents).length,2);
+    assert(continuation.events.some(event=>event.delta?.includes('输出达到上限')));
+    const interrupted=makeService(1048576,scenarioMessages,protocol);
+    interrupted.config.settings.autoContinueTruncated=true;
+    featureScenario='stream_drop'; const failureOffset=requests.length;
+    await interrupted.run();
+    assert.equal(requests.slice(failureOffset).filter(item=>item.body.stream||item.body.contents).length,2);
+    assert(interrupted.events.some(event=>event.delta?.includes('网络中断')));
+  }
+  const wbMessages = [{id:'user',role:'user',content:'帮我看今天的新闻',createdAt:1}];
+  const workbuddy = makeService(1048576,wbMessages);
+  workbuddy.config.providers[0].id='workbuddy';
+  workbuddy.config.providers[0].models=[{id:'gemini-3.8-flash-high',name:'Gemini'}];
+  let wbRequest;
+  workbuddy.service.workbuddyService={getAccount:()=>({accessToken:'fixture'}), dispatchChat: async body=>{
+    wbRequest=body;
+    return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta:{content:'模拟新闻'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n')]);
+  }};
+  await workbuddy.run({providerId:'workbuddy',modelId:'gemini-3.8-flash-high'});
+  const wbUsage=workbuddy.events.find(event=>event.type==='usage')?.usage;
+  assert.equal(wbRequest.stream_options,undefined);
+  assert.equal(wbUsage?.source,'estimated'); assert(wbUsage?.totalTokens>0);
+  assert(wbUsage?.estimatedCost>0); assert.equal(wbUsage.costCurrency,'USD');
+  console.log('PASS WorkBuddy without provider usage shows estimated tokens and model-reference price');
+  console.log('PASS search fallback, opt-in masking, reported usage and bounded truncated-output continuation for both protocols');
   requests.length = 0;
   const big = makeService(1048576);
   await big.run();

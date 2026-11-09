@@ -227,6 +227,14 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
         </div>
       </div>
 
+      <label className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-4">
+        <span><strong className="text-slate-800">中断后自动继续</strong><span className="block text-slate-500 mt-1">输出达到上限或流式网络中断时最多继续两次；已开始的工具调用不会自动重试。</span></span>
+        <input type="checkbox" checked={!!form.autoContinueTruncated} onChange={e => setForm({ ...form, autoContinueTruncated: e.target.checked })} />
+      </label>
+      <label className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-4">
+        <span><strong className="text-slate-800">对话发送前遮罩常见敏感文本</strong><span className="block text-slate-500 mt-1">尝试遮罩手机号、邮箱、身份证、部分银行卡和常见 API 密钥；姓名、地址及图片内容不能保证识别。开启后禁用工具和图片，并暂停会话压缩；回复在结束时本机还原。原始对话仍保存在本机，不能保证完全脱敏。</span></span>
+        <input type="checkbox" checked={!!form.maskModelText} onChange={e => setForm({ ...form, maskModelText: e.target.checked })} />
+      </label>
       {/* 4. 自定义追加系统提示词 */}
       <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-2">
         <div className="flex items-center space-x-2 text-slate-800 font-bold text-sm">

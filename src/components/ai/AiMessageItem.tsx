@@ -234,6 +234,11 @@ const AiMessageItemComponent: React.FC<AiMessageItemProps> = ({
           </div>
         )}
 
+        {message.usage && <div className="inline-flex flex-wrap items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700" title="接口返回或按请求内容估算的用量；费用为参考价格估算，不代表账单">
+          {message.usage.source === 'estimated' ? '估算用量' : message.usage.source === 'mixed' ? '用量（含估算）' : '接口用量'}：输入 {message.usage.promptTokens?.toLocaleString() ?? '—'} · 输出 {message.usage.completionTokens?.toLocaleString() ?? '—'} tokens
+          {message.usage.estimatedCost !== undefined || message.usage.estimatedCostUsd !== undefined ? ` · 估算 ${message.usage.costCurrency === 'CNY' ? '¥' : '$'}${(message.usage.estimatedCost ?? message.usage.estimatedCostUsd)!.toFixed(6)}` : ' · 暂无价格'}
+        </div>}
+        {!message.usage && !isStreamingCurrent && <div className="text-[11px] text-slate-500">用量：未记录{message.error ? '（请求未完成）' : '（历史消息无法还原）'}</div>}
         {/* 深度思考面板 (DeepSeek-R1 Thought Process) */}
         {message.reasoningContent && (
           <ReasoningBox
@@ -378,6 +383,7 @@ export const AiMessageItem = React.memo(AiMessageItemComponent, (prevProps, next
   if (prevProps.message.content !== nextProps.message.content) return false;
   if (prevProps.message.reasoningContent !== nextProps.message.reasoningContent) return false;
   if (prevProps.message.error !== nextProps.message.error) return false;
+  if (prevProps.message.usage !== nextProps.message.usage) return false;
   if ((prevProps.message.toolCalls?.length || 0) !== (nextProps.message.toolCalls?.length || 0)) return false;
   return true;
 });

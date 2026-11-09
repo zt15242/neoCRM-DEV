@@ -536,6 +536,8 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               };
             }
 
+            if (type === 'usage' && event.usage) return { ...msg, usage: event.usage };
+
             if (type === 'error') {
               return {
                 ...msg,
@@ -933,6 +935,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const isCurrentProviderConfigured = isProviderConfigured(currentProvider);
 
   const activeToolCalls = activeSession?.messages?.flatMap((m) => m.toolCalls || []) || [];
+  const usageMessages = activeSession?.messages.filter(message => message.usage) || [];
+  const sessionTokens = usageMessages.reduce((sum, message) => sum + (message.usage?.totalTokens || 0), 0);
+  const sessionCosts = usageMessages.reduce((sums, message) => { const usage = message.usage!; const value = usage.estimatedCost ?? usage.estimatedCostUsd; if (value !== undefined) { const currency = usage.costCurrency || 'USD'; sums[currency] = (sums[currency] || 0) + value; } return sums; }, {} as Record<string, number>);
+  const hasPartialCost = usageMessages.some(message => message.usage?.estimatedCost === undefined && message.usage?.estimatedCostUsd === undefined);
 
   return (
     <div className={`ai-code-layout bg-white overflow-hidden flex flex-1 h-full w-full min-h-0 min-w-0 ${isTerminalOpen ? 'has-workbench' : ''}`}>
@@ -969,6 +975,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 font-mono shrink-0">
               {currentPreset.name.split(" (")[0]}
             </span>
+
+            {usageMessages.length > 0 && <span className="text-[10px] text-slate-500 shrink-0" title="已记录用量包含供应商数据或本地估算；费用按模型参考价格估算，历史消息和额外费用可能不完整">
+              {usageMessages.some(message => message.usage?.source === 'estimated' || message.usage?.source === 'mixed') ? '用量含估算' : '已统计'} {sessionTokens.toLocaleString()} tokens{Object.keys(sessionCosts).length ? ` · 估算 ${Object.entries(sessionCosts).map(([unit, cost]) => `${unit === 'CNY' ? '¥' : '$'}${cost.toFixed(4)}`).join(' + ')}${hasPartialCost ? '（部分）' : ''}` : ''}
+            </span>}
 
             {/* 自动流程与 BI 角色设备授权与剩余天数状态 (点击可查看或更换密码) */}
             {requiresRoleLicense(currentPreset.id) && (

@@ -15,9 +15,13 @@ import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '.
 import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../security/documentTools';
 import { DIAGRAM_SKILL_ID, DIAGRAM_ROUTING_INSTRUCTION, isDiagramDesignSkill, readDiagramDesignSkill } from '../security/diagramDesignSkill';
 import { formatAttachmentContext } from './attachmentContext';
+import { currentDateContext } from './currentDate';
+import { TextMask } from './textMask';
 import { applyModelTokenReference } from '../../shared/modelTokenCatalog';
+import { effectiveModelPrice } from '../../shared/modelPriceCatalog';
 import { VisionImageLoader, openAiImagePart, geminiImagePart } from './visionAttachments';
 import { checkDiagramDelivery, diagramDeliveryFeedback, diagramDeliveryWarning } from './diagramDelivery';
+const isTransientStreamFailure = (error: any): boolean => /terminated|network|socket|fetch failed|connection|econnreset|epipe|timeout|timed out|网络|连接中断/i.test(`${error?.message || ''} ${error?.cause?.code || ''}`);
 const connectorKey = (session: any) => JSON.stringify([session.environment?.id, session.environment?.productType,
   session.tokenData?.tenant_id, session.tokenData?.userInfo?.userId,
   session.tokenData?.instance_uri || session.environment?.neoBaseURL]);
@@ -591,6 +595,7 @@ export class AiService {
     const session = this.getSessions().find((item) => item.id === sessionId);
     if (!session || session.messages.length < 2) return session || null;
     const config = this.getAiConfig();
+    if (config.settings.maskModelText) throw new Error('文本遮罩模式下暂不支持会话摘要，请先关闭遮罩再手动压缩。');
     const providerId = options.providerId || session.providerId || config.settings.defaultProviderId;
     const selectedProvider = config.providers.find((item) => item.id === providerId);
     if (!selectedProvider) throw new Error('找不到当前模型供应商，无法生成上下文摘要');
@@ -1090,6 +1095,21 @@ export class AiService {
       .filter(Boolean) as string[];
 
     const config = this.getAiConfig();
+    const textMask = config.settings.maskModelText ? new TextMask() : undefined;
+    if (textMask) {
+      const nextEvent = sendEvent;
+      let content = '', reasoning = '';
+      sendEvent = event => {
+        if (event.type === 'content_delta') { content += event.delta || ''; return; }
+        if (event.type === 'reasoning_delta') { reasoning += event.delta || ''; return; }
+        if (event.type === 'done' || event.type === 'error') {
+          if (reasoning) nextEvent({ ...event, type: 'reasoning_delta', delta: textMask.restore(reasoning) });
+          if (content) nextEvent({ ...event, type: 'content_delta', delta: textMask.restore(content) });
+          content = ''; reasoning = '';
+        }
+        nextEvent(event);
+      };
+    }
 
     let currentCompactionSummary = compactionSummary;
 
@@ -1206,7 +1226,7 @@ export class AiService {
       }
 
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
-      const systemParts: string[] = [];
+      const systemParts: string[] = [currentDateContext()];
       const diagramSkillAvailable = config.skills?.find(skill => skill.id === DIAGRAM_SKILL_ID)?.enabled !== false
         && mode !== 'minimal' && enableTools !== false && config.settings.enableCrmTools && builtinMcpEnabled;
       systemParts.push('【回复中的图片与图表】展示图片请用 ![图片说明](真实图片 URL 或当前项目文件路径)。复杂图表先保存并校验当前项目内的完整 .svg/.html 文件，再在 diagram 代码块中只输出真实文件路径；不要重复长源码，以免回复截断导致图表无法预览。简短图可直接用 mermaid 与 svg 代码块，简短 HTML 图表用 html:diagram 代码块；客户端仅静态预览 SVG，不执行脚本。已存在的 XMind 文件请使用 [文件名](真实 .xmind 路径) 链接，客户端可预览主题层级，也可用 read_document 按画布读取。不要虚构图片链接或文件路径。');
@@ -1729,6 +1749,9 @@ ${mcpInfoText}
         ? `${cleanBaseUrl}/chat/completions`
         : `${cleanBaseUrl}/v1/chat/completions`;
 
+      if (textMask && recentMessages.some(msg => msg.attachments?.some(file => file.contentKind === 'image'))) {
+        throw new Error('文本遮罩不能识别图片中的敏感信息。请移除图片或关闭文本遮罩后重试。');
+      }
       const visionImages = new VisionImageLoader();
       // 3. 构建 OpenAI 兼容对话上下文列表 (完全对齐 DSH：完整保留前序历史的 tool_calls 与工具结果)
       const buildConversationHistory = () => {
@@ -1814,6 +1837,16 @@ ${mcpInfoText}
 
       // 4. 判断是否开启工具调用
       const modelObj = provider.models?.find((m) => m.id === modelId);
+      const accumulatedUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      let usageHadReported = false, usageHadEstimate = false;
+      const recordUsage = (input: unknown, output: unknown, source: 'reported' | 'estimated') => {
+        if (typeof input !== 'number' || !Number.isFinite(input) || input < 0 || typeof output !== 'number' || !Number.isFinite(output) || output < 0) return;
+        if (source === 'reported') usageHadReported = true; else usageHadEstimate = true;
+        accumulatedUsage.promptTokens += input; accumulatedUsage.completionTokens += output; accumulatedUsage.totalTokens += input + output;
+        const price = effectiveModelPrice(provider, modelObj);
+        const estimatedCost = price ? (accumulatedUsage.promptTokens * price.input + accumulatedUsage.completionTokens * price.output) / 1000000 : undefined;
+        sendEvent({ requestId, sessionId, messageId, type: 'usage', usage: { ...accumulatedUsage, source: usageHadEstimate ? (usageHadReported ? 'mixed' : 'estimated') : 'reported', estimatedCost, costCurrency: price?.currency, estimatedCostUsd: price?.currency === 'USD' ? estimatedCost : undefined } });
+      };
       const lowerModelId = modelId.toLowerCase();
       const isDeepSeekModel = lowerModelId.includes('deepseek') ||
         `${provider.id || ''} ${provider.name || ''}`.toLowerCase().includes('deepseek');
@@ -1823,7 +1856,7 @@ ${mcpInfoText}
         lowerModelId.includes('thinking') ||
         lowerModelId.includes('qwq');
       const canUseTools =
-        !isMinimalMode &&
+        !textMask && !isMinimalMode &&
         !summaryOnly &&
         (enableTools !== false) &&
         config.settings.enableCrmTools &&
@@ -1838,7 +1871,7 @@ ${mcpInfoText}
       const contextBudget = getModelContextBudget(provider, modelId, config.settings.maxTokens);
       const contextTools = canUseTools ? effectiveActiveToolsSpec : [];
       const compactForBudget = async (inputBudgetTokens = contextBudget.inputTokens) => {
-        if (!sessionId) return;
+        if (!sessionId || textMask) return;
         // Tool exchanges produced by this running turn are not in the saved session yet.
         const liveExchanges = conversationHistory.slice(storedHistoryLength);
         const estimatedTokens = estimateContextTokens({ messages: conversationHistory, tools: contextTools });
@@ -1876,7 +1909,7 @@ ${mcpInfoText}
           modelId,
           systemPromptText,
           recentMessages,
-          enableTools: !summaryOnly && (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
+          enableTools: !textMask && !summaryOnly && (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
           activeToolsSpec,
           activeCustomMcp,
           settings: config.settings,
@@ -1889,6 +1922,8 @@ ${mcpInfoText}
           compactionSummary: currentCompactionSummary,
           contextBudget,
           visionImages,
+          recordUsage,
+          textMask,
         });
         return;
       }
@@ -1901,6 +1936,9 @@ ${mcpInfoText}
       let finalContentGenerated = '';
       let consecutiveDuplicates = 0;
       let diagramRepairAttempts = 0;
+      let truncatedContinuations = 0;
+      let requestStreamUsage = provider.id !== 'workbuddy';
+      let streamRecoveries = 0;
       let contextPruneNotified = false;
       const calledToolSignatures = new Set<string>();
       const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
@@ -1920,6 +1958,10 @@ ${mcpInfoText}
           max_tokens: contextBudget.maxOutputTokens,
           stream: true,
         };
+
+        // Compatible gateways may omit usage unless explicitly requested. WorkBuddy's
+        // proprietary upstream is handled separately and falls back to an estimate.
+        if (requestStreamUsage) requestBody.stream_options = { include_usage: true };
 
         if (canUseTools && !isSafetyFuseTurn) {
           requestBody.tools = effectiveActiveToolsSpec;
@@ -1952,6 +1994,7 @@ ${mcpInfoText}
             contextPruneNotified = true;
             sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n> 上下文接近上限，已精简已完成的工具参数和结果，保留调用关系与必要路径。\n\n' });
           }
+          if (textMask) requestBody.messages = textMask.maskValue(requestBody.messages);
           assertContextFits(requestBody.messages, requestBody.tools || [], contextBudget);
 
           try {
@@ -1988,6 +2031,12 @@ ${mcpInfoText}
             lastFailureStatus = resp.status;
             lastErrorMsg = this.cleanHttpError(resp.status, errText);
             contextRecovery = isContextLimitError(resp.status, errText);
+            if (requestBody.stream_options && [400, 422].includes(resp.status) && /stream_options|include_usage/i.test(errText) && /unsupported|not support|unknown|invalid|unexpected|unrecognized|not permitted|not allowed|不支持|未知|无效/i.test(errText)) {
+              delete requestBody.stream_options;
+              requestStreamUsage = false;
+              attempt--; // The rejected request produced no stream and cannot have run a tool.
+              continue;
+            }
             if (contextRecovery && attempt < maxRetries) {
               const reported = reportedContextWindow(errText);
               if (reported && reported < contextBudget.contextWindow) {
@@ -2025,10 +2074,13 @@ ${mcpInfoText}
         let buffer = '';
 
         let assistantContent = '';
+        let finishReason = '';
+        let responseUsage: any;
         let assistantReasoning = '';
         let isInThinkTag = false;
         let toolCallsMap: Record<number, { id: string; name: string; arguments: string }> = {};
         const contentMarkupFilter = new DeepSeekToolMarkupFilter();
+        let streamFailure: any;
 
         try {
           while (true) {
@@ -2048,8 +2100,10 @@ ${mcpInfoText}
 
             try {
               const chunk = JSON.parse(dataStr);
+              if (chunk.usage) responseUsage = chunk.usage;
               const choice = chunk.choices?.[0];
               if (!choice) continue;
+              if (choice.finish_reason) finishReason = choice.finish_reason;
 
               const delta = choice.delta;
               if (!delta) continue;
@@ -2152,17 +2206,38 @@ ${mcpInfoText}
           }
         }
 
-        } finally {
-          controller.signal.removeEventListener('abort', cancelReader);
-        }
+        } catch (error) { streamFailure = error; }
+        finally { controller.signal.removeEventListener('abort', cancelReader); }
 
         throwIfAborted();
+        if (streamFailure) {
+          if (config.settings.autoContinueTruncated && isTransientStreamFailure(streamFailure) && !Object.keys(toolCallsMap).length && streamRecoveries < 2) {
+            streamRecoveries++;
+            if (assistantContent) {
+              conversationHistory.push({ role: 'assistant', content: assistantContent });
+              conversationHistory.push({ role: 'user', content: '刚才回复因网络中断，请从断点继续，不要重复已完成内容或重新执行工具。' });
+            }
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n\n> 网络中断，正在继续（' + streamRecoveries + '/2）。\n\n' });
+            await new Promise(resolve => setTimeout(resolve, streamRecoveries * 1500));
+            throwIfAborted(); continue;
+          }
+          throw streamFailure;
+        }
+        streamRecoveries = 0;
 
         const filteredTail = isDeepSeekModel ? contentMarkupFilter.finish() : '';
         if (filteredTail) {
           assistantContent += filteredTail;
           sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: filteredTail });
         }
+
+        const promptUsage = responseUsage?.prompt_tokens ?? responseUsage?.input_tokens;
+        const completionUsage = responseUsage?.completion_tokens ?? responseUsage?.output_tokens;
+        const hasReportedUsage = typeof promptUsage === 'number' && Number.isFinite(promptUsage) && promptUsage >= 0 && typeof completionUsage === 'number' && Number.isFinite(completionUsage) && completionUsage >= 0;
+        const estimatedInput = estimateContextTokens({ messages: requestBody.messages, tools: requestBody.tools || [] });
+        const estimatedOutput = estimateContextTokens({ content: assistantContent, reasoning: assistantReasoning, toolCalls: Object.values(toolCallsMap) });
+        recordUsage(hasReportedUsage ? promptUsage : estimatedInput, hasReportedUsage ? completionUsage : estimatedOutput, hasReportedUsage ? 'reported' : 'estimated');
+
 
         const toolCallsList = Object.values(toolCallsMap);
         if (isDeepSeekModel && contentMarkupFilter.hadMarkup) {
@@ -2173,6 +2248,13 @@ ${mcpInfoText}
 
         // 如果本步没有发起任何工具调用，说明大模型已经执行完所有前置动作，本步输出的是最终答复！
         if (toolCallsList.length === 0) {
+          if (finishReason === 'length' && assistantContent && config.settings.autoContinueTruncated && truncatedContinuations < 2 && !isSafetyFuseTurn) {
+            truncatedContinuations++;
+            conversationHistory.push({ role: 'assistant', content: assistantContent });
+            conversationHistory.push({ role: 'user', content: '刚才的回复因输出上限被截断，请从断点继续，不要重复已完成内容或重新执行工具。' });
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n\n> 输出达到上限，正在继续。\n\n' });
+            continue;
+          }
           const issues = await checkDiagramDelivery(assistantContent, projectPath, sessionAllowedFiles);
           throwIfAborted();
           if (issues.length) {
@@ -2267,6 +2349,7 @@ ${mcpInfoText}
 
             try {
               throwIfAborted();
+              if (textMask) throw new Error('文本遮罩模式不允许调用工具');
               if (argumentError) throw new Error(argumentError);
               const res = await this.executeUnifiedTool(tc.name, args, activeCustomMcp, currentSession.environment, currentSession.tokenData, projectPath, currentSession.projectId, sessionAllowedFiles, controller.signal);
               throwIfAborted();
@@ -2602,6 +2685,8 @@ ${currentCompactionSummary.summary}
     compactionSummary?: AiChatSession['compactionSummary'];
     contextBudget: ModelContextBudget;
     visionImages: VisionImageLoader;
+    recordUsage: (input: unknown, output: unknown, source: 'reported' | 'estimated') => void;
+    textMask?: TextMask;
   }): Promise<void> {
     const {
       requestId,
@@ -2623,6 +2708,8 @@ ${currentCompactionSummary.summary}
       compactionSummary,
       contextBudget,
       visionImages,
+      recordUsage,
+      textMask,
     } = opts;
 
     const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
@@ -2719,6 +2806,8 @@ ${currentCompactionSummary.summary}
       };
     });
 
+    let truncatedContinuations = 0;
+    let streamRecoveries = 0;
     let stepCount = 0;
     const maxSafetySteps = 60; // DSH 标准无限制迭代，60步安全熔断底线
     let hasMoreIterations = true;
@@ -2760,7 +2849,7 @@ ${currentCompactionSummary.summary}
         response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-          body: JSON.stringify(requestBody),
+          body: JSON.stringify(textMask ? textMask.maskValue(requestBody) : requestBody),
           signal: controller.signal,
         });
         if (response.ok) break;
@@ -2799,8 +2888,12 @@ ${currentCompactionSummary.summary}
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
 
+      let finishReason = '';
+      let responseUsage: any;
       const modelTurnParts: any[] = [];
+      let modelReasoning = '';
       const pendingFunctionCalls: Array<{ id: string; name: string; args: any }> = [];
+      let streamFailure: any;
 
       try {
       while (true) {
@@ -2819,12 +2912,15 @@ ${currentCompactionSummary.summary}
 
           try {
             const chunk = JSON.parse(dataStr);
+            if (chunk.usageMetadata) responseUsage = chunk.usageMetadata;
+            if (chunk.candidates?.[0]?.finishReason) finishReason = chunk.candidates[0].finishReason;
             const parts = chunk.candidates?.[0]?.content?.parts;
             if (!Array.isArray(parts)) continue;
 
             for (const part of parts) {
               // 1. Gemini 2.5 / Thinking 原生思考块 (part.thought === true)
               if (part.thought && part.text) {
+                modelReasoning += part.text;
                 sendEvent({
                   requestId,
                   sessionId,
@@ -2863,14 +2959,36 @@ ${currentCompactionSummary.summary}
         }
       }
 
-      } finally {
-        controller.signal.removeEventListener('abort', cancelGeminiReader);
-      }
+      } catch (error) { streamFailure = error; }
+      finally { controller.signal.removeEventListener('abort', cancelGeminiReader); }
 
       if (controller.signal.aborted) {
         throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
       }
 
+      if (!streamFailure) {
+        const promptUsage = responseUsage?.promptTokenCount;
+        const completionUsage = typeof responseUsage?.candidatesTokenCount === 'number' ? responseUsage.candidatesTokenCount + (responseUsage.thoughtsTokenCount || 0) : undefined;
+        const reported = typeof promptUsage === 'number' && Number.isFinite(promptUsage) && promptUsage >= 0 && typeof completionUsage === 'number' && Number.isFinite(completionUsage) && completionUsage >= 0;
+        const estimatedInput = estimateContextTokens({ contents: requestBody.contents, systemInstruction: requestBody.systemInstruction, tools: requestBody.tools || [] });
+        const estimatedOutput = estimateContextTokens({ parts: modelTurnParts, reasoning: modelReasoning });
+        recordUsage(reported ? promptUsage : estimatedInput, reported ? completionUsage : estimatedOutput, reported ? 'reported' : 'estimated');
+      }
+      if (streamFailure) {
+        if (settings.autoContinueTruncated && isTransientStreamFailure(streamFailure) && !pendingFunctionCalls.length && streamRecoveries < 2) {
+          streamRecoveries++;
+          if (modelTurnParts.length) {
+            geminiContents.push({ role: 'model', parts: modelTurnParts });
+            geminiContents.push({ role: 'user', parts: [{ text: '刚才回复因网络中断，请从断点继续，不要重复已完成内容或重新执行工具。' }] });
+          }
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n\n> 网络中断，正在继续（' + streamRecoveries + '/2）。\n\n' });
+          await new Promise(resolve => setTimeout(resolve, streamRecoveries * 1500));
+          if (controller.signal.aborted) break;
+          continue;
+        }
+        throw streamFailure;
+      }
+      streamRecoveries = 0;
       if (pendingFunctionCalls.length > 0) {
         geminiContents.push({
           role: 'model',
@@ -2902,6 +3020,7 @@ ${currentCompactionSummary.summary}
           let isError = false;
 
           try {
+            if (textMask) throw new Error('文本遮罩模式不允许调用工具');
             if (!fc.args || typeof fc.args !== 'object' || Array.isArray(fc.args)) {
               throw new Error('工具参数必须是 JSON 对象，尚未执行工具。write 必须提供 file_path 和完整 content。');
             }
@@ -2969,6 +3088,13 @@ ${currentCompactionSummary.summary}
         hasMoreIterations = true;
       } else {
         const content = modelTurnParts.filter(part => typeof part.text === 'string').map(part => part.text).join('');
+        if (finishReason === 'MAX_TOKENS' && content && settings.autoContinueTruncated && truncatedContinuations < 2 && !isFinalSummaryTurn) {
+          truncatedContinuations++;
+          geminiContents.push({ role: 'model', parts: modelTurnParts });
+          geminiContents.push({ role: 'user', parts: [{ text: '刚才的回复因输出上限被截断，请从断点继续，不要重复已完成内容或重新执行工具。' }] });
+          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n\n> 输出达到上限，正在继续。\n\n' });
+          continue;
+        }
         const issues = await checkDiagramDelivery(content, projectPath, sessionAllowedFiles);
         if (controller.signal.aborted) break;
         if (issues.length) {
@@ -3495,7 +3621,7 @@ ${currentCompactionSummary.summary}
       const res = await this.dshToolService.webSearch(args);
       return {
         data: res,
-        summary: `Web 搜索完成: 发现 ${res.totalResults} 条来源与摘要`,
+        summary: res.totalResults ? `Web 搜索完成: 发现 ${res.totalResults} 条来源与摘要` : 'Web 搜索未找到结果，请调整关键词或时间范围',
       };
     }
 

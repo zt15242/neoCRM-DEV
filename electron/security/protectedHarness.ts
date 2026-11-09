@@ -1372,15 +1372,16 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'web_search',
-      description: '在互联网上搜索最新实时信息。接受 queries 数组进行多词条协同检索，返回权威来源 URL 与摘要。',
+      description: '在互联网上搜索信息，返回来源 URL 与摘要。时效性信息应结合当前日期设置 time_range，并核实来源的发布日期；不要将搜索结果默认视为权威或当前新闻。',
       parameters: {
         type: 'object',
         properties: {
           queries: {
             type: 'array',
             items: { type: 'string' },
-            description: '搜索词条列表（1-3 项）',
+            description: '搜索词条列表（1-3 项），使用准确的日期；用户明确指定的历史年份不应改写。',
           },
+          time_range: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: '可选：过去一天、一周、一月或一年；仅适用于时效性搜索，搜索引擎可能不支持，结果须核对日期。' },
         },
         required: ['queries'],
       },

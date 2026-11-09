@@ -25,6 +25,7 @@ try {
     const models = Array.from({length: 2000}, (_, i) => ({id:'model-'+i,name:'Model '+i,tools:true}));
     const custom = {id:'custom',type:'custom',name:'模型网关',baseUrl:'https://example.test/v1',apiKey:'fixture-key',enabled:true,models};
     const config = {providers:[custom,...structuredClone(BUILTIN_AI_PROVIDERS)], settings:{...DEFAULT_AI_SETTINGS,defaultSqlLimit:640,customSystemPrompt:'已保存的提示词'},skills:[],mcpServers:[]};
+    window.deepseekModelCount = config.providers.find(item => item.id === 'deepseek').models.length;
     window.resolveLoads = [];
     window.neoApi = {
       getAppVersion: async () => '1.8.42',
@@ -175,7 +176,7 @@ try {
           await wait('window.testRequests.length===1');assert.equal(await run('window.testRequests[0].id'),'deepseek');
           await run('Array.from(document.querySelectorAll('+JSON.stringify(deep+' button')+')).find(b=>b.textContent==="保存").click()');
           await wait('window.saves.length===7');assert.equal(await run('window.saves[6].apiKey'),'fixture-deepseek-key');
-          assert.equal(await run('window.saves[6].models.length'),2);await run('window.finishSave()');
+          assert.equal(await run('window.saves[6].models.length'), await run('window.deepseekModelCount'));await run('window.finishSave()');
           await wait('document.querySelector('+JSON.stringify(deep)+'+" [role=button]").getAttribute("aria-expanded")==="true"');
           await capture('providers-deepseek-expanded');
           console.log('PASS DeepSeek uses the common expandable provider, supports keyboard, connection test and save');

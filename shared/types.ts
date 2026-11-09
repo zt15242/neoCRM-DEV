@@ -247,6 +247,10 @@ export interface AiModelItem {
   tools?: boolean; // 是否支持 Function / Tool Calling
   contextWindow?: number; // 模型上下文容量（tokens）；未提供时使用明确标示的保守预算
   maxOutputTokens?: number;
+  priceCurrency?: 'USD' | 'CNY';
+  priceSource?: 'user';
+  inputPricePerMillion?: number; // 手动参考价格（每百万 tokens）
+  outputPricePerMillion?: number;
   tokenLimitsSource?: 'user'; // 用户保存的容量优先于自动发现和内置参考
 }
 
@@ -278,6 +282,8 @@ export interface AiHarnessSettings {
   customSystemPrompt: string; // 用户自定义追加的系统提示词
   defaultStartupTab: 'dashboard' | 'metadata' | 'data' | 'ai' | 'settings';
   defaultSqlLimit: number;
+  autoContinueTruncated?: boolean;
+  maskModelText?: boolean;
 }
 
 export interface AiFileAttachment {
@@ -381,7 +387,7 @@ export interface AiChatMessage {
   modelId?: string;
   createdAt: number;
   error?: string;
-  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  usage?: { source?: 'reported' | 'estimated' | 'mixed'; promptTokens?: number; completionTokens?: number; totalTokens?: number; estimatedCostUsd?: number; estimatedCost?: number; costCurrency?: 'USD' | 'CNY' };
   durationMs?: number;
 }
 
@@ -421,8 +427,8 @@ export interface AiStreamEvent {
   requestId: string;
   sessionId: string;
   messageId: string;
-  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error' | 'compaction_done';
-  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error' | 'compaction_done' | 'usage';
+  usage?: { source?: 'reported' | 'estimated' | 'mixed'; promptTokens?: number; completionTokens?: number; totalTokens?: number; estimatedCostUsd?: number; estimatedCost?: number; costCurrency?: 'USD' | 'CNY' };
   durationMs?: number;
   delta?: string;
   toolCall?: AiToolCallRecord;

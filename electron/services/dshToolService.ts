@@ -3,6 +3,7 @@ import path from 'node:path';
 import { exec, execSync, spawn, ChildProcess } from 'node:child_process';
 import { WorkspaceGitChangesSummary, WorkspaceGitChangeItem } from '../../shared/types';
 import axios from 'axios';
+import { freeWebSearch } from './freeWebSearch';
 import { getNeoCliEnvironment } from './neoCliRuntime';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { documentService, isOfficeDocument, isBinaryDocument, type DocumentReadOptions, type DocumentReadResult } from './documentService';
@@ -728,49 +729,11 @@ export class DshToolService {
   }
 
   // ================= 9. web_search 互联网多词条搜索 =================
-  public async webSearch(params: { queries: string[] }): Promise<{
+  public async webSearch(params: { queries: string[]; time_range?: 'day' | 'week' | 'month' | 'year' }): Promise<{
     sources: Array<{ title: string; url: string; snippet?: string }>;
     totalResults: number;
   }> {
-    const sources: Array<{ title: string; url: string; snippet?: string }> = [];
-    const queries = Array.isArray(params.queries) ? params.queries : [String(params.queries)];
-
-    for (const q of queries.slice(0, 3)) {
-      try {
-        // 使用公开高速 API 或 HTML 聚合
-        const res = await axios.get(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)',
-          },
-          timeout: 8000,
-        });
-
-        const html = String(res.data);
-        const urlMatches = Array.from(html.matchAll(/<a class="result__url" href="([^"]+)">([^<]+)<\/a>/g));
-        const snippetMatches = Array.from(html.matchAll(/<a class="result__snippet[^>]*>([\s\S]*?)<\/a>/g));
-
-        for (let i = 0; i < Math.min(urlMatches.length, 5); i++) {
-          const rawUrl = urlMatches[i][1];
-          const cleanUrl = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl;
-          const snippet = snippetMatches[i] ? snippetMatches[i][1].replace(/<[^>]+>/g, '').trim() : '';
-
-          sources.push({
-            title: urlMatches[i][2]?.trim() || q,
-            url: cleanUrl,
-            snippet,
-          });
-        }
-      } catch {
-        // 兜底返回模拟权威站点检索
-        sources.push({
-          title: `搜索结果: ${q}`,
-          url: `https://www.google.com/search?q=${encodeURIComponent(q)}`,
-          snippet: `与关键词 "${q}" 相关的网络权威资料`,
-        });
-      }
-    }
-
-    return { sources, totalResults: sources.length };
+    return freeWebSearch(Array.isArray(params.queries) ? params.queries : [String(params.queries || '')], undefined, params.time_range);
   }
 
   // ================= 10. web_fetch 抓取网页并提取内容 =================

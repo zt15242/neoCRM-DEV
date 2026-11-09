@@ -23,6 +23,8 @@ try {
           models: [{id: 'a1', name: 'Small', contextWindow: 32768, maxOutputTokens: 4096, tools: true},
             {id: 'a2', name: 'Large', contextWindow: 1048576, maxOutputTokens: 16384, reasoning: true}]},
         {id: 'b', name: 'Provider B', enabled: false, models: [{id: 'b1', name: 'Unknown'}]},
+        {id: 'deepseek', name: 'DeepSeek', baseUrl:'https://api.deepseek.com', models:[{id:'deepseek-flash',name:'Flash'}]},
+        {id:'workbuddy',name:'WorkBuddy',baseUrl:'http://127.0.0.1:8788/v1',models:[{id:'DeepSeek-V4.1-Flash',name:'Flash'}]},
       ]);
       return <ModelContextSettings providers={providers} showToast={(type, text) => window.toasts.push({type, text})}
         onSave={async provider => { window.saved.push(provider); setProviders(items => items.map(item => item.id === provider.id ? provider : item)); }} />;
@@ -49,7 +51,7 @@ try {
         await new Promise(resolve => setTimeout(resolve, 30));
       };
       const value = label => run('document.querySelector(' + JSON.stringify('[aria-label="' + label + '"]') + ').value');
-      const save = () => run('document.querySelector("button").click()');
+      const save = () => run('Array.from(document.querySelectorAll("button")).find(b => b.textContent.includes("保存容量")).click()');
       try {
         await win.loadFile(${JSON.stringify(path.join(fixture, 'index.html'))});
         await wait('document.querySelector("input")?.value === "32768"');
@@ -96,6 +98,31 @@ try {
         assert.equal(await run('window.saved[3].models[0].contextWindow'), undefined);
         assert.equal(await run('window.saved[3].models[0].maxOutputTokens'), undefined);
         console.log('PASS validation and unknown capacity: invalid limits rejected, provider switching isolated, blank limits remain unknown');
+        await change('上下文容量供应商','deepseek');
+        assert.equal(await value('输入参考价格'),'0.3');
+        assert.equal(await value('输出参考价格'),'1.2');
+        assert.equal(await value('价格币种'),'USD');
+        await save(); await wait('window.saved.length === 5');
+        assert.equal(await run('window.saved[4].models[0].inputPricePerMillion'),undefined, 'default is not frozen into user config');
+        await change('输入参考价格','0.5',true); await change('输出参考价格','2',true);
+        await change('价格币种','CNY'); await save(); await wait('window.saved.length === 6');
+        assert.equal(await run('window.saved[5].models[0].inputPricePerMillion'),0.5);
+        assert.equal(await run('window.saved[5].models[0].priceCurrency'),'CNY');
+        await run('Array.from(document.querySelectorAll("button")).find(b => b.textContent.includes("恢复自动价格")).click()');
+        await save(); await wait('window.saved.length === 7');
+        assert.equal(await run('window.saved[6].models[0].inputPricePerMillion'),undefined);
+        assert.equal(await run('window.saved[6].models[0].priceSource'),undefined);
+        console.log('PASS model reference prices, manual currency overrides and restore automatic price');
+        await change('上下文容量供应商','workbuddy');
+        assert.equal(await value('输入参考价格'),'0.3');
+        assert(await run('document.body.innerText.includes("模型公开 API 参考价（按模型匹配）")'));
+        assert(await run('document.body.innerText.includes("WorkBuddy 按套餐和积分计费")'));
+        await run('Array.from(document.querySelectorAll("button")).find(b => b.textContent.includes("填入参考价")).click()');
+        assert.equal(await value('输入参考价格'),'0.3');
+        assert.equal(await value('输出参考价格'),'1.2');
+        await save(); await wait('window.saved.length === 8');
+        assert.equal(await run('window.saved[7].models[0].priceSource'),'user');
+        console.log('PASS gateway matches model reference price and labels it as an estimate');
         win.destroy(); app.exit(0);
       } catch (error) { console.error(error); win.destroy(); app.exit(1); }
     }).catch(error => { console.error(error); app.exit(1); });

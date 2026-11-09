@@ -24,9 +24,10 @@ export function isCompletedWorkSummaryRequest(text: string): boolean {
     && !/(?:创建|修改|写入|部署|上传|删除|运行|执行命令|调用工具)/.test(value);
 }
 
-export function readModelTokenLimits(item: any, configured?: AiModelItem): Pick<AiModelItem, 'contextWindow' | 'maxOutputTokens'> {
-  if (configured?.tokenLimitsSource === 'user') return { contextWindow: configured.contextWindow, maxOutputTokens: configured.maxOutputTokens };
+export function readModelTokenLimits(item: any, configured?: AiModelItem): Pick<AiModelItem, 'contextWindow' | 'maxOutputTokens' | 'inputPricePerMillion' | 'outputPricePerMillion' | 'priceCurrency' | 'priceSource'> {
+  if (configured?.tokenLimitsSource === 'user') return { contextWindow: configured.contextWindow, maxOutputTokens: configured.maxOutputTokens, inputPricePerMillion: configured.inputPricePerMillion, outputPricePerMillion: configured.outputPricePerMillion, priceCurrency: configured.priceCurrency, priceSource: configured.priceSource };
   return {
+    inputPricePerMillion: configured?.inputPricePerMillion, outputPricePerMillion: configured?.outputPricePerMillion, priceCurrency: configured?.priceCurrency, priceSource: configured?.priceSource,
     contextWindow: positiveTokenLimit(item?.contextWindow, item?.context_window, item?.context_length,
       item?.contextLength, item?.max_context_length, item?.max_context_tokens, item?.maxInputTokens,
       item?.max_input_tokens, item?.inputTokenLimit, item?.top_provider?.context_length,

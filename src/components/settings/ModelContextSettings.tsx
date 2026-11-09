@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { AiProviderConfig } from '../../../shared/types';
 import { ModelOptions } from './ModelOptions';
 import { modelTokenReference } from '../../../shared/modelTokenCatalog';
+import { modelVendorPriceSuggestion, effectiveModelPrice, type PriceCurrency } from '../../../shared/modelPriceCatalog';
 
 export const ModelContextSettings = React.memo(function ModelContextSettings({ providers, onSave, showToast }: {
   providers: AiProviderConfig[];
@@ -15,15 +16,29 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
   const model = provider?.models.find((item) => item.id === modelId) || provider?.models[0];
   const [context, setContext] = useState('');
   const [output, setOutput] = useState('');
+  const [inputPrice, setInputPrice] = useState('');
+  const [outputPrice, setOutputPrice] = useState('');
+  const [currency, setCurrency] = useState<PriceCurrency>('USD');
+  const [priceEdited, setPriceEdited] = useState(false);
+  const [resetPrice, setResetPrice] = useState(false);
   const [saving, setSaving] = useState(false);
   const [attempted, setAttempted] = useState(false);
   useEffect(() => {
     setContext(model?.contextWindow ? String(model.contextWindow) : '');
     setOutput(model?.maxOutputTokens ? String(model.maxOutputTokens) : '');
+    const price = provider && model ? effectiveModelPrice(provider, model) : undefined;
+    setInputPrice(price ? String(price.input) : model?.inputPricePerMillion === undefined ? '' : String(model.inputPricePerMillion));
+    setOutputPrice(price ? String(price.output) : model?.outputPricePerMillion === undefined ? '' : String(model.outputPricePerMillion));
+    setCurrency(price?.currency || model?.priceCurrency || 'USD');
+    setPriceEdited(false); setResetPrice(false);
     setAttempted(false);
-  }, [provider?.id, model?.id, model?.contextWindow, model?.maxOutputTokens]);
+  }, [provider?.id, model?.id, model?.contextWindow, model?.maxOutputTokens, model?.inputPricePerMillion, model?.outputPricePerMillion, model?.priceCurrency, model?.priceSource, provider?.baseUrl]);
   if (!provider || !model) return null;
   const reference = modelTokenReference(provider, model.id);
+  const suggestedPrice = modelVendorPriceSuggestion(model.id);
+  const displayPrice = suggestedPrice?.reference;
+  const priceActive = effectiveModelPrice(provider, model);
+  const priceExpired = !!displayPrice?.validUntil && new Date().toISOString().slice(0, 10) > displayPrice.validUntil;
   const capacity = context.trim() ? Number(context) : undefined;
   const limit = output.trim() ? Number(output) : undefined;
   const capacityError = capacity !== undefined && (!Number.isSafeInteger(capacity) || capacity < 1024)
@@ -32,8 +47,10 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
     ? '请输入正整数，或留空使用对话输出设置。'
     : capacity !== undefined && limit !== undefined && limit >= capacity
       ? '最大输出必须小于上下文总容量。若不确定模型输出上限，可留空。' : '';
+  const pricesValid = [inputPrice, outputPrice].every(value => !value.trim() || (Number.isFinite(Number(value)) && Number(value) >= 0));
   const save = async () => {
     setAttempted(true);
+    if (!pricesValid) { showToast('error', '参考价格必须是非负数字，或留空。'); return; }
     if (capacityError || outputError) {
       showToast('error', capacityError || outputError);
       return;
@@ -41,8 +58,8 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
     setSaving(true);
     try {
       await onSave({ ...provider, models: provider.models.map((item) => item.id === model.id
-        ? { ...item, contextWindow: capacity, maxOutputTokens: limit, tokenLimitsSource: 'user' as const } : item) });
-      showToast('success', '模型上下文容量已保存，后续请求将按此容量自动管理上下文');
+        ? { ...item, contextWindow: capacity, maxOutputTokens: limit, ...(priceEdited ? resetPrice ? { inputPricePerMillion: undefined, outputPricePerMillion: undefined, priceCurrency: undefined, priceSource: undefined } : { inputPricePerMillion: inputPrice.trim() ? Number(inputPrice) : undefined, outputPricePerMillion: outputPrice.trim() ? Number(outputPrice) : undefined, priceCurrency: currency, priceSource: 'user' as const } : {}), tokenLimitsSource: 'user' as const } : item) });
+      showToast('success', '模型容量和价格设置已保存');
     } catch {
       showToast('error', '保存模型容量失败，请重试');
     } finally { setSaving(false); }
@@ -82,6 +99,18 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
         {attempted && outputError && <span id="context-output-error" role="alert" className="block text-[11px] leading-relaxed text-rose-700">{outputError}</span>}
       </label>
     </div>
+    <div className="flex flex-wrap gap-2 items-center text-slate-500">
+      {displayPrice ? <><span>模型公开 API 参考价（按模型匹配）（核验于 {displayPrice.verifiedAt}）：{displayPrice.currency} {displayPrice.input} / {displayPrice.output} · {displayPrice.note}{suggestedPrice?.inferred ? `；按网关型号名称对应 ${suggestedPrice.modelId}，实际路由请确认` : ''}</span><a href={displayPrice.source} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline">价格来源</a></> : <span>暂无可核实的型号价格；套餐或自动路由模型请查看供应商积分或账单，也可手动填写。</span>}
+      {provider.id === 'workbuddy' && <span>WorkBuddy 按套餐和积分计费，可在下方 WorkBuddy 账户查看积分；此处并非网关账单。</span>}
+      {priceExpired && !priceActive && <span className="text-amber-700">该参考价已过期，请核实并手动填写。</span>}
+      {displayPrice && !priceExpired && <button type="button" className="text-sky-700 hover:underline" onClick={() => { setInputPrice(String(displayPrice.input)); setOutputPrice(String(displayPrice.output)); setCurrency(displayPrice.currency); setResetPrice(false); setPriceEdited(true); }}>填入参考价</button>}
+      {displayPrice && !priceExpired && (model.priceSource === 'user' || model.inputPricePerMillion !== undefined || model.outputPricePerMillion !== undefined) && <button type="button" className="text-sky-700 hover:underline" onClick={() => { setInputPrice(String(displayPrice.input)); setOutputPrice(String(displayPrice.output)); setCurrency(displayPrice.currency); setResetPrice(true); setPriceEdited(true); }}>恢复自动价格</button>}
+    </div>
+    <label className="block text-slate-600">价格币种 <select aria-label="价格币种" value={currency} onChange={e => { setCurrency(e.target.value as PriceCurrency); setResetPrice(false); setPriceEdited(true); }} className="ml-2 rounded-lg border border-slate-200 px-2 py-1"><option value="USD">美元 USD</option><option value="CNY">人民币 CNY</option></select></label>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <label>输入参考价格（每百万 tokens）<input aria-label="输入参考价格" type="number" min="0" step="any" value={inputPrice} onChange={e => { setInputPrice(e.target.value); setResetPrice(false); setPriceEdited(true); }} placeholder="未配置，不估算费用" className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5" /></label>
+      <label>输出参考价格（每百万 tokens）<input aria-label="输出参考价格" type="number" min="0" step="any" value={outputPrice} onChange={e => { setOutputPrice(e.target.value); setResetPrice(false); setPriceEdited(true); }} placeholder="未配置，不估算费用" className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5" /></label>
+    </div><p className="text-slate-500">按模型参考价自动估算；手动价格优先。网关、积分套餐、缓存、阶梯和附加费用可能不同，实际以账单为准。</p>
     <div className="flex justify-end"><button type="button" disabled={saving} onClick={save} className="rounded-lg bg-sky-600 px-3 py-1.5 text-white disabled:opacity-50">{saving ? '保存中…' : '保存容量'}</button></div>
   </div>;
 });
