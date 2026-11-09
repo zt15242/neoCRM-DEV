@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeoCRM 浏览器助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup">
+    <header class="header">
+      <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M3.5 9h17M7 6.8h.01M10 6.8h.01M8 14l2.5 2L15.5 12"/></svg></span>
+      <div class="brand-copy"><h1>NeoCRM 浏览器助手</h1><p>让智能体协助操作网页</p></div>
+      <span class="version" id="version"></span>
+    </header>
+
+    <section class="connection" aria-label="连接状态">
+      <div class="status-icon" id="status-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M10 13.5l4-4M8.3 15.7l-1.4 1.4a3 3 0 01-4.2-4.2l3-3a3 3 0 014.2 0M15.7 8.3l1.4-1.4a3 3 0 014.2 4.2l-3 3a3 3 0 01-4.2 0"/></svg></div>
+      <div class="status-copy"><div class="status-title"><span class="status-dot" id="status-dot"></span><strong id="status-title">正在检查连接</strong></div><p id="status-description">请稍候…</p></div>
+    </section>
+
+    <div class="content">
+      <p class="intro" id="intro">在桌面端开启浏览器控制，复制配对码完成首次连接。</p>
+      <details id="pairing" open>
+        <summary><span>配对设置</span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="m7 10 5 5 5-5"/></svg></summary>
+        <div class="pairing-body">
+          <label for="token">配对码</label>
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴桌面端显示的配对码" aria-describedby="pairing-help feedback">
+          <p id="pairing-help" class="help">配对一次后，启动桌面端即可自动连接。</p>
+          <button id="connect" class="primary" type="button">保存并连接</button>
+        </div>
+      </details>
+      <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+      <button id="disconnect" class="disconnect" type="button" hidden>断开连接</button>
+    </div>
+    <footer class="footer"><span class="footer-dot"></span><span>配对信息保存在本机</span></footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "NeoCRM 浏览器助手",
+  "version": "0.3.1",
+  "minimum_chrome_version": "116",
+  "description": "连接 NeoCRM，让智能体操作您授权的浏览器标签页。",
+  "permissions": ["tabs", "scripting", "storage", "alarms", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "NeoCRM 浏览器助手" },
+  "incognito": "not_allowed"
+}

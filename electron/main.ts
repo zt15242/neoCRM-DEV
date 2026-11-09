@@ -18,6 +18,7 @@ import { UpdateService } from './services/updateService';
 import { configureWindowLifecycle, configureUnsavedFileGuard } from './services/windowLifecycle';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
+import { browserBridge } from './services/browserBridge';
 import { FileService } from './services/fileService';
 import { readMessagePreviewResult } from './services/messagePreviewService';
 import type { MessagePreviewRequest } from '../shared/messagePreview';
@@ -78,6 +79,14 @@ metadataService.setTokenRefreshCallback(handleTokenRefresh);
 dataService.setTokenRefreshCallback(handleTokenRefresh);
 
 const dshToolService = new DshToolService();
+browserBridge.configurePersistence(path.join(app.getPath('userData'), 'browser-control-pairing.json'));
+void app.whenReady().then(() => { if (browserBridge.autoStartEnabled) return browserBridge.start().catch(error => console.warn('[Browser Control] 自动连接启动失败:', error.message)); });
+ipcMain.handle('browser-control:start', () => browserBridge.start());
+ipcMain.handle('browser-control:status', () => browserBridge.status());
+ipcMain.handle('browser-control:preview', (_, sessionId: string) => browserBridge.previewSession(String(sessionId || '')));
+ipcMain.handle('browser-control:stop', () => { browserBridge.stop(); return browserBridge.status(); });
+ipcMain.handle('browser-control:open-extension', () => shell.openPath(app.isPackaged ? path.join(process.resourcesPath, 'browser-extension') : path.join(app.getAppPath(), 'browser-extension')));
+app.on('before-quit', () => browserBridge.stop(false));
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
 aiService.onAgentSessionChanged((session) => {
   if (win && !win.isDestroyed() && restrictedFeatureService.canUseRole(session.presetId)) {

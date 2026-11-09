@@ -156,6 +156,11 @@ declare global {
       deleteRecord: (entityApiKey: string, id: string | number) => Promise<{ success: boolean; error?: string }>;
 // AI 对话平台与模型设置 (参考 DeepSeek Harness)
       aiGetConfig: () => Promise<AiConfigData>;
+      browserControlStart: () => Promise<{ port: number; token: string }>;
+      browserControlStatus: () => Promise<{ listening: boolean; connected: boolean; port: number }>;
+      browserControlPreview: (sessionId: string) => Promise<{ imageUrl?: string; message?: string }>;
+      browserControlStop: () => Promise<{ listening: boolean; connected: boolean; port: number }>;
+      browserControlOpenExtension: () => Promise<string>;
       aiSaveSettings: (settings: Partial<AiHarnessSettings>) => Promise<AiHarnessSettings>;
       aiSaveProvider: (provider: AiProviderConfig) => Promise<AiProviderConfig[]>;
       aiDeleteProvider: (id: string) => Promise<AiProviderConfig[]>;

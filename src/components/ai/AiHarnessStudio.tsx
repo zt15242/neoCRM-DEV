@@ -149,7 +149,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const { visible: privateFeaturesVisible, isRoleVisible, isSkillVisible } = useRestrictedFeatures();
   const visiblePresets = AI_AGENT_PRESETS.filter((preset) => isRoleVisible(preset.id));
   const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(true);
-  const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
+  const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools" | "browser">("files");
 
   // DSH 模式切换 (Standard / PTC / Minimal / Plan)
   const [currentSessionMode, setCurrentSessionMode] = useState<AiSessionMode>("standard");
@@ -1301,6 +1301,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         activePanelTab={activePanelTab}
         onTabChange={(tab) => setActivePanelTab(tab)}
         activeProject={activeProject}
+        activeSessionId={activeSessionId}
         activeSessionAttachments={activeSession?.messages?.flatMap((m) => m.attachments || []) || []}
         toolCalls={activeToolCalls}
         activeExecutedSql={activeExecutedSql}

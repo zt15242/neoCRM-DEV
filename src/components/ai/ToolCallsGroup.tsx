@@ -24,6 +24,7 @@ function getToolCategoryLabel(name: string): string {
     case 'update_goal': return '工程目标';
     case 'web_search':
     case 'web_fetch': return '联网检索';
+    case 'browser_control': return '浏览器操作';
     case 'execute_sql_query': return 'SQL查询';
     case 'get_entity_fields':
     case 'list_entities': return '实体字典';

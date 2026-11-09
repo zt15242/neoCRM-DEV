@@ -23,6 +23,7 @@ try {
     stdin: { contents: `
       export { SessionStore } from './electron/services/sessionStore';
       export { AiService } from './electron/services/aiService';
+      export { browserBridge } from './electron/services/browserBridge';
       export { DshToolService } from './electron/services/dshToolService';
       export { NeoMetadataCliReader } from './electron/services/neoMetadataCli';
       export { NeoBusinessTypeService } from './electron/services/neoBusinessTypeService';
@@ -783,6 +784,59 @@ try {
     assert(toolTrace.every((event) => event.toolCall.resultData.protectedBuiltin === true));
   }
   console.log('PASS OpenAI/Gemini skill tool calls: model keeps full instructions; renderer sees protected metadata');
+
+  // Screenshots must reach each model protocol without entering tool events or text receipts.
+  const savedBrowserStatus = subject.browserBridge.status;
+  const savedBrowserExecute = subject.browserBridge.execute;
+  subject.browserBridge.status = () => ({ listening: true, connected: true, port: 1 });
+  subject.browserBridge.execute = async () => ({ mimeType: 'image/jpeg', imageData: '/9j/AA==' });
+  for (const protocol of ['openai', 'google-gemini']) {
+    fixtureConfig.providers[0].protocol = protocol;
+    requests.length = 0;
+    const traced = [];
+    globalThis.fetch = async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      const data = requests.length === 1
+        ? protocol === 'google-gemini'
+          ? { candidates: [{ content: { parts: [{ functionCall: { name: 'browser_control', args: { action: 'screenshot', tabId: 1 } } }] }, finishReason: 'STOP' }] }
+          : { choices: [{ delta: { tool_calls: [{ index: 0, id: 'browser-shot', type: 'function', function: { name: 'browser_control', arguments: '{"action":"screenshot","tabId":1}' } }] }, finish_reason: 'tool_calls' }] }
+        : protocol === 'google-gemini'
+          ? { candidates: [{ content: { parts: [{ text: '看到了截图' }] }, finishReason: 'STOP' }] }
+          : { choices: [{ delta: { content: '看到了截图' }, finish_reason: 'stop' }] };
+      return new Response(`data: ${JSON.stringify(data)}\n\n${protocol === 'openai' ? 'data: [DONE]\n\n' : ''}`, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    await ai.startChatStream({ requestId: `browser-${protocol}`, sessionId: 'fixture-session', messageId: 'fixture-msg', providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true, mode: 'standard', messages: [{ id: 'fixture-u', role: 'user', content: '查看网页截图', createdAt: Date.now() }] }, event => traced.push(event));
+    assert.equal(traced.some(event => event.type === 'error'), false, JSON.stringify(traced));
+    assert.equal(requests.length, 2, protocol);
+    assert.ok(JSON.stringify(requests[1]).includes('/9j/AA=='), `${protocol}: screenshot did not reach model`);
+    assert.ok(!JSON.stringify(traced).includes('/9j/AA=='), `${protocol}: screenshot leaked into tool events`);
+  }
+  subject.browserBridge.status = savedBrowserStatus;
+  subject.browserBridge.execute = savedBrowserExecute;
+  console.log('PASS OpenAI/Gemini browser screenshots reach models without leaking into tool events');
+
+  const originalBrowserStage = subject.browserBridge.stageUpload;
+  const originalBrowserExecute = subject.browserBridge.execute;
+  let uploadedBytes;
+  subject.browserBridge.stageUpload = async bytes => { uploadedBytes = bytes.toString(); return '/fixture/staged'; };
+  subject.browserBridge.execute = async () => ({ selected: true });
+  const uploadAi = new AiService(store, {}, {});
+  const allowedUpload = path.join(project, 'browser-upload.txt');
+  fs.writeFileSync(allowedUpload, 'upload fixture');
+  await uploadAi.executeUnifiedTool('browser_control', { action: 'upload', file_path: allowedUpload }, [], undefined, undefined, project);
+  assert.equal(uploadedBytes, 'upload fixture');
+  const browserOutsideFile = path.join(fixture, 'browser-outside-upload.txt');
+  fs.writeFileSync(browserOutsideFile, 'outside');
+  await assert.rejects(() => uploadAi.executeUnifiedTool('browser_control', { action: 'upload', file_path: browserOutsideFile }, [], undefined, undefined, project), /沙箱|越界/);
+  await assert.rejects(() => uploadAi.executeUnifiedTool('browser_control', { action: 'upload', file_path: browserOutsideFile }, []), /选择项目/);
+  await uploadAi.executeUnifiedTool('browser_control', { action: 'upload', file_path: browserOutsideFile }, [], undefined, undefined, undefined, undefined, [browserOutsideFile]);
+  assert.equal(uploadedBytes, 'outside');
+  const symlinkUpload = path.join(project, 'browser-upload-link.txt');
+  fs.symlinkSync(browserOutsideFile, symlinkUpload);
+  await assert.rejects(() => uploadAi.executeUnifiedTool('browser_control', { action: 'upload', file_path: symlinkUpload }, [], undefined, undefined, project), /沙箱|越界/);
+  subject.browserBridge.stageUpload = originalBrowserStage;
+  subject.browserBridge.execute = originalBrowserExecute;
+  console.log('PASS browser upload confines project paths and permits explicitly attached files');
 
   fixtureConfig.skills = [
     {id:'skill-neo-frontend-dev',name:'Neo 前端开发',description:'fixture',category:'builtin',enabled:true},

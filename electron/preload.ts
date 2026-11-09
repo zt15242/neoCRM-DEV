@@ -113,6 +113,11 @@ export const neoApi = {
   deleteRecord: (entityApiKey: string, id: string | number) => ipcRenderer.invoke('data:deleteRecord', entityApiKey, id),
 // AI 对话平台与模型设置 (参考 DeepSeek Harness)
   aiGetConfig: () => ipcRenderer.invoke('ai:getConfig'),
+  browserControlStart: () => ipcRenderer.invoke('browser-control:start'),
+  browserControlStatus: () => ipcRenderer.invoke('browser-control:status'),
+  browserControlPreview: (sessionId: string) => ipcRenderer.invoke('browser-control:preview', sessionId),
+  browserControlStop: () => ipcRenderer.invoke('browser-control:stop'),
+  browserControlOpenExtension: () => ipcRenderer.invoke('browser-control:open-extension'),
   aiSaveSettings: (settings: any) => ipcRenderer.invoke('ai:saveSettings', settings),
   aiSaveProvider: (provider: any) => ipcRenderer.invoke('ai:saveProvider', provider),
   aiDeleteProvider: (id: string) => ipcRenderer.invoke('ai:deleteProvider', id),

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AiHarnessSettings, AiProviderConfig } from '../../../shared/types';
 import { ModelOptions } from './ModelOptions';
 import { 
@@ -26,6 +26,14 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
 }) => {
   const [form, setForm] = useState<AiHarnessSettings>(settings);
   const [saving, setSaving] = useState(false);
+  const [browserStatus, setBrowserStatus] = useState({ listening: false, connected: false, port: 0 });
+  const [pairing, setPairing] = useState<{ port: number; token: string } | null>(null);
+  useEffect(() => {
+    const refresh = () => { void window.neoApi.browserControlStatus().then(setBrowserStatus).catch(() => {}); };
+    refresh();
+    const timer = window.setInterval(refresh, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const configuredProviders = providers.filter(
     (p) =>
@@ -76,6 +84,19 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
       </div>
 
       {/* 1. 默认模型路由 */}
+      <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <div><div className="font-bold text-sm text-slate-800">浏览器控制</div><p className="text-slate-500 mt-1">连接 Chrome 扩展后，智能体可以读取和操作已登录的网页。</p></div>
+          <span className="text-slate-500">{browserStatus.connected ? '已连接' : browserStatus.listening ? '等待扩展连接' : '未开启'}</span>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button className="px-3 py-1.5 rounded-lg border border-slate-200" onClick={async () => { const error = await window.neoApi.browserControlOpenExtension(); if (error) showToast('error', error); }}>打开 NeoCRM 扩展文件夹</button>
+          {!browserStatus.listening ? <button className="px-3 py-1.5 rounded-lg bg-sky-600 text-white" onClick={async () => { try { setPairing(await window.neoApi.browserControlStart()); setBrowserStatus(await window.neoApi.browserControlStatus()); } catch (e: any) { showToast('error', e.message); } }}>开启并配对</button> : <button className="px-3 py-1.5 rounded-lg border border-slate-200" onClick={async () => { setBrowserStatus(await window.neoApi.browserControlStop()); setPairing(null); }}>断开并关闭</button>}
+          {browserStatus.listening && !pairing && <button className="px-3 py-1.5 rounded-lg border border-slate-200" onClick={async () => { try { setPairing(await window.neoApi.browserControlStart()); } catch (e: any) { showToast('error', e.message); } }}>显示配对码</button>}
+        </div>
+        <p className="text-slate-500">首次使用时打开扩展文件夹，在 Chrome 加载 NeoCRM 浏览器助手，然后复制配对码到扩展中。以后启动软件会自动连接，无需重复配对。</p>
+        {pairing && <div className="p-3 rounded-lg bg-slate-50 break-all text-slate-700">配对码：<code>{pairing.token}</code><button className="ml-2 text-sky-700" onClick={async () => { try { const ok = await window.neoApi.clipboardWriteText(pairing.token); if (!ok) throw new Error('复制失败'); showToast('success', '配对码已复制'); } catch { showToast('error', '复制失败，请手动选择配对码'); } }}>复制</button></div>}
+      </div>
       <div className="p-4 rounded-2xl border border-slate-200 bg-white space-y-4">
         <div className="flex items-center space-x-2 text-slate-800 font-bold text-sm">
           <Sparkles className="w-4 h-4 text-sky-600" />

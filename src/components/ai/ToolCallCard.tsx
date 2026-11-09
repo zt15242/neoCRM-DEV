@@ -46,6 +46,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({ toolCall }) => {
 
   const getToolMeta = (name: string) => {
     switch (name) {
+      case 'browser_control': return { title: `浏览器操作：${toolCall.arguments?.action || '网页'}`, icon: Globe, badge: '浏览器', color: 'text-sky-700 bg-sky-50 border-sky-200' };
       case 'get_tenant_info':
         return {
           title: '感知当前租户环境状态',

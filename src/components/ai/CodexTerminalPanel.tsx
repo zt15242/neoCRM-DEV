@@ -44,14 +44,15 @@ interface CodexTerminalPanelProps {
   isOpen: boolean;
   onClose: () => void;
   activeProject?: WorkspaceProject;
+  activeSessionId?: string | null;
   activeSessionAttachments?: AiFileAttachment[];
   toolCalls?: AiToolCallRecord[];
   activeExecutedSql?: string | null;
   onExecuteSql?: (sql: string) => void;
   onAttachFileToComposer?: (file: { name: string; fullPath: string; relativePath?: string; isDirectory?: boolean }) => void;
   showToast?: (type: 'success' | 'error' | 'info', text: string) => void;
-  activePanelTab?: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools";
-  onTabChange?: (tab: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools") => void;
+  activePanelTab?: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools" | "browser";
+  onTabChange?: (tab: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools" | "browser") => void;
 }
 
 interface CommandHistoryItem {
@@ -67,6 +68,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   isOpen,
   onClose,
   activeProject,
+  activeSessionId,
   activeSessionAttachments = [],
   toolCalls = [],
   activeExecutedSql,
@@ -77,9 +79,29 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   onTabChange,
 }) => {
   // 6 个主要 Tab: "files" (项目树), "changes" (Git变更), "jobs" (后台长任务), "artifacts" (上传/产物), "terminal" (交互终端), "tools" (调用轨迹)
-  const [internalTab, setInternalTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools">("files");
+  const [internalTab, setInternalTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools" | "browser">("files");
   const activeTab = activePanelTab || internalTab;
-  const setActiveTab = (t: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools") => {
+  const [browserPreview, setBrowserPreview] = useState<{ imageUrl?: string; message?: string }>({});
+  const browserInUse = toolCalls.some(call => call.name === 'browser_control');
+  useEffect(() => {
+    setBrowserPreview({});
+    if (!isOpen || activeTab !== 'browser' || !activeSessionId || !browserInUse || !window.neoApi?.browserControlPreview) return;
+    let cancelled = false;
+    let busy = false;
+    const refresh = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const result = await window.neoApi.browserControlPreview(activeSessionId);
+        if (!cancelled) setBrowserPreview(result);
+      } catch { if (!cancelled) setBrowserPreview({ message: '浏览器预览暂不可用' }); }
+      finally { busy = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [isOpen, activeTab, activeSessionId, browserInUse]);
+  const setActiveTab = (t: "files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools" | "browser") => {
     setInternalTab(t);
     onTabChange?.(t);
   };
@@ -531,6 +553,17 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
           >
             <Code2 className="w-3.5 h-3.5 text-purple-600" />
             <span>工具 ({toolCalls.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("browser")}
+            className={`px-2 py-1 text-xs rounded-md flex items-center space-x-1.5 transition-colors cursor-pointer ${
+              activeTab === "browser"
+                ? "bg-white text-slate-900 font-bold shadow-2xs border border-slate-200"
+                : "text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            <Eye className="w-3.5 h-3.5 text-sky-600" />
+            <span>浏览器预览</span>
           </button>
         </div>
 
@@ -1021,6 +1054,26 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
               </button>
             </div>
           </div>
+        )}
+
+        {activeTab === "browser" && (
+          <section className="flex flex-1 min-h-0 min-w-0 flex-col bg-slate-50" aria-label="浏览器操作预览">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 text-xs">
+              <div><span className="font-semibold text-slate-800">浏览器操作预览</span><p className="mt-1 text-slate-500">显示当前会话最近操作的页面</p></div>
+              <span className="shrink-0 text-slate-500">只读 · 约 3 秒刷新</span>
+            </div>
+            <div className="flex flex-1 min-h-0 items-center justify-center overflow-auto p-4">
+              {browserPreview.imageUrl ? (
+                <img src={browserPreview.imageUrl} alt="当前会话最近操作的浏览器页面" className="max-h-full max-w-full rounded-lg border border-slate-200 bg-white object-contain shadow-sm" />
+              ) : (
+                <div className="max-w-sm text-center text-slate-500">
+                  <Eye className="mx-auto mb-3 h-6 w-6 text-slate-400" />
+                  <p className="text-sm font-medium text-slate-700">{!activeSessionId ? '请先选择会话' : !browserInUse ? '暂无浏览器操作' : browserPreview.message || '正在获取浏览器画面…'}</p>
+                  {activeSessionId && !browserInUse && <p className="mt-2 text-xs leading-5">在对话中让智能体使用浏览器后，可在这里查看只读画面。</p>}
+                </div>
+              )}
+            </div>
+          </section>
         )}
 
         {/* ================= TAB 4: 工具调用与 SQL ================= */}

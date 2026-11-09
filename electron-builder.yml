@@ -5,6 +5,9 @@ afterPack: scripts/ffmpeg-after-pack.cjs
 directories:
   output: release
   buildResources: build
+extraResources:
+  - from: browser-extension
+    to: browser-extension
 files:
   - dist
   - dist-electron
