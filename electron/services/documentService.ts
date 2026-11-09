@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
@@ -288,12 +289,72 @@ async function parseDocument(filename: string, buffer: Buffer): Promise<ParsedDo
   return { format: format || 'text', sections: [{ id: 'body', title: '正文', kind: 'text', lines: linesOf(text) }], warnings };
 }
 
+// Read large plain text incrementally, retaining the same 2,000-character line
+// segments and offsets as the regular document reader without caching the file.
+async function readLargeText(filename: string, options: DocumentReadOptions): Promise<DocumentReadResult> {
+  if (options.mode && !['read', 'info'].includes(options.mode)) throw new Error('mode 仅支持 info 或 read');
+  if (options.section && !['body', '正文'].includes(options.section)) throw new Error(`未找到文档分段 ${options.section}`);
+  const offset = positive(options.offset, 1, Number.MAX_SAFE_INTEGER);
+  const limit = positive(options.limit, 200, 2000), maxChars = positive(options.max_chars, 20000, 30000);
+  if (maxChars < 3000) throw new Error('max_chars 不能小于 3000');
+  const sectionOffset = positive(options.section_offset, 1, Number.MAX_SAFE_INTEGER);
+  const output: string[] = [];
+  let count = 0, characters = 0, blocked = false, pending = '', first = true, pendingCR = false;
+  const add = (line: string) => {
+    count++;
+    if (options.mode === 'info' || count < offset || output.length >= limit || blocked) return;
+    const numbered = `${count} | ${line}`;
+    if (characters + numbered.length + 1 > maxChars) { blocked = true; return; }
+    output.push(numbered); characters += numbered.length + 1;
+  };
+  add('[body] 正文');
+  let decoder: TextDecoder | undefined;
+  const consume = (value: string, final = false) => {
+    if (pendingCR) { value = '\r' + value; pendingCR = false; }
+    if (!final && value.endsWith('\r')) { value = value.slice(0, -1); pendingCR = true; }
+    pending += value.replace(/\r\n?/g, '\n').replace(/\u0000/g, '');
+    while (pending.length) {
+      const newline = pending.indexOf('\n');
+      if (newline >= 0 && newline <= 2000) { add(pending.slice(0, newline)); pending = pending.slice(newline + 1); continue; }
+      if (pending.length > 2000 || (final && pending.length)) {
+        let end = Math.min(2000, pending.length);
+        if (end < pending.length && /[\uD800-\uDBFF]/.test(pending[end - 1])) end--;
+        add(pending.slice(0, end)); pending = pending.slice(end); continue;
+      }
+      break;
+    }
+  };
+  let endedWithNewline = false;
+  for await (const buffer of createReadStream(filename, { highWaterMark: 64 * 1024 })) {
+    const bytes = buffer as Buffer;
+    if (first) {
+      const utf16le = bytes[0] === 0xff && bytes[1] === 0xfe, utf16be = bytes[0] === 0xfe && bytes[1] === 0xff;
+      if (!utf16le && !utf16be && (bytes.subarray(0, 8192).includes(0) || [...bytes.subarray(0, 8192)].filter(c => c < 9 || (c > 13 && c < 32)).length > Math.min(bytes.length, 8192) * 0.05)) throw new Error('不支持的二进制文件');
+      decoder = new TextDecoder(utf16le ? 'utf-16le' : utf16be ? 'utf-16be' : 'utf-8', { fatal: true }); first = false;
+    }
+    const text = decoder!.decode(bytes, { stream: true });
+    if (text) endedWithNewline = /[\r\n]$/.test(text);
+    consume(text);
+  }
+  consume(decoder?.decode() || '', true);
+  if (pendingCR) { pendingCR = false; consume('\n', true); endedWithNewline = true; }
+  if (endedWithNewline) add('');
+  const nextOffset = offset + output.length;
+  return { path: filename, format: path.extname(filename).slice(1).toLowerCase() || 'text', sectionCount: 1,
+    sections: sectionOffset === 1 ? [{ id: 'body', title: '正文', kind: 'text', totalLines: count }] : [],
+    selectedSection: options.section ? 'body' : undefined, content: output.join('\n'), totalLines: count, offset, limit,
+    truncated: options.mode !== 'info' && nextOffset <= count,
+    nextOffset: options.mode !== 'info' && nextOffset <= count ? nextOffset : undefined,
+    warnings: ['大文本按需分页读取；文件内容未一次性载入上下文。'] };
+}
+
 export class DocumentService {
   private cache = new Map<string, { key: string; document: ParsedDocument }>();
   async read(options: DocumentReadOptions): Promise<DocumentReadResult> {
     const filename = path.resolve(options.file_path), stat = await fs.stat(filename);
     if (!stat.isFile()) throw new Error('请选择文件，不能读取目录');
     if (stat.size > MAX_DOCUMENT_BYTES) throw new Error('文件超过 50 MB，请拆分后读取');
+    if (stat.size > MAX_TEXT && !isOfficeDocument(filename)) return readLargeText(filename, options);
     const key = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
     let document = this.cache.get(filename)?.key === key ? this.cache.get(filename)!.document : undefined;
     if (!document) {

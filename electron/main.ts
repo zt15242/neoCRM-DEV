@@ -140,7 +140,6 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200,
     height: 840,
-    fullscreen: true,
     minWidth: 1000,
     minHeight: 700,
     title: 'NeoCRM 开发者客户端',
@@ -203,8 +202,10 @@ function createWindow() {
   configureAppPermissions(win.webContents, process.env.VITE_DEV_SERVER_URL
     || pathToFileURL(path.join(currentDir, '../dist/index.html')).href);
 
-  win.once('ready-to-show', () => {
-    win?.show();
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.maximize();
+    mainWindow.show();
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {

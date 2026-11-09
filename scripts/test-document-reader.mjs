@@ -205,6 +205,24 @@ try {
   assert.match(formatAttachmentContext({ ...dropped, fullPath: undefined }), /禁止猜测本地文件路径/);
   assert.match(getProtectedSkillInstruction('document-reader'), /不能判定为空/);
   assert.ok(CRM_HARNESS_TOOLS_SPEC.some(tool => tool.function.name === 'read_document'));
+  const largeText = write('large.txt', Buffer.from('开头\n' + 'a'.repeat(8_010_000) + '\n末尾标记'));
+  const largeAttachment = await fileService.parseLocalFile(largeText);
+  assert.equal(largeAttachment.previewTruncated, true);
+  assert.match(largeAttachment.parsedContent, /开头/);
+  const largeInfo = await read(largeText, { mode: 'info' });
+  const tail = await read(largeText, { offset: largeInfo.totalLines - 2, limit: 10 });
+  assert.match(tail.content, /末尾标记/);
+  assert.equal(tail.truncated, false);
+  const outside = path.join(fixture, 'outside-large.txt'); fs.copyFileSync(largeText, outside);
+  await assert.rejects(() => tools.readDocument({file_path: outside}, project), /沙箱/);
+  assert.match((await tools.readDocument({file_path: outside, offset: largeInfo.totalLines - 2}, project, [outside])).content, /末尾标记/);
+  const largeDoc = new Document({ sections: [{ children: [new Paragraph('字'.repeat(8_000_001))] }] });
+  const largeDocPath = write('large.docx', await Packer.toBuffer(largeDoc));
+  const limited = await fileService.parseLocalFile(largeDocPath);
+  assert.equal(limited.previewTruncated, true);
+  assert.match(limited.parsedContent, /无法预览.*请拆分/);
+  await assert.rejects(() => read(largeDocPath), /800 万字符/);
+  console.log('PASS large plain text pagination, exact attachment access and honest oversized document fallback');
   console.log('PASS uploads and boundaries: original retained, exact attachment allowlist, binary edits rejected and failed uploads cleaned up');
 
   const sessionStore = { prepareNeoCliForConversation: () => ({ session: { isLoggedIn: false } }), getCurrentSession: () => ({ isLoggedIn: false }) };

@@ -632,3 +632,10 @@ html[data-dark-mode="true"] .mail-detail__toolbar button.bg-blue-50\/50 {
   background-color: #203650 !important;
   border-color: #45617f !important;
 }
+
+.connector-pagination { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; padding-top:14px; border-top:1px solid var(--theme-border, #dce4ed); color:var(--theme-text-secondary, #64748b); font-size:12px; }
+.connector-pagination__controls { display:flex; gap:8px; }
+.connector-pagination button { min-height:34px; padding:0 13px; border:1px solid var(--theme-border-strong, #dce4ed); border-radius:8px; background:var(--theme-bg-layer-1, #fff); color:var(--theme-text-primary, #1e293b); cursor:pointer; }
+.connector-pagination button:hover:not(:disabled) { background:var(--theme-hover-2, #f1f5f9); }
+.connector-pagination button:disabled { opacity:.5; cursor:not-allowed; }
+.connector-pagination button:focus-visible { outline:2px solid var(--theme-accent, #0089d0); outline-offset:2px; }

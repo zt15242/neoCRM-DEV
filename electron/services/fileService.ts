@@ -56,7 +56,17 @@ export class FileService {
           contentKind: image ? 'image' : 'binary', previewTruncated: true, parseWarnings: [warning] };
       }
     }
-    const parsed = await documentService.read({ file_path: fullPath, limit: 100, max_chars: 12000 });
+    let parsed;
+    try {
+      parsed = await documentService.read({ file_path: fullPath, limit: 100, max_chars: 12000 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/文本(?:过大|超过 800 万字符)/.test(message)) throw error;
+      const warning = '文件已添加，但提取的文本超过安全限制，当前无法预览或通过文档读取工具完整读取；请拆分文件后重新添加。';
+      return { id: `file_${randomUUID()}`, name, fullPath, size: stats.size, mimeType: MIME[ext] || 'text/plain',
+        parsedContent: warning, summaryText: '文件已添加 · 需要拆分', documentFormat: isOfficeDocument(name) ? ext : undefined,
+        contentKind: 'text', previewTruncated: true, parseWarnings: [warning] };
+    }
     const summaryText = `${ext.toUpperCase() || '文本'} · ${parsed.sectionCount} 个分段${parsed.truncated ? ' · 预览，支持继续读取' : ''}`;
     const sectionList = parsed.sections.slice(0, 30).map(s => `${s.id}: ${s.title}`).join('；');
     return {

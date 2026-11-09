@@ -809,7 +809,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
         showToast?.('success', `已挂载物理文件引用: @${file.name} (可直接分析与编辑)`);
       }
     } catch (e: any) {
-      showToast?.('error', `读取文件失败: ${e.message}`);
+      showToast?.('error', `读取文件失败: ${String(e?.message || e).replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '')}`);
     }
     focusTextarea();
   };
@@ -1181,6 +1181,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
                 <span className="truncate max-w-[140px]">{att.name}</span>
                 {att.contentKind === 'directory' && <span className="text-[10px] text-slate-500 font-sans">文件夹</span>}
                 {att.contentKind === 'binary' && <span className="text-[10px] text-slate-400 font-sans">暂无预览</span>}
+                {att.parseWarnings?.some(w => w.includes('当前无法预览或通过文档读取工具')) && <span className="text-[10px] text-amber-700 font-sans">需要拆分</span>}
                 <button
                   type="button"
                   onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}

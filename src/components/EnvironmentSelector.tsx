@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Server, 
   Globe, 
@@ -45,6 +45,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
   onDeleteCustom,
 }) => {
   const [activeFilter, setActiveFilter] = useState<'all' | CrmProductType>('all');
+  const [page, setPage] = useState(1);
   const [pingResults, setPingResults] = useState<Record<string, TestConnectionResult>>({});
   const [isPinging, setIsPinging] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -86,6 +87,13 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
     if (activeFilter === 'all') return true;
     return (env.productType || 'neocrm') === activeFilter;
   });
+
+  const pageSize = 6;
+  const pageCount = Math.max(1, Math.ceil(filteredEnvironments.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageItems = filteredEnvironments.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => { setPage(previous => Math.min(previous, pageCount)); }, [pageCount]);
+  const changeFilter = (filter: 'all' | CrmProductType) => { setActiveFilter(filter); setPage(1); };
 
   // 获取各品牌专属图标与配色
   const getProductMeta = (productType?: CrmProductType) => {
@@ -162,7 +170,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
       {/* 2. 品牌与产品分类切换过滤器 (Product Tabs) */}
       <div className="connector-hub__filters flex items-center gap-1 overflow-x-auto" role="group" aria-label="筛选连接器类型">
         <button
-          onClick={() => setActiveFilter('all')}
+          onClick={() => changeFilter('all')}
           aria-pressed={activeFilter === 'all'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
             activeFilter === 'all'
@@ -174,7 +182,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveFilter('neocrm')}
+          onClick={() => changeFilter('neocrm')}
           aria-pressed={activeFilter === 'neocrm'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'neocrm'
@@ -187,7 +195,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveFilter('salesforce')}
+          onClick={() => changeFilter('salesforce')}
           aria-pressed={activeFilter === 'salesforce'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'salesforce'
@@ -200,7 +208,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveFilter('fxiaoke')}
+          onClick={() => changeFilter('fxiaoke')}
           aria-pressed={activeFilter === 'fxiaoke'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'fxiaoke'
@@ -213,7 +221,7 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveFilter('custom')}
+          onClick={() => changeFilter('custom')}
           aria-pressed={activeFilter === 'custom'}
           className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center space-x-1.5 whitespace-nowrap ${
             activeFilter === 'custom'
@@ -270,8 +278,9 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
           </div>
         </div>
       ) : (
+      <>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-        {filteredEnvironments.map((env) => {
+        {pageItems.map((env) => {
           const isSelected = env.id === selectedEnvId;
           const ping = pingResults[env.id];
           const pinging = isPinging[env.id];
@@ -508,6 +517,14 @@ export const EnvironmentSelector: React.FC<EnvironmentSelectorProps> = ({
           );
         })}
       </div>
+      <nav className="connector-pagination" aria-label="连接器分页">
+        <span aria-live="polite">共 {filteredEnvironments.length} 个连接器 · 第 {currentPage} / {pageCount} 页</span>
+        <div className="connector-pagination__controls">
+          <button type="button" onClick={() => setPage(currentPage - 1)} disabled={currentPage === 1} aria-label="上一页">上一页</button>
+          <button type="button" onClick={() => setPage(currentPage + 1)} disabled={currentPage === pageCount} aria-label="下一页">下一页</button>
+        </div>
+      </nav>
+      </>
       )}
     </div>
   );
