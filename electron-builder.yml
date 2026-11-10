@@ -28,7 +28,8 @@ mac:
     - from: resources/ffmpeg/darwin-${arch}
       to: bin/ffmpeg
       filter: [ffmpeg, ffmpeg.LICENSE, ffmpeg.README, SOURCE.json]
-  identity: null
+  # macOS requires a signed app bundle for native notifications.
+  identity: "-"
   gatekeeperAssess: false
   hardenedRuntime: false
   extendInfo:

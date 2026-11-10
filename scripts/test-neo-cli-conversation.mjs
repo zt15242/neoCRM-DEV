@@ -815,6 +815,55 @@ try {
   subject.browserBridge.execute = savedBrowserExecute;
   console.log('PASS OpenAI/Gemini browser screenshots reach models without leaking into tool events');
 
+  // Exercise actual stream parsing and dispatch; only the model and Chrome bridge are mocked.
+  const browserCases = [
+    { name: 'object', protocol: 'openai', args: [{ action: 'tabs' }] },
+    { name: 'fragments', protocol: 'openai', args: ['{"action":', '"tabs"}'] },
+    { name: 'cumulative', protocol: 'openai', args: ['{"action":', '{"action":"tabs"}'] },
+    { name: 'tail', protocol: 'openai', args: ['{"action":', '"tabs"}'], noNewline: true },
+    { name: 'native-string', protocol: 'google-gemini', args: ['{"action":"tabs"}'] },
+    { name: 'native-tail', protocol: 'google-gemini', args: [{ action: 'tabs' }], noNewline: true },
+    { name: 'truncated', protocol: 'openai', args: ['{"action":'], invalid: true },
+    { name: 'native-invalid', protocol: 'google-gemini', args: ['{"action":'], invalid: true },
+    { name: 'array', protocol: 'openai', args: ['[]'], invalid: true },
+  ];
+  subject.browserBridge.status = () => ({ listening: true, connected: true, port: 1 });
+  try {
+    for (const scenario of browserCases) {
+      fixtureConfig.providers[0].protocol = scenario.protocol;
+      requests.length = 0;
+      const traced = [], dispatched = [];
+      subject.browserBridge.execute = async (action, args) => { dispatched.push({ action, args }); return []; };
+      globalThis.fetch = async (_url, options) => {
+        requests.push(JSON.parse(options.body));
+        assert.ok(requests.length <= 2, scenario.name + ': unexpected retry');
+        const first = requests.length === 1;
+        const events = scenario.protocol === 'google-gemini'
+          ? [{ candidates: [{ content: { parts: first ? [{ functionCall: { name: 'browser_control', args: scenario.args[0] } }] : [{ text: '参数验证结束' }] }, finishReason: 'STOP' }] }]
+          : first ? scenario.args.map((args, index) => ({ choices: [{ delta: { tool_calls: [{ index: 0, ...(index === 0 ? { id: 'browser-args', type: 'function' } : {}), function: { ...(index === 0 ? { name: 'browser_control' } : {}), arguments: args } }] }, finish_reason: index === scenario.args.length - 1 ? 'tool_calls' : null }] }))
+            : [{ choices: [{ delta: { content: '参数验证结束' }, finish_reason: 'stop' }] }];
+        const chunks = events.map((event, index) => new TextEncoder().encode('data: ' + JSON.stringify(event) + (scenario.noNewline && index === events.length - 1 ? '' : '\n\n')));
+        return new Response(new ReadableStream({ start(controller) { chunks.forEach(chunk => controller.enqueue(chunk)); controller.close(); } }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      };
+      await ai.startChatStream({ requestId: 'browser-args-' + scenario.name, sessionId: 'fixture-session', messageId: 'fixture-msg', providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true, mode: 'standard', messages: [{ id: 'browser-u', role: 'user', content: '读取已连接浏览器标签页', createdAt: Date.now() }] }, event => traced.push(event));
+      assert.equal(traced.some(event => event.type === 'error'), false, JSON.stringify(traced));
+      assert.equal(requests.length, 2, scenario.name);
+      if (scenario.name === 'native-string') assert.deepEqual(requests[1].contents.flatMap(entry => entry.parts).find(part => part.functionCall)?.functionCall.args, { action: 'tabs' });
+      const receipt = traced.find(event => event.type === 'tool_update' && event.toolCall.name === 'browser_control');
+      assert.ok(receipt, scenario.name);
+      assert.equal(receipt.toolCall.status, scenario.invalid ? 'error' : 'success', scenario.name);
+      assert.equal(dispatched.length, scenario.invalid ? 0 : 1, scenario.name);
+      if (scenario.invalid) {
+        assert.match(receipt.toolCall.resultSummary, /JSON 不完整或无效.*尚未执行工具.*action/);
+        assert.doesNotMatch(receipt.toolCall.resultSummary, /write|file_path|content\/code/);
+      } else assert.equal(dispatched[0].action, 'tabs', scenario.name);
+    }
+  } finally {
+    subject.browserBridge.status = savedBrowserStatus;
+    subject.browserBridge.execute = savedBrowserExecute;
+  }
+  console.log('PASS browser arguments: object snapshots, string deltas, native JSON strings, final SSE lines and invalid-call rejection');
+
   const originalBrowserStage = subject.browserBridge.stageUpload;
   const originalBrowserExecute = subject.browserBridge.execute;
   let uploadedBytes;

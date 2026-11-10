@@ -5,7 +5,7 @@ import { configureAppPermissions } from './security/appPermissions';
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, desktopCapturer } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, desktopCapturer, Notification } from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EnvService } from './services/envService';
@@ -38,6 +38,7 @@ import { configurePackagedEsbuildBinary } from './services/esbuildRuntime';
 import { FeishuService } from './services/feishuService';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
+import type { AiStreamEvent } from '../shared/types';
 
 const currentDir = typeof __dirname !== 'undefined' 
   ? __dirname 
@@ -46,8 +47,35 @@ const currentDir = typeof __dirname !== 'undefined'
 process.env.DIST = path.join(currentDir, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public');
 configurePackagedEsbuildBinary();
+if (process.platform === 'win32') {
+  app.setAppUserModelId(app.isPackaged ? 'com.neocrm.developer.desktop' : process.execPath);
+}
 
 let win: BrowserWindow | null = null;
+function notifyAiOutcome(outcome: 'completed' | 'failed' | 'waiting') {
+  const title = {
+    completed: 'AI 本轮执行结束',
+    failed: 'AI 执行遇到错误',
+    waiting: 'AI 等待你的确认',
+  }[outcome];
+  const fallback = () => {
+    if (win && !win.isDestroyed() && win.isFocused()) return;
+    if (process.platform === 'darwin') app.dock?.bounce('informational');
+    else if (win && !win.isDestroyed()) win.flashFrame(true);
+  };
+  try {
+    if (!Notification.isSupported()) {
+      fallback();
+      return;
+    }
+    const notice = new Notification({ title, body: '打开 NeoCRM 查看详情。' });
+    notice.on('click', () => windowLifecycle.showWindow());
+    notice.once('failed', fallback);
+    notice.show();
+  } catch {
+    fallback();
+  }
+}
 const envService = new EnvService();
 const sessionStore = new SessionStore();
 const authService = new AuthService();
@@ -89,8 +117,13 @@ ipcMain.handle('browser-control:open-extension', () => shell.openPath(app.isPack
 app.on('before-quit', () => browserBridge.stop(false));
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
 aiService.onAgentSessionChanged((session) => {
-  if (win && !win.isDestroyed() && restrictedFeatureService.canUseRole(session.presetId)) {
+  if (!restrictedFeatureService.canUseRole(session.presetId)) return;
+  if (win && !win.isDestroyed()) {
     win.webContents.send('ai:agentSessionUpdated', session);
+  }
+  const run = session.agentRun;
+  if (run?.kind === 'autonomous' && (run.status === 'completed' || run.status === 'failed' || run.status === 'waiting')) {
+    notifyAiOutcome(run.status);
   }
 });
 const fileService = new FileService();
@@ -669,20 +702,28 @@ ipcMain.handle('ai:startChatStream', async (_, params) => {
     runAccessCommand(action);
     return true;
   }
-  void aiService.startChatStream(params, (event) => {
+  let terminal = false;
+  const forward = (event: AiStreamEvent) => {
+    if (terminal) return;
+    terminal = event.type === 'done' || event.type === 'error';
     if (win && !win.isDestroyed()) {
       win.webContents.send('ai:streamEvent', event);
     }
-  }).catch((err: any) => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('ai:streamEvent', {
-        requestId: params.requestId,
-        sessionId: params.sessionId,
-        messageId: params.messageId,
-        type: err?.name === 'AbortError' ? 'done' : 'error',
-        error: err?.name === 'AbortError' ? undefined : err?.message || '对话生成异常中断',
-      });
+    if (event.type === 'error') notifyAiOutcome('failed');
+    else if (event.type === 'done' && event.completionStatus && event.completionStatus !== 'cancelled') {
+      notifyAiOutcome(event.completionStatus);
     }
+  };
+  void aiService.startChatStream(params, forward).catch((err: any) => {
+    const cancelled = err?.name === 'AbortError';
+    forward({
+      requestId: params.requestId,
+      sessionId: params.sessionId,
+      messageId: params.messageId,
+      type: cancelled ? 'done' : 'error',
+      completionStatus: cancelled ? 'cancelled' : undefined,
+      error: cancelled ? undefined : err?.message || '对话生成异常中断',
+    });
   });
   return true;
 });

@@ -1,12 +1,13 @@
-function normalizeMarkup(content) {
-  return String(content || '')
-    .replaceAll('｜', '|')
-    .replace(/<(\/?)\s*DSML\|/gi, (_match, closing = '') => `<${closing}|DSML|`);
-}
+// Match the wire spelling, legacy spelling and doubled bars emitted by some gateways.
+const prefix = String.raw`[|｜]{0,2}DSML[|｜]{1,2}`;
+const startTag = new RegExp(String.raw`</?${prefix}`, 'i');
+const invokeStart = new RegExp(String.raw`^<${prefix}\s*invoke\b`, 'i');
+const invokeEnd = new RegExp(String.raw`</${prefix}\s*invoke\s*>`, 'i');
+const wrapper = new RegExp(String.raw`^</?${prefix}\s*(?:tool[_ -]?calls|calls)\s*>$`, 'i');
+const markers = ['', '|', '||'].flatMap(bars => ['<', '</'].map(start => start + bars + 'dsml||'));
 
 function findPartialMarkupStart(text) {
-  const lower = text.toLowerCase();
-  const markers = ['<|dsml|', '</|dsml|', '<dsml|', '</dsml|', '<dsml', '</dsml'];
+  const lower = text.toLowerCase().replaceAll('｜', '|');
   const maxMarkerLength = Math.max(...markers.map((marker) => marker.length));
   for (let index = Math.max(0, text.length - maxMarkerLength + 1); index < text.length; index++) {
     const suffix = lower.slice(index);
@@ -21,7 +22,7 @@ export class DeepSeekToolMarkupFilter {
   hadMarkup = false;
 
   push(chunk) {
-    this.pending = normalizeMarkup(this.pending + String(chunk || ''));
+    this.pending += String(chunk || '');
     return this.consume(false);
   }
 
@@ -38,30 +39,24 @@ export class DeepSeekToolMarkupFilter {
 
     while (this.pending) {
       if (this.insideInvocation) {
-        const close = /<\/\|DSML\|\s*invoke\s*>/i.exec(this.pending);
+        const close = invokeEnd.exec(this.pending);
         if (close) {
           this.pending = this.pending.slice(close.index + close[0].length);
           this.insideInvocation = false;
           continue;
         }
-        const partialClose = this.pending.toLowerCase().lastIndexOf('</|dsml|invoke');
-        if (partialClose >= 0 && !final) {
-          this.pending = this.pending.slice(partialClose);
-        } else if (!final) {
-          this.pending = this.pending.slice(-16);
-        } else {
-          this.pending = '';
-        }
+        // Retain only a bounded suffix for a closing tag split across chunks.
+        this.pending = final ? '' : this.pending.slice(-128);
         break;
       }
 
-      const markerIndex = this.pending.search(/<\/?\|DSML\|/i);
+      const markerIndex = this.pending.search(startTag);
       if (markerIndex < 0) {
         const partialIndex = findPartialMarkupStart(this.pending);
         if (partialIndex >= 0 && !final) {
           output += this.pending.slice(0, partialIndex);
           this.pending = this.pending.slice(partialIndex);
-        } else if (partialIndex >= 0) {
+        } else if (partialIndex >= 0 && /(?:[|｜]|ds)/i.test(this.pending.slice(partialIndex))) {
           this.hadMarkup = true;
           output += this.pending.slice(0, partialIndex);
           this.pending = '';
@@ -86,14 +81,12 @@ export class DeepSeekToolMarkupFilter {
       this.pending = this.pending.slice(tagEnd + 1);
       this.hadMarkup = true;
 
-      if (/^<\|DSML\|\s*invoke\b/i.test(tag)) {
+      if (invokeStart.test(tag)) {
         this.insideInvocation = true;
         continue;
       }
 
-      if (/^<\|DSML\|\s*(?:tool[_ -]?calls|calls)\s*>$/i.test(tag) ||
-          /^<\/\|DSML\|\s*(?:tool[_ -]?calls|calls)\s*>$/i.test(tag) ||
-          /^<\/\|DSML\|\s*invoke\s*>$/i.test(tag)) {
+      if (wrapper.test(tag) || invokeEnd.test(tag)) {
         continue;
       }
 

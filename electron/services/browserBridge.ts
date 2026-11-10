@@ -29,6 +29,7 @@ export class BrowserBridge {
   private queue: Array<{ id: string; action: string; params: Record<string, unknown> }> = [];
   private uploads = new Map<string, string>();
   private sessionTargets = new Map<string, number>();
+  private sessionRefs = new Map<string, Map<string, { tabId: number; frameId?: string }>>();
   private openedTabs = new Map<string, number>();
   private openingTabs = new Map<string, Promise<unknown>>();
   private persistencePath?: string;
@@ -96,6 +97,7 @@ export class BrowserBridge {
     this.queue = [];
     this.uploads.clear();
     this.sessionTargets.clear();
+    this.sessionRefs.clear();
     this.openedTabs.clear();
     this.openingTabs.clear();
     for (const id of this.pending.keys()) this.finish(id, new Error('浏览器连接已关闭'));
@@ -117,6 +119,14 @@ export class BrowserBridge {
 
   async executeForSession(sessionId: string, action: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     if (!sessionId) throw new Error('浏览器操作缺少会话信息');
+    if (action !== 'tabs' && action !== 'open') {
+      const owner = typeof params.ref === 'string' ? this.sessionRefs.get(sessionId)?.get(params.ref) : undefined;
+      if (params.tabId === undefined && owner) params = { ...params, tabId: owner.tabId };
+      if (typeof params.tabId !== 'number' || !Number.isInteger(params.tabId) || params.tabId < 0) {
+        throw new Error('缺少有效的标签页 ID（tabId）。请先调用 tabs 获取标签页 ID，再调用 snapshot 获取元素引用；仅可省略当前会话已读取快照中 ref 对应的 tabId。');
+      }
+      if (owner && owner.tabId !== params.tabId) throw new Error('元素引用与标签页 ID 不匹配，请对目标标签页重新调用 snapshot');
+    }
     if (action === 'open' && params.newTab !== true) {
       const url = new URL(String(params.url || ''));
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error('只允许打开 HTTP(S) 网页');
@@ -143,6 +153,15 @@ export class BrowserBridge {
     const result = await this.execute(action, params, signal);
     const tabId = action === 'open' ? (result as any)?.id ?? (result as any)?.tabId : params.tabId;
     if (action !== 'tabs' && typeof tabId === 'number' && Number.isInteger(tabId)) this.sessionTargets.set(sessionId, tabId);
+    if (action === 'snapshot' && typeof tabId === 'number' && result && typeof result === 'object') {
+      const snapshot = result as { frameId?: string; elements?: Array<{ ref?: string }> };
+      const refs = this.sessionRefs.get(sessionId) || new Map<string, { tabId: number; frameId?: string }>();
+      for (const [ref, owner] of refs) if (owner.tabId === tabId && owner.frameId === snapshot.frameId) refs.delete(ref);
+      for (const item of snapshot.elements || []) if (typeof item.ref === 'string') refs.set(item.ref, { tabId, frameId: snapshot.frameId });
+      while (refs.size > 2000) refs.delete(refs.keys().next().value!);
+      this.sessionRefs.set(sessionId, refs);
+      return { ...result, tabId };
+    }
     return result;
   }
 

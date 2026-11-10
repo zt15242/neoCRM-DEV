@@ -193,9 +193,19 @@ try {
         const output = native ? {candidates:[{content:{parts:[{text:'邮箱：'+tag}]},finishReason:'STOP'}]} : {choices:[{delta:{content:'邮箱：'+tag},finish_reason:'stop'}]};
         response.end('data: '+JSON.stringify(output)+'\n\ndata: [DONE]\n\n'); return;
       }
-      if (scenario === 'length') {
-        const output = native ? {candidates:[{content:{parts:[{text:'第一段'}]},finishReason:'MAX_TOKENS'}]} : {choices:[{delta:{content:'第一段'},finish_reason:'length'}]};
+      if (['length', 'reasoning_length', 'reasoning_stop', 'reasoning_repeat'].includes(scenario)) {
+        const reasoning = scenario !== 'length';
+        const stop = scenario === 'reasoning_stop' || scenario === 'reasoning_repeat';
+        if (scenario === 'reasoning_repeat') featureScenario = scenario;
+        const output = native
+          ? {candidates:[{content:{parts:[reasoning ? {text:'只供思考的内容',thought:true} : {text:'第一段'}]},finishReason:stop ? 'STOP' : 'MAX_TOKENS'}]}
+          : {choices:[{delta:reasoning ? {reasoning_content:'只供思考的内容'} : {content:'第一段'},finish_reason:stop ? 'stop' : 'length'}]};
         response.end('data: '+JSON.stringify(output)+'\n\ndata: [DONE]\n\n'); return;
+      }
+      if (scenario === 'dsml') {
+        const pieces = ['准备读取。<|', '|DSML|| calls><||DSML|| invoke name="bash">', '<||DSML|| parameter name="command">echo NEVER_EXECUTE_DSML'];
+        response.end(pieces.map((content, i) => 'data: ' + JSON.stringify({choices:[{delta:{content},finish_reason:i === pieces.length - 1 ? 'length' : null}]}) + '\n\n').join(''));
+        return;
       }
       if (scenario === 'usage') {
         const output = native ? {candidates:[{content:{parts:[{text:'用量测试'}]},finishReason:'STOP'}],usageMetadata:{promptTokenCount:1000,candidatesTokenCount:200}} : {choices:[{delta:{content:'用量测试'},finish_reason:'stop'}],usage:{prompt_tokens:1000,completion_tokens:200}};
@@ -211,7 +221,8 @@ try {
       response.end('data: ' + JSON.stringify(call) + '\n\ndata: [DONE]\n\n'); return;
     }
     if (body.contents && nativeFailOnce) { nativeFailOnce=false; response.statusCode=400; response.end(JSON.stringify({error:{message:'maximum context length exceeded'}})); return; }
-    if (body.stream && [1, 3].includes(toolScenario)) {
+    if (body.stream && [1, 3, 4].includes(toolScenario)) {
+      if (toolScenario === 4) featureScenario = 'reasoning_length';
       toolScenario = toolScenario === 1 ? 2 : 0;
       response.setHeader('Content-Type', 'text/event-stream');
       response.end('data: ' + JSON.stringify({choices: [{delta: {tool_calls: [{index: 0, id: 'live-call', type: 'function', function: {name: 'fixture_read', arguments: '{}'}}]}, finish_reason: 'tool_calls'}]}) + '\n\ndata: [DONE]\n\n');
@@ -381,6 +392,20 @@ try {
     await continuation.run();
     assert.equal(requests.slice(offset).filter(item=>item.body.stream||item.body.contents).length,2);
     assert(continuation.events.some(event=>event.delta?.includes('输出达到上限')));
+    for (const scenario of ['reasoning_length', 'reasoning_stop', 'reasoning_repeat']) {
+      const reasoningOnly = makeService(1048576, scenarioMessages, protocol);
+      reasoningOnly.config.settings.autoContinueTruncated = true;
+      const start = requests.length;
+      featureScenario = scenario;
+      if (scenario === 'reasoning_repeat') await assert.rejects(reasoningOnly.run(), /模型未输出正文，本轮未完成/);
+      else await reasoningOnly.run();
+      featureScenario = '';
+      const attempts = requests.slice(start).filter(item => item.body.stream || item.body.contents);
+      assert.equal(attempts.length, scenario === 'reasoning_repeat' ? 3 : 2);
+      assert.match(JSON.stringify(attempts[1].body), /上一轮未输出正文/);
+      assert.doesNotMatch(JSON.stringify(attempts[1].body), /只供思考的内容/);
+      assert.equal(reasoningOnly.events.some(event => event.type === 'error'), scenario === 'reasoning_repeat');
+    }
     const interrupted=makeService(1048576,scenarioMessages,protocol);
     interrupted.config.settings.autoContinueTruncated=true;
     featureScenario='stream_drop'; const failureOffset=requests.length;
@@ -388,6 +413,19 @@ try {
     assert.equal(requests.slice(failureOffset).filter(item=>item.body.stream||item.body.contents).length,2);
     assert(interrupted.events.some(event=>event.delta?.includes('网络中断')));
   }
+  const markupRecovery = makeService(1048576, [{id:'markup-user',role:'user',content:'检查当前项目',createdAt:1}]);
+  markupRecovery.config.settings.autoContinueTruncated = true;
+  markupRecovery.config.settings.enableCrmTools = true;
+  markupRecovery.service.executeUnifiedTool = async () => { assert.fail('DSML text must not execute a tool'); };
+  featureScenario = 'dsml';
+  const markupStart = requests.length;
+  await markupRecovery.run({mode:'standard', enableTools:true});
+  const markupRequests = requests.slice(markupStart);
+  assert.equal(markupRequests.length, 2);
+  assert.match(JSON.stringify(markupRequests[1].body), /结构化工具调用继续/);
+  assert.doesNotMatch(JSON.stringify(markupRequests[1].body), /NEVER_EXECUTE_DSML|<\|\|DSML/);
+  assert.doesNotMatch(markupRecovery.events.map(event => event.delta || '').join(''), /NEVER_EXECUTE_DSML|<\|\|DSML/);
+  assert(!markupRecovery.events.some(event => event.type === 'tool_start' && event.toolCall?.name === 'bash'));
   const wbMessages = [{id:'user',role:'user',content:'帮我看今天的新闻',createdAt:1}];
   const workbuddy = makeService(1048576,wbMessages);
   workbuddy.config.providers[0].id='workbuddy';
@@ -501,6 +539,22 @@ try {
   assert(resumed.messages.some(message => message.tool_call_id === 'live-call' && message.content.includes('LIVE_TOOL_RESULT')));
   assertContextFits(resumed.messages, [], budgetFor(providerFor(8192), 'fixture', 4096));
   console.log('PASS live tool recovery: mid-turn checkpoint retains call/result pairs and does not execute completed tools again');
+
+  const reasoningRecovery = makeService(1048576, mediumHistory);
+  reasoningRecovery.config.settings.autoContinueTruncated = true;
+  let recoveredExecutions = 0;
+  reasoningRecovery.service.executeUnifiedTool = async () => {
+    recoveredExecutions++;
+    return {data: {value: 'REASONING_RECOVERY_RECEIPT'}, summary: 'fixture'};
+  };
+  const reasoningStart = requests.length;
+  toolScenario = 4;
+  await reasoningRecovery.run();
+  const reasoningRequests = requests.slice(reasoningStart).filter(item => item.body.stream);
+  assert.equal(reasoningRequests.length, 3);
+  assert.equal(recoveredExecutions, 1);
+  assert(reasoningRequests[2].body.messages.some(message => message.tool_call_id === 'live-call' && message.content.includes('REASONING_RECOVERY_RECEIPT')));
+  console.log('PASS reasoning-only continuation retains tool results without dispatching the completed tool again');
 
   const growingTurn = makeService(32768, mediumHistory);
   growingTurn.service.executeUnifiedTool = async () => ({data: {value: 'LIVE_LARGE_TOOL_RESULT', stdout: 'tool data '.repeat(12000)}, summary: 'fixture'});

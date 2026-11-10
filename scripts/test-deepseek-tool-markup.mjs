@@ -32,4 +32,14 @@ const ordinary = filterChunks(['普通回答里提到 DSML 这个词，但没有
 assert.equal(ordinary.visible, '普通回答里提到 DSML 这个词，但没有协议标记。');
 assert.equal(ordinary.hadMarkup, false);
 
+const doubled = '<||DSML|| calls><||DSML|| invoke name="read"><||DSML|| parameter name="file_path" string="true">private.js</||DSML|| parameter></||DSML|| invoke></||DSML|| calls>';
+for (const payload of [doubled, doubled.replaceAll('|', '｜'), doubled.replaceAll('||DSML||', '|DSML||')]) {
+  assert.deepEqual(filterChunks([...('前文｜' + payload + '后文')]), { visible: '前文｜后文', hadMarkup: true });
+  for (let i = 0; i <= payload.length; i++) {
+    assert.deepEqual(filterChunks(['前文', payload.slice(0, i), payload.slice(i), '后文']), { visible: '前文后文', hadMarkup: true });
+  }
+}
+assert.deepEqual(filterChunks([...('前文' + doubled + '<||DSML|| invoke name="bash">partial command')]), { visible: '前文', hadMarkup: true });
+assert.deepEqual(filterChunks(['正常比较：x <']), { visible: '正常比较：x <', hadMarkup: false });
+
 console.log('DeepSeek DSML stream filtering tests passed.');

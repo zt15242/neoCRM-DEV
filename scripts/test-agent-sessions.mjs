@@ -202,6 +202,7 @@ try {
     await ai.startChatStream({ requestId: `req_${mode}`, sessionId: main.id, messageId: 'answer', providerId: 'fixture',
       modelId: 'fixture-model', messages: main.messages, enableTools: true, projectPath: fixture, mode }, event => events.push(event));
     assert.ok(!events.some(item => item.type === 'error'), JSON.stringify(events.filter(item => item.type === 'error')));
+    assert.deepEqual(events.filter(item => item.type === 'done').map(item => item.completionStatus), ['completed']);
     assert.match(events.filter(item => item.type === 'content_delta').map(item => item.delta).join(''), /aggregated verified worker result/);
     const agents = ai.getSessions().filter(item => item.agentRun?.createdBySessionId === main.id);
     assert.equal(agents.length, 1);
@@ -243,6 +244,12 @@ try {
   assert.equal(ai.abortChatStream('req_cancel'), true);
   while (ai.agentSessions.isActive(runningChild.id)) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(ai.getSessions().find(item => item.id === runningChild.id).agentRun.status, 'cancelled');
+  const cancelledEvents = [];
+  const cancelledRun = ai.startChatStream({ ...cancelContext.params, requestId: 'cancel-notice' }, event => cancelledEvents.push(event));
+  while (!ai.activeControllers.has('cancel-notice')) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(ai.abortChatStream('cancel-notice'), true);
+  await cancelledRun;
+  assert.deepEqual(cancelledEvents.filter(event => event.type === 'done').map(event => event.completionStatus), ['cancelled']);
   const otherSession = ai.getSessions().find(item => item.id === 'sess_standard');
   ai.deleteSession(cancellingParent.id);
   assert.equal(ai.getSessions().some(item => item.id === runningChild.id), false);
@@ -277,6 +284,7 @@ try {
   await ai.startChatStream({ sessionId: gemini.id, requestId: 'gemini-run', messageId: 'gemini-answer', providerId: 'fixture', modelId: 'fixture-model',
     messages: gemini.messages, enableTools: true, projectPath: fixture }, event => geminiEvents.push(event));
   assert.ok(!geminiEvents.some(event => event.type === 'error'), JSON.stringify(geminiEvents.filter(event => event.type === 'error')));
+  assert.deepEqual(geminiEvents.filter(event => event.type === 'done').map(event => event.completionStatus), ['completed']);
   assert.match(geminiEvents.filter(event => event.type === 'content_delta').map(event => event.delta).join(''), /Gemini aggregated result/);
   console.log('PASS Gemini native stream: function declarations, async agent execution and result aggregation');
   const interrupted = { ...ai.getSessions().find(item => item.id === child.id), agentRun: { ...child.agentRun, status: 'running' } };

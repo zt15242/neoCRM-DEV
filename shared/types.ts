@@ -433,6 +433,7 @@ export interface AiStreamEvent {
   delta?: string;
   toolCall?: AiToolCallRecord;
   compactionSummary?: AiCompactedSummary;
+  completionStatus?: 'completed' | 'waiting' | 'cancelled';
   error?: string;
 }
 
