@@ -176,6 +176,7 @@ export class AgentSessionService {
   }
 
   private enqueue(session: AiChatSession, input: ChatRunParams) {
+    if (this.jobs.size >= 24) throw new Error('后台任务队列已满，请等待已有任务完成');
     const requestId = `req_agent_${randomUUID()}`;
     const messageId = input.messageId && session.messages.some(item => item.id === input.messageId)
       ? input.messageId : `msg_a_${randomUUID()}`;
@@ -226,7 +227,7 @@ export class AgentSessionService {
     if (!job.timer) job.timer = setTimeout(() => {
       try { this.flush(job); }
       catch (error) { console.warn('[Agent] 保存代理进度失败:', error); }
-    }, 300);
+    }, 1200);
   }
 
   private pump() {

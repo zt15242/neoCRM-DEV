@@ -125,6 +125,7 @@ export const neoApi = {
   aiFetchModels: (provider: any) => ipcRenderer.invoke('ai:fetchModels', provider),
   aiGetSessions: () => ipcRenderer.invoke('ai:getSessions'),
   aiSaveSession: (session: any) => ipcRenderer.invoke('ai:saveSession', session),
+  aiPersistSession: (session: any, returnRecord = true) => ipcRenderer.invoke('ai:persistSession', session, returnRecord),
   aiDeleteSession: (sessionId: string) => ipcRenderer.invoke('ai:deleteSession', sessionId),
   aiClearSessions: () => ipcRenderer.invoke('ai:clearSessions'),
   aiStartChatStream: (params: any) => ipcRenderer.invoke('ai:startChatStream', params),

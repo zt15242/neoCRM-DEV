@@ -427,7 +427,7 @@ export interface AiStreamEvent {
   requestId: string;
   sessionId: string;
   messageId: string;
-  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error' | 'compaction_done' | 'usage';
+  type: 'reasoning_delta' | 'content_delta' | 'tool_start' | 'tool_update' | 'done' | 'error' | 'compaction_done' | 'usage' | 'queued';
   usage?: { source?: 'reported' | 'estimated' | 'mixed'; promptTokens?: number; completionTokens?: number; totalTokens?: number; estimatedCostUsd?: number; estimatedCost?: number; costCurrency?: 'USD' | 'CNY' };
   durationMs?: number;
   delta?: string;

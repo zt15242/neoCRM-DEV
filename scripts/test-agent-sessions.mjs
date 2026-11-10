@@ -18,6 +18,7 @@ try {
     export { DEFAULT_AI_SETTINGS } from './shared/constants';
     export { orderAgentSessions } from './src/components/ai/chatSessionState';
     export { DshToolService } from './electron/services/dshToolService';
+    export { batchChatStream } from './electron/services/chatStreamBatcher';
   ` }, bundle: true, platform: 'node', format: 'cjs', outfile: bundle, external: ['esbuild'], logLevel: 'silent',
     plugins: [{ name: 'test-host', setup(builder) {
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'test-host' }));
@@ -31,7 +32,7 @@ try {
       ` }));
     } }],
   });
-  const { AgentSessionService, AiService, DEFAULT_AI_SETTINGS, orderAgentSessions, DshToolService } = createRequire(import.meta.url)(bundle);
+  const { AgentSessionService, AiService, DEFAULT_AI_SETTINGS, orderAgentSessions, DshToolService, batchChatStream } = createRequire(import.meta.url)(bundle);
   const parent = { id: 'sess_parent', title: 'Main', projectId: 'project', presetId: 'harness-agent',
     providerId: 'fixture', modelId: 'fixture-model', messages: [{ id: 'user', role: 'user', content: 'coordinate', createdAt: 1 }],
     createdAt: 1, updatedAt: 1, activeSkillIds: ['test-skill'] };
@@ -247,7 +248,7 @@ try {
   const cancelledEvents = [];
   const cancelledRun = ai.startChatStream({ ...cancelContext.params, requestId: 'cancel-notice' }, event => cancelledEvents.push(event));
   while (!ai.activeControllers.has('cancel-notice')) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(ai.abortChatStream('cancel-notice'), true);
+  ai.abortForegroundChatStreams();
   await cancelledRun;
   assert.deepEqual(cancelledEvents.filter(event => event.type === 'done').map(event => event.completionStatus), ['cancelled']);
   const otherSession = ai.getSessions().find(item => item.id === 'sess_standard');
@@ -292,7 +293,76 @@ try {
   const restarted = new AiService(sessionStore, {}, {});
   assert.equal(restarted.getSessions().find(item => item.id === child.id).agentRun.status, 'interrupted');
   assert.ok(!restarted.abortChatStream('unknown-request'));
+  const historyFile = path.join(userData, 'neocrm_ai_sessions.json');
+  const intactHistory = fs.readFileSync(historyFile, 'utf8');
+  const rename = fs.renameSync;
+  fs.renameSync = (source, destination) => {
+    if (destination === historyFile) throw Object.assign(new Error('fixture: history file is locked'), { code: 'EPERM' });
+    return rename(source, destination);
+  };
+  try {
+    assert.throws(() => restarted.saveSession(parent), /history file is locked/);
+    assert.equal(fs.readFileSync(historyFile, 'utf8'), intactHistory);
+    assert.equal(fs.existsSync(`${historyFile}.${process.pid}.tmp`), false);
+  } finally { fs.renameSync = rename; }
+  fs.writeFileSync(historyFile, '{corrupted');
+  try {
+    assert.throws(() => restarted.saveSession(parent), SyntaxError);
+    assert.equal(fs.readFileSync(historyFile, 'utf8'), '{corrupted');
+  } finally { fs.writeFileSync(historyFile, intactHistory); }
+  console.log('PASS session persistence: locked or invalid history cannot be silently overwritten');
   console.log('PASS manual continuation uses managed snapshots; restart marks unfinished agents interrupted instead of claiming completion');
+
+  provider.protocol = 'openai';
+  restarted.getAiConfig = ai.getAiConfig;
+  const pending = [];
+  let peakRequests = 0;
+  const started = [];
+  globalThis.fetch = (_url, options) => new Promise(resolve => {
+    const label = JSON.parse(options.body).messages.findLast(item => item.role === 'user').content;
+    started.push(label);
+    pending.push(() => resolve(sse({ content: label })));
+    peakRequests = Math.max(peakRequests, pending.length);
+  });
+  const eventsByTurn = Array.from({ length: 16 }, () => []);
+  const turns = eventsByTurn.map((events, i) => restarted.startChatStream({
+    requestId: 'load-' + i, sessionId: 'sess_load_' + i, messageId: 'answer', providerId: 'fixture', modelId: 'fixture-model',
+    mode: 'minimal', messages: [{ id: 'user', role: 'user', content: 'turn ' + i, createdAt: 1 }],
+  }, event => events.push(event)));
+  const waitUntil = async predicate => {
+    for (let i = 0; i < 200 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert(predicate(), 'timed out waiting for test streams');
+  };
+  await waitUntil(() => pending.length === 3);
+  assert.equal(eventsByTurn.filter(events => events.some(event => event.type === 'queued')).length, 12);
+  assert.match(eventsByTurn[15].at(-1).error, /队列已满/);
+  assert.equal(restarted.abortChatStream('load-3'), true);
+  await turns[3];
+  assert.equal(eventsByTurn[3].at(-1).completionStatus, 'cancelled');
+  for (let i = 0; i < 14; i++) {
+    await waitUntil(() => pending.length > 0);
+    pending.shift()();
+  }
+  await Promise.all(turns);
+  assert.equal(peakRequests, 3);
+  assert.deepEqual(started, Array.from({ length: 15 }, (_, i) => 'turn ' + i).filter(label => label !== 'turn 3'));
+  assert.equal(restarted.activeControllers.size, 0);
+
+  const payload = '并发输出';
+  const results = Array.from({ length: 3 }, () => []);
+  const send = results.map(events => batchChatStream(event => events.push(event)));
+  const ids = i => ({ requestId: 'load-' + i, sessionId: 'session-' + i, messageId: 'answer' });
+  for (let j = 0; j < 10_000; j++) {
+    for (let i = 0; i < send.length; i++) send[i]({ ...ids(i), type: 'content_delta', delta: payload });
+  }
+  for (let i = 0; i < send.length; i++) {
+    send[i]({ ...ids(i), type: 'reasoning_delta', delta: 'reasoning' });
+    send[i]({ ...ids(i), type: 'done' });
+    assert.equal(results[i].filter(event => event.type === 'content_delta').map(event => event.delta).join(''), payload.repeat(10_000));
+    assert.deepEqual(results[i].slice(-2).map(event => event.type), ['reasoning_delta', 'done']);
+    assert(results[i].length < 100);
+  }
+  console.log(`PASS concurrent turns: peak ${peakRequests}, FIFO, overflow and cancellation; 30,000 text events batched into ${results.reduce((sum, events) => sum + events.filter(event => event.type === 'content_delta').length, 0)}`);
 } finally {
   globalThis.fetch = originalFetch;
   fs.rmSync(fixture, { recursive: true, force: true });

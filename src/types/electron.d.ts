@@ -168,6 +168,7 @@ declare global {
       aiFetchModels: (provider: AiProviderConfig) => Promise<{ success: boolean; models: AiModelItem[]; error?: string }>;
       aiGetSessions: () => Promise<AiChatSession[]>;
       aiSaveSession: (session: AiChatSession) => Promise<AiChatSession[]>;
+      aiPersistSession: (session: AiChatSession, returnRecord?: boolean) => Promise<AiChatSession | null>;
       aiDeleteSession: (sessionId: string) => Promise<AiChatSession[]>;
       aiClearSessions: () => Promise<boolean>;
       aiStartChatStream: (params: {

@@ -231,9 +231,11 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   useEffect(() => {
     let active = true;
     window.neoApi?.aiGetConfig?.().then((config) => { if (active && config.skills) setSkills(config.skills); }).catch(() => {});
-    window.neoApi?.aiGetSessions?.().then((items) => {
-      if (active) setSessions(items.filter((item) => item.messages?.length > 0));
-    }).catch(() => {});
+    if (propSessions === undefined) {
+      window.neoApi?.aiGetSessions?.().then((items) => {
+        if (active) setSessions(items.filter((item) => item.messages?.length > 0));
+      }).catch(() => {});
+    }
     if (!privateFeaturesVisible) {
       const current = sessionsRef.current.find((item) => item.id === activeSessionId);
       if (current && !isRoleVisible(current.presetId)) setActiveSessionId(null);
@@ -295,6 +297,27 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   const streamingMessageId = currentSessionStream?.messageId || null;
   const reasoningStartTimesRef = useRef<Record<string, number>>({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const managedStreamIds = useRef(new Set<string>());
+
+  // The parent already loads history. Restore running flags from its snapshot.
+  useEffect(() => {
+    if (propSessions === undefined) return;
+    const previous = activeStreamsRef.current;
+    const next = { ...previous };
+    for (const id of managedStreamIds.current) delete next[id];
+    managedStreamIds.current.clear();
+    for (const { id, agentRun } of propSessions) {
+      if (agentRun?.status !== 'running' && agentRun?.status !== 'queued') continue;
+      managedStreamIds.current.add(id);
+      const existing = previous[id];
+      next[id] = existing?.requestId === agentRun.requestId && existing.messageId === agentRun.messageId
+        ? existing : { requestId: agentRun.requestId, messageId: agentRun.messageId };
+    }
+    if (Object.keys(next).length !== Object.keys(previous).length || Object.keys(next).some(id => next[id] !== previous[id])) {
+      activeStreamsRef.current = next;
+      setActiveStreams(next);
+    }
+  }, [propSessions]);
 
   useEffect(() => {
     const receive = (session: AiChatSession) => {
@@ -314,7 +337,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     };
     const unsubscribe = window.neoApi?.onAgentSessionUpdated?.(receive);
     // 重新加载界面后也恢复后台运行标记；先订阅再读取，避免漏掉新任务。
-    window.neoApi?.aiGetSessions?.().then(items => items.filter(item => item.agentRun).forEach(receive)).catch(() => {});
+    if (propSessions === undefined) {
+      window.neoApi?.aiGetSessions?.().then(items => items.filter(item => item.agentRun).forEach(receive)).catch(() => {});
+    }
     return () => { unsubscribe?.(); };
   }, [privateFeaturesVisible]);
 
@@ -375,7 +400,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         licStatus = await window.neoApi.workflowGetLicenseStatus();
         setWorkflowLicenseStatus(licStatus);
       }
-      if (window.neoApi?.aiGetSessions) {
+      if (propSessions === undefined && window.neoApi?.aiGetSessions) {
         const list = await window.neoApi.aiGetSessions();
         const validList = list.filter((s) => s.messages && s.messages.length > 0);
         setSessions(previous => mergeSavedChatSessions(validList, previous, activeStreamsRef.current, ''));
@@ -475,6 +500,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       if (!streamState || streamState.requestId !== event.requestId) {
         return;
       }
+      if (type === 'queued') {
+        showToast('info', '已有 3 个对话正在执行，本轮已排队，可随时停止。');
+        return;
+      }
 
       // 捕获后台自动压缩完成事件，实时更新会话中的 compactionSummary 并提醒用户
       if (type === 'compaction_done' && compactionSummary) {
@@ -555,7 +584,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           };
 
           if (type === 'done' || type === 'error') {
-            window.neoApi.aiSaveSession(newSess).catch(() => {});
+            window.neoApi.aiPersistSession(newSess, false).catch(() => {});
           }
 
           return newSess;
@@ -775,17 +804,19 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       updatedAt: Date.now(),
     };
 
-    let savedList: AiChatSession[];
+    let saved: AiChatSession;
     try {
-      savedList = await window.neoApi.aiSaveSession(updatedSession);
+      const record = await window.neoApi.aiPersistSession(updatedSession);
+      if (!record) throw new Error('当前会话不可用');
+      saved = record;
     } catch (e: any) {
       startingStreamsRef.current.delete(sendKey);
       showToast('error', `保存对话失败: ${e?.message || '未知错误'}`);
       return;
     }
-    setSessions((prev) => mergeSavedChatSessions(
-      savedList.filter((s) => s.messages && s.messages.length > 0), prev, activeStreamsRef.current, updatedSession.id
-    ));
+    setSessions(prev => prev.some(item => item.id === saved.id)
+      ? prev.map(item => item.id === saved.id && item.updatedAt <= saved.updatedAt ? saved : item)
+      : [saved, ...prev]);
     if (activeSessionIdRef.current === activeSessionId) setActiveSessionId(updatedSession.id);
 
     const requestId = `req_${Date.now()}_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10)}`;
@@ -827,7 +858,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         updatedAt: Date.now(),
       };
       setSessions((prev) => prev.map((session) => session.id === failedSession.id ? failedSession : session));
-      window.neoApi.aiSaveSession(failedSession).catch(() => {});
+      window.neoApi.aiPersistSession(failedSession, false).catch(() => {});
       setActiveStreams((prev) => {
         if (prev[failedSession.id]?.requestId !== requestId) return prev;
         const next = { ...prev };
@@ -881,7 +912,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           messages: updatedMsgs,
           updatedAt: Date.now(),
         };
-        window.neoApi?.aiSaveSession(stoppedSess).catch(() => {});
+        window.neoApi?.aiPersistSession(stoppedSess, false).catch(() => {});
         return stoppedSess;
       });
       return updated;

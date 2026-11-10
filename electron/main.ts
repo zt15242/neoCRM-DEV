@@ -18,6 +18,7 @@ import { UpdateService } from './services/updateService';
 import { configureWindowLifecycle, configureUnsavedFileGuard } from './services/windowLifecycle';
 import { ImageService } from './services/imageService';
 import { AiService } from './services/aiService';
+import { batchChatStream } from './services/chatStreamBatcher';
 import { browserBridge } from './services/browserBridge';
 import { FileService } from './services/fileService';
 import { readMessagePreviewResult } from './services/messagePreviewService';
@@ -84,6 +85,22 @@ const metadataService = new MetadataService(authService);
 const dataService = new DataService(authService);
 const loggerService = new LoggerService();
 loggerService.interceptConsole();
+let appQuitting = false;
+app.on('will-quit', () => { appQuitting = true; });
+const diagnosticMemory = () => {
+  const memory = process.memoryUsage();
+  return {
+    mainRssMiB: Math.round(memory.rss / 1048576),
+    mainHeapMiB: Math.round(memory.heapUsed / 1048576),
+  };
+};
+app.on('child-process-gone', (_, details) => {
+  if (!appQuitting && details.reason !== 'clean-exit') {
+    loggerService.warn('Stability', '辅助进程异常退出', {
+      type: details.type, reason: details.reason, exitCode: details.exitCode, ...diagnosticMemory(),
+    });
+  }
+});
 
 const updateService = new UpdateService();
 const imageService = new ImageService();
@@ -199,6 +216,28 @@ function createWindow() {
   });
   const mainWindow = win;
   windowLifecycle.registerWindow(mainWindow);
+  let recoveredRenderer = false;
+  let lastHangLog = 0;
+  mainWindow.on('unresponsive', () => {
+    if (Date.now() - lastHangLog < 30_000) return;
+    lastHangLog = Date.now();
+    loggerService.warn('Stability', '主窗口暂未响应', diagnosticMemory());
+  });
+  mainWindow.webContents.on('render-process-gone', (_, details) => {
+    if (appQuitting || details.reason === 'clean-exit') return;
+    loggerService.error('Stability', '主窗口渲染进程退出', {
+      reason: details.reason, exitCode: details.exitCode, ...diagnosticMemory(),
+    });
+    aiService.abortForegroundChatStreams();
+    if (process.platform !== 'win32' || recoveredRenderer ||
+        !['crashed', 'oom', 'abnormal-exit', 'memory-eviction'].includes(details.reason)) return;
+    recoveredRenderer = true;
+    setTimeout(() => {
+      if (!appQuitting && !mainWindow.isDestroyed() && mainWindow.webContents.isCrashed()) {
+        mainWindow.webContents.reload();
+      }
+    }, 750).unref();
+  });
   configureUnsavedFileGuard(mainWindow.webContents, () => dialog.showMessageBoxSync(mainWindow, {
     type: 'question', title: '文件尚未保存', message: '有未保存的文件修改',
     detail: '退出或重新加载会放弃这些修改。请选择继续编辑，或放弃修改并继续。',
@@ -692,6 +731,12 @@ ipcMain.handle('ai:fetchModels', async (_, provider) => aiService.fetchAvailable
 
 ipcMain.handle('ai:getSessions', async () => visibleSessions(aiService.getSessions()));
 ipcMain.handle('ai:saveSession', async (_, session) => visibleSessions(aiService.saveSession(session)));
+ipcMain.handle('ai:persistSession', async (_, session, returnRecord = true) => {
+  const sessions = aiService.saveSession(session);
+  if (!returnRecord) return null;
+  const saved = sessions.find(item => item.id === session.id);
+  return saved && restrictedFeatureService.canUseRole(saved.presetId) ? saved : null;
+});
 ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => visibleSessions(aiService.deleteSession(sessionId)));
 ipcMain.handle('ai:clearSessions', async () => aiService.clearSessions());
 
@@ -703,7 +748,7 @@ ipcMain.handle('ai:startChatStream', async (_, params) => {
     return true;
   }
   let terminal = false;
-  const forward = (event: AiStreamEvent) => {
+  const forward = batchChatStream((event: AiStreamEvent) => {
     if (terminal) return;
     terminal = event.type === 'done' || event.type === 'error';
     if (win && !win.isDestroyed()) {
@@ -713,7 +758,7 @@ ipcMain.handle('ai:startChatStream', async (_, params) => {
     else if (event.type === 'done' && event.completionStatus && event.completionStatus !== 'cancelled') {
       notifyAiOutcome(event.completionStatus);
     }
-  };
+  });
   void aiService.startChatStream(params, forward).catch((err: any) => {
     const cancelled = err?.name === 'AbortError';
     forward({

@@ -95,11 +95,14 @@ import { EnvService } from './envService';
 import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
 import { browserBridge } from './browserBridge';
+import { ChatConcurrency } from './chatConcurrency';
 import { appendToolArguments, parseToolArguments } from './toolCallArguments';
 import { assertNeoConnectorToolAccess, filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, shouldLoadBusinessTypeSkill, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
+  private foregroundControllers = new Set<AbortController>();
+  private foregroundRuns = new ChatConcurrency();
   private agentContext = new AsyncLocalStorage<AgentRunContext>();
   private agentListeners = new Set<(session: AiChatSession) => void>();
   private recoveredAgentSessions = false;
@@ -902,12 +905,23 @@ export class AiService {
 
   // ================= 会话历史管理 =================
 
-  public getSessions(): AiChatSession[] {
+  private writeSessions(sessions: AiChatSession[]) {
     const filePath = this.getSessionsPath();
-    if (!fs.existsSync(filePath)) { this.recoveredAgentSessions = true; return []; }
+    const temporary = `${filePath}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify(sessions), { encoding: 'utf-8', mode: 0o600 });
+      fs.renameSync(temporary, filePath);
+    } finally {
+      try { fs.rmSync(temporary, { force: true }); } catch { /* preserve the original write error */ }
+    }
+  }
+
+  public getSessions(strict = false): AiChatSession[] {
+    const filePath = this.getSessionsPath();
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      const list: AiChatSession[] = Array.isArray(data) ? data : [];
+      if (!Array.isArray(data)) throw new Error('会话历史文件格式无效');
+      const list: AiChatSession[] = data;
       if (!this.recoveredAgentSessions) {
         this.recoveredAgentSessions = true;
         let changed = false;
@@ -921,16 +935,27 @@ export class AiService {
             changed = true;
           }
         }
-        if (changed) fs.writeFileSync(filePath, JSON.stringify(list, null, 2), 'utf-8');
+        if (changed) {
+          try { this.writeSessions(list); }
+          catch (error) {
+            this.recoveredAgentSessions = false;
+            console.warn('[Agent] 无法保存中断任务状态:', error);
+          }
+        }
       }
       return list.filter((s) => Array.isArray(s.messages) && s.messages.length > 0);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.recoveredAgentSessions = true;
+        return [];
+      }
+      if (strict) throw error;
       return [];
     }
   }
 
   public saveSession(session: AiChatSession, fromAgent = false): AiChatSession[] {
-    const sessions = this.getSessions();
+    const sessions = this.getSessions(true);
     const idx = sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
       const stored = sessions[idx];
@@ -941,24 +966,28 @@ export class AiService {
     } else {
       sessions.unshift(session);
     }
-    fs.writeFileSync(this.getSessionsPath(), JSON.stringify(sessions, null, 2), 'utf-8');
+    this.writeSessions(sessions);
     return sessions;
   }
 
   public deleteSession(sessionId: string): AiChatSession[] {
     this.abortChatStream(sessionId);
-    const sessions = this.getSessions().filter((s) => s.id !== sessionId && s.agentRun?.createdBySessionId !== sessionId);
-    fs.writeFileSync(this.getSessionsPath(), JSON.stringify(sessions, null, 2), 'utf-8');
+    const sessions = this.getSessions(true).filter((s) => s.id !== sessionId && s.agentRun?.createdBySessionId !== sessionId);
+    this.writeSessions(sessions);
     return sessions;
   }
 
   public clearSessions(): boolean {
     this.abortChatStream();
-    fs.writeFileSync(this.getSessionsPath(), JSON.stringify([], null, 2), 'utf-8');
+    this.writeSessions([]);
     return true;
   }
 
   // ================= 对话流与 Agent Harness 核心 =================
+
+  public abortForegroundChatStreams() {
+    for (const controller of this.foregroundControllers) controller.abort();
+  }
 
   public abortChatStream(requestIdOrSessionId?: string): boolean {
     if (!requestIdOrSessionId) this.agentSessions.stopAll();
@@ -1005,30 +1034,31 @@ export class AiService {
       this.agentSessions.startFromUi(stored, params);
       return;
     }
-    return this.runWithAgentContext(params, sendEvent);
+    return this.runWithAgentContext(params, sendEvent, false, stored ?? null);
   }
 
-  private runWithAgentContext(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void, managed = false) {
-    const stored = this.getSessions().find(item => item.id === params.sessionId);
+  private runWithAgentContext(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void, managed = false, snapshot?: AiChatSession | null) {
+    const stored = snapshot === undefined ? this.getSessions().find(item => item.id === params.sessionId) : snapshot;
     const effective = { ...params, projectId: stored?.projectId || params.projectId,
       mode: params.mode || stored?.mode || 'standard' as AiSessionMode };
     return DshToolService.runInSession(params.sessionId,
-      () => this.agentContext.run({ params: effective, managed }, () => this.runChatStream(effective, sendEvent)));
+      () => this.agentContext.run({ params: effective, managed }, () => this.runChatStream(effective, sendEvent, stored?.presetId)));
   }
 
   private async runChatStream(
     params: ChatRunParams,
-    sendEvent: (event: AiStreamEvent) => void
+    sendEvent: (event: AiStreamEvent) => void,
+    storedPreset?: string
   ): Promise<void> {
     const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
 
     // Check before workspace preparation, compaction, tool discovery or provider requests.
-    const storedPreset = this.getSessions().find((item) => item.id === sessionId)?.presetId;
     const hasPrivatePreset = ['neobi-architect', 'autoflow-architect'].some(
       (id) => presetPrompt?.includes(`[PROTECTED_PRESET::${id}]`)
     );
-    if (!restrictedFeatureService.getStatus().visible &&
-        (hasPrivatePreset || isRestrictedRole(storedPreset) || activeSkillIds?.some(isRestrictedSkill))) {
+    const isLocked = () => !restrictedFeatureService.getStatus().visible &&
+        (hasPrivatePreset || isRestrictedRole(storedPreset) || activeSkillIds?.some(isRestrictedSkill));
+    if (isLocked()) {
       sendEvent({ requestId, sessionId, messageId, type: 'error', error: '当前功能已上锁' });
       return;
     }
@@ -1057,6 +1087,7 @@ export class AiService {
     // 必须在任何压缩、MCP 探测或模型校验前注册控制器，否则用户在准备阶段点击停止时没有可取消句柄。
     const controller = new AbortController();
     const agentContext = this.agentContext.getStore();
+    if (!agentContext?.managed) this.foregroundControllers.add(controller);
     if (agentContext) agentContext.signal = controller.signal;
     const previousController = this.activeControllers.get(requestId) || (sessionId ? this.activeControllers.get(sessionId) : undefined);
     previousController?.abort();
@@ -1065,6 +1096,7 @@ export class AiService {
       this.activeControllers.set(sessionId, controller);
     }
     const cleanupController = () => {
+      this.foregroundControllers.delete(controller);
       if (this.activeControllers.get(requestId) === controller) {
         this.activeControllers.delete(requestId);
       }
@@ -1080,76 +1112,90 @@ export class AiService {
       }
     };
 
-    throwIfAborted();
-
-    // Prepare the actual conversation workspace before compaction, model setup or tool discovery.
-    const cliPreparation = this.sessionStore.prepareNeoCliForConversation(projectPath);
-    const currentSession = { ...cliPreparation.session, projectId: params.projectId };
-    const connectorIdentity = connectorKey(currentSession);
-    if (agentContext) agentContext.connectorIdentity = connectorIdentity;
-    if (params.expectedConnector && params.expectedConnector !== connectorIdentity) {
-      cleanupController();
-      throw new Error('连接器账号或租户已切换，代理已停止，请在目标环境确认后重新派发');
-    }
-    const isNeoConnector = !!currentSession.environment && (currentSession.environment.productType || 'neocrm') === 'neocrm';
-
-    // 提取本轮会话中用户显式上传/引用的文件路径白名单（单文件安全豁免）
-    const sessionAllowedFiles = (messages || [])
-      .flatMap((m) => m.attachments || [])
-      .map((a) => a.fullPath)
-      .filter(Boolean) as string[];
-
-    const config = this.getAiConfig();
-    const textMask = config.settings.maskModelText ? new TextMask() : undefined;
-    if (textMask) {
-      const nextEvent = sendEvent;
-      let content = '', reasoning = '';
-      sendEvent = event => {
-        if (event.type === 'content_delta') { content += event.delta || ''; return; }
-        if (event.type === 'reasoning_delta') { reasoning += event.delta || ''; return; }
-        if (event.type === 'done' || event.type === 'error') {
-          if (reasoning) nextEvent({ ...event, type: 'reasoning_delta', delta: textMask.restore(reasoning) });
-          if (content) nextEvent({ ...event, type: 'content_delta', delta: textMask.restore(content) });
-          content = ''; reasoning = '';
-        }
-        nextEvent(event);
-      };
-    }
-
-    let currentCompactionSummary = compactionSummary;
-
-    const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
-    if (!provider) {
-      sendEvent({
-        requestId,
-        sessionId,
-        messageId,
-        type: 'error',
-        error: '未找到选定的模型供应商，请前往设置配置',
-      });
-      cleanupController();
-      return;
-    }
-
-    if (!provider.apiKey && provider.id !== 'ollama' && provider.id !== 'workbuddy' && !provider.baseUrl.includes('127.0.0.1') && !provider.baseUrl.includes('localhost')) {
-      sendEvent({
-        requestId,
-        sessionId,
-        messageId,
-        type: 'error',
-        error: `供应商 [${provider.name}] 尚未配置 API Key，请在顶部【系统设置】中完成配置。`,
-      });
-      cleanupController();
-      return;
-    }
-
-    if (currentSession?.environment?.id && this.envService) {
-      const freshEnv = this.envService.getEnvironmentById(currentSession.environment.id);
-      if (freshEnv) {
-        currentSession.environment = freshEnv;
-      }
-    }
+    let releaseSlot: (() => void) | undefined;
     try {
+      throwIfAborted();
+
+      // Prepare the actual conversation workspace before compaction, model setup or tool discovery.
+      const cliPreparation = this.sessionStore.prepareNeoCliForConversation(projectPath);
+      const currentSession = { ...cliPreparation.session, projectId: params.projectId };
+      const connectorIdentity = connectorKey(currentSession);
+      if (agentContext) agentContext.connectorIdentity = connectorIdentity;
+      if (params.expectedConnector && params.expectedConnector !== connectorIdentity) {
+        throw new Error('连接器账号或租户已切换，代理已停止，请在目标环境确认后重新派发');
+      }
+      if (!agentContext?.managed) {
+        let queued = false;
+        releaseSlot = await this.foregroundRuns.acquire(controller.signal, () => {
+          queued = true;
+          sendEvent({ requestId, sessionId, messageId, type: 'queued' });
+        });
+        throwIfAborted();
+        if (queued) {
+          if (isLocked()) throw new Error('当前功能已上锁');
+          const latest = this.sessionStore.getCurrentSession();
+          if (connectorKey(latest) !== connectorIdentity) {
+            throw new Error('排队期间连接器已切换，请在目标环境重新发送任务。');
+          }
+          Object.assign(currentSession, latest);
+        }
+      }
+      const isNeoConnector = !!currentSession.environment && (currentSession.environment.productType || 'neocrm') === 'neocrm';
+
+      // 提取本轮会话中用户显式上传/引用的文件路径白名单（单文件安全豁免）
+      const sessionAllowedFiles = (messages || [])
+        .flatMap((m) => m.attachments || [])
+        .map((a) => a.fullPath)
+        .filter(Boolean) as string[];
+
+      const config = this.getAiConfig();
+      const textMask = config.settings.maskModelText ? new TextMask() : undefined;
+      if (textMask) {
+        const nextEvent = sendEvent;
+        let content = '', reasoning = '';
+        sendEvent = event => {
+          if (event.type === 'content_delta') { content += event.delta || ''; return; }
+          if (event.type === 'reasoning_delta') { reasoning += event.delta || ''; return; }
+          if (event.type === 'done' || event.type === 'error') {
+            if (reasoning) nextEvent({ ...event, type: 'reasoning_delta', delta: textMask.restore(reasoning) });
+            if (content) nextEvent({ ...event, type: 'content_delta', delta: textMask.restore(content) });
+            content = ''; reasoning = '';
+          }
+          nextEvent(event);
+        };
+      }
+
+      let currentCompactionSummary = compactionSummary;
+
+      const provider = config.providers.find((p) => p.id === providerId) || config.providers[0];
+      if (!provider) {
+        sendEvent({
+          requestId,
+          sessionId,
+          messageId,
+          type: 'error',
+          error: '未找到选定的模型供应商，请前往设置配置',
+        });
+        return;
+      }
+
+      if (!provider.apiKey && provider.id !== 'ollama' && provider.id !== 'workbuddy' && !provider.baseUrl.includes('127.0.0.1') && !provider.baseUrl.includes('localhost')) {
+        sendEvent({
+          requestId,
+          sessionId,
+          messageId,
+          type: 'error',
+          error: `供应商 [${provider.name}] 尚未配置 API Key，请在顶部【系统设置】中完成配置。`,
+        });
+        return;
+      }
+
+      if (currentSession?.environment?.id && this.envService) {
+        const freshEnv = this.envService.getEnvironmentById(currentSession.environment.id);
+        if (freshEnv) {
+          currentSession.environment = freshEnv;
+        }
+      }
       // 筛选当前对话激活的外部自定义 MCP 服务
       const allCustomMcp = (config.mcpServers || []).filter(
         (m) => m.type !== "builtin" && m.id !== "neocrm-paas-mcp" && m.enabled
@@ -2698,6 +2744,7 @@ ${currentCompactionSummary.summary}
         error: err.message || '对话生成异常中断',
       });
     } finally {
+      releaseSlot?.();
       cleanupController();
     }
   }
