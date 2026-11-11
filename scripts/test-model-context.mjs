@@ -296,6 +296,21 @@ try {
     assert(!content.includes('旧提示：尚未识别'));
     assert(!JSON.stringify(vision.events).includes(png.toString('base64')), 'image bytes stay out of events');
     assert(!JSON.stringify(vision.stored).includes(png.toString('base64')), 'image bytes stay out of saved history');
+    const historyWithImages = Array.from({ length: 5 }, (_, index) => ({
+      id: 'old-image-' + index, role: 'user', content: '历史图片', createdAt: index,
+      attachments: [{ name: 'old-' + index + '.png', size: png.length, contentKind: 'image', fullPath: path.join(fixture, 'missing-old-' + index + '.png') }],
+    }));
+    const following = makeService(1048576, [...historyWithImages, ...imageMessages], protocol);
+    await following.run();
+    const followingBody = JSON.stringify(requests.at(-1).body);
+    assert.equal(followingBody.split(png.toString('base64')).length - 1, 1);
+    assert.match(followingBody, /old-4.png/);
+    const tooMany = makeService(1048576, [{
+      ...imageMessages[0], attachments: historyWithImages.flatMap(item => item.attachments),
+    }], protocol);
+    const beforeRejection = requests.length;
+    await assert.rejects(tooMany.run(), /本轮添加了 5 张图片.*最多可同时识别 4 张/);
+    assert.equal(requests.length, beforeRejection);
     const toolVision = makeService(1048576,[{id:'user',role:'user',content:'查看项目里的图片',createdAt:1}],protocol);
     toolVision.config.settings.enableCrmTools = true;
     visionToolScenario = true;

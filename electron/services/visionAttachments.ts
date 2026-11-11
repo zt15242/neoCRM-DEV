@@ -1,4 +1,12 @@
 import fs from 'node:fs';
+import type { AiFileAttachment } from '../../shared/types';
+
+const MAX_IMAGES = 4;
+export function inlineImagePaths(attachments: AiFileAttachment[] = []): string[] {
+  const paths = [...new Set(attachments.flatMap(file => file.contentKind === 'image' && file.fullPath ? [file.fullPath] : []))];
+  if (paths.length > MAX_IMAGES) throw new Error(`本轮添加了 ${paths.length} 张图片，最多可同时识别 ${MAX_IMAGES} 张，请分批发送。`);
+  return paths;
+}
 
 export interface VisionImage { mimeType: string; data: string }
 
@@ -10,7 +18,7 @@ export class VisionImageLoader {
   load(filePath: string): VisionImage {
     const cached = this.cache.get(filePath);
     if (cached) return cached;
-    if (this.cache.size >= 4) throw new Error('一次请求最多识别 4 张图片，请减少图片后重试。');
+    if (this.cache.size >= MAX_IMAGES) throw new Error('本轮图片识别额度已用完（最多 4 张），请分批处理。');
     let fd: number | undefined;
     try {
       fd = fs.openSync(filePath, 'r');

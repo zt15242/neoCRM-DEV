@@ -11,7 +11,7 @@ import {
 } from '../../shared/mailTypes';
 import type { WorkspaceDataSources, WorkspaceExecutionLog, WorkspacePage, WorkspaceWidgetResult } from '../../shared/workspaceTypes';
 import type { FeishuWorkspaceSettings } from '../../shared/feishuTypes';
-import type { MeetingRecord, GlossaryTerm, OpenAiAudioSettings, MeetingTranscriptionTask } from '../../shared/meetingTypes';
+import type { MeetingRecord, MeetingAnalysisOptions, GlossaryTerm, OpenAiAudioSettings, MeetingTranscriptionTask } from '../../shared/meetingTypes';
 import { 
   NeoEnvironment, 
   SessionState, 
@@ -387,7 +387,7 @@ declare global {
       meetingCancelTranscriptionTask?: (meetingId: string) => Promise<MeetingTranscriptionTask | null>;
       onMeetingTranscriptionTaskUpdated?: (callback: (task: MeetingTranscriptionTask) => void) => () => void;
       meetingTranscribeAudioChunk?: (meetingId: string, chunkPath: string, startTimeSec: number, options?: { apiKey?: string; baseUrl?: string; model?: string; language?: string }) => Promise<MeetingRecord>;
-      meetingSummarizeMeeting?: (meetingId: string, options?: { providerId?: string; modelId?: string; live?: boolean }) => Promise<MeetingRecord>;
+      meetingSummarizeMeeting?: (meetingId: string, options?: MeetingAnalysisOptions) => Promise<MeetingRecord>;
       meetingGetGlossary?: () => Promise<GlossaryTerm[]>;
       meetingSaveGlossaryTerm?: (term: Partial<GlossaryTerm>) => Promise<GlossaryTerm[]>;
       meetingDeleteGlossaryTerm?: (termId: string) => Promise<GlossaryTerm[]>;

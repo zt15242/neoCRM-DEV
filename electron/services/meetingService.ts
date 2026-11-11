@@ -23,7 +23,8 @@ import {
 } from '../../shared/meetingTypes';
 import { AiService } from './aiService';
 import { formatMeetingMarkdown } from '../../shared/meetingMarkdown';
-import { analyzeMeeting } from './meetingAnalysis';
+import { analyzeMeeting, analyzeMeetingSpeechArt, type AnalysisRequest } from './meetingAnalysis';
+import type { MeetingAnalysisOptions } from '../../shared/meetingTypes';
 import { selectMeetingModel } from './meetingModelClient';
 import { resolveFfmpegBinary } from './ffmpegRuntime';
 import {
@@ -51,7 +52,7 @@ const MAX_TRANSCRIPTION_ATTEMPTS = 3;
  * 大模型会议智能总结、语艺沟通分析与飞书妙计级可视化图表生成。
  */
 export class MeetingService {
-  private readonly summaryTasks = new Map<string, Promise<MeetingRecord>>();
+  private readonly summaryTasks = new Map<string, { kind: MeetingAnalysisOptions['kind']; task: Promise<MeetingRecord> }>();
   private readonly transcriptionTasks = new Map<string, MeetingTranscriptionTask>();
   private readonly transcriptionTaskPromises = new Map<string, Promise<void>>();
   private readonly transcriptionTaskListeners = new Set<(task: MeetingTranscriptionTask) => void>();
@@ -1159,22 +1160,18 @@ export class MeetingService {
    */
   public summarizeMeeting(
     meetingId: string,
-    options?: { providerId?: string; modelId?: string; live?: boolean },
+    options?: MeetingAnalysisOptions,
   ): Promise<MeetingRecord> {
     const running = this.summaryTasks.get(meetingId);
-    if (running) return running;
+    if (running) return running.kind === options?.kind ? running.task : Promise.reject(new Error('当前会议正在生成其他分析，请完成后重试'));
     const task = this.runMeetingSummary(meetingId, options).finally(() => this.summaryTasks.delete(meetingId));
-    this.summaryTasks.set(meetingId, task);
+    this.summaryTasks.set(meetingId, { kind: options?.kind, task });
     return task;
   }
 
   private async runMeetingSummary(
     meetingId: string,
-    options?: {
-      providerId?: string;
-      modelId?: string;
-      live?: boolean;
-    }
+    options?: MeetingAnalysisOptions,
   ): Promise<MeetingRecord> {
     const meeting = this.getMeetingById(meetingId);
     if (!meeting) {
@@ -1182,20 +1179,34 @@ export class MeetingService {
     }
 
     const previousStatus = meeting.status;
+    const speechOnly = options?.kind === 'speech_art';
+    const label = speechOnly ? '语艺画像' : '会议总结';
     meeting.status = 'summarizing';
-    meeting.statusMessage = options?.live
+    meeting.statusMessage = speechOnly ? '正在生成语艺沟通画像...' : options?.live
       ? '正在根据最新转写片段更新实时摘要...'
       : '正在驱动大模型提炼核心决策、待办、语艺画像与图表数据...';
     this.saveMeeting(meeting);
 
     try {
       const { provider, modelId } = selectMeetingModel(this.aiService.getAiConfig(), options?.providerId, options?.modelId);
-      const result = await analyzeMeeting(meeting,
-        (system, input, maxTokens) => this.aiService.requestMeetingAnalysisText(provider, modelId, system, input, maxTokens),
-        (message) => {
-          const current = this.getMeetingById(meetingId);
-          if (current) { current.statusMessage = message; this.saveMeeting(current); }
-        });
+      const request: AnalysisRequest = (system, input, maxTokens) => this.aiService.requestMeetingAnalysisText(provider, modelId, system, input, maxTokens);
+      const onProgress = (message: string) => {
+        const current = this.getMeetingById(meetingId);
+        if (current) { current.statusMessage = message; this.saveMeeting(current); }
+      };
+      if (speechOnly) {
+        const speechArt = await analyzeMeetingSpeechArt(meeting, request, onProgress);
+        const latest = this.getMeetingById(meetingId);
+        if (!latest) throw new Error('会议记录已删除');
+        latest.speechArt = speechArt;
+        if (latest.status === 'summarizing') {
+          latest.status = previousStatus === 'transcribing' ? 'transcribing' : latest.summary ? 'completed' : 'transcribed';
+        }
+        latest.statusMessage = `已生成 ${speechArt.speakerProfiles.length} 位发言人的语艺画像`;
+        this.saveMeeting(latest);
+        return latest;
+      }
+      const result = await analyzeMeeting(meeting, request, onProgress);
       const latest = this.getMeetingById(meetingId);
       if (!latest) throw new Error('会议记录已删除');
       result.summary.modelUsed = modelId;
@@ -1204,7 +1215,7 @@ export class MeetingService {
         action.completed = latest.summary?.actionItems.some(old => old.task === action.task && old.completed) || false;
       }
       latest.summary = result.summary;
-      latest.speechArt = result.speechArt;
+      if (result.speechArt?.speakerProfiles.length) latest.speechArt = result.speechArt;
       latest.charts = this.buildMeetingCharts(latest, [], result.summary.actionItems, undefined, undefined, result.summary.decisionTradeoffs);
       latest.status = options?.live
         ? (previousStatus === 'transcribing' ? 'transcribing' : 'transcribed')
@@ -1217,11 +1228,11 @@ export class MeetingService {
       const latest = this.getMeetingById(meetingId);
       if (latest) {
         latest.status = previousStatus === 'summarizing' ? 'transcribed' : previousStatus;
-        latest.statusMessage = `总结失败：${error?.message || '模型请求失败'}。已有转写与纪要已保留。`;
+        latest.statusMessage = `${label}失败：${error?.message || '模型请求失败'}。已有分析与转写已保留。`;
         this.saveMeeting(latest);
       }
       console.warn('[MeetingService] 会议分析失败:', error?.message);
-      throw new Error(`会议总结失败：${error?.message || '模型请求失败'}`);
+      throw new Error(`${label}失败：${error?.message || '模型请求失败'}`);
     }
   }
 

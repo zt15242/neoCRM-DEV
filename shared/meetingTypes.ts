@@ -172,6 +172,13 @@ export interface SpeechArtAnalysis {
   cadenceSummary: string;    // 发言节奏与控场评价
 }
 
+export interface MeetingAnalysisOptions {
+  providerId?: string;
+  modelId?: string;
+  live?: boolean;
+  kind?: 'speech_art';
+}
+
 /**
  * 飞书妙计风格多维图表数据
  */

@@ -19,7 +19,7 @@ import { currentDateContext } from './currentDate';
 import { TextMask } from './textMask';
 import { applyModelTokenReference } from '../../shared/modelTokenCatalog';
 import { effectiveModelPrice } from '../../shared/modelPriceCatalog';
-import { VisionImageLoader, openAiImagePart, geminiImagePart } from './visionAttachments';
+import { VisionImageLoader, inlineImagePaths, openAiImagePart, geminiImagePart } from './visionAttachments';
 import { checkDiagramDelivery, diagramDeliveryFeedback, diagramDeliveryWarning } from './diagramDelivery';
 const isTransientStreamFailure = (error: any): boolean => /terminated|network|socket|fetch failed|connection|econnreset|epipe|timeout|timed out|网络|连接中断/i.test(`${error?.message || ''} ${error?.cause?.code || ''}`);
 const continuationPrompt = (hasAnswer: boolean) => hasAnswer
@@ -1325,7 +1325,8 @@ export class AiService {
         } });
       }
 
-      const latestUserContent = [...messages].reverse().find((message) => message.role === 'user')?.content || '';
+      const latestUserMessage = messages.findLast(message => message.role === 'user');
+      const latestUserContent = latestUserMessage?.content || '';
       const summaryOnly = isCompletedWorkSummaryRequest(latestUserContent);
       if (summaryOnly) systemParts.push('用户只要求总结已有的执行记录。本次不能调用工具；依据现有对话与检查点说明已完成、失败和未验证的事项，证据不足时明确指出，不要补造执行结果。');
       const businessTypeConversation = isNeoConnector && shouldLoadBusinessTypeSkill(latestUserContent,
@@ -1817,7 +1818,7 @@ ${mcpInfoText}
         ? `${cleanBaseUrl}/chat/completions`
         : `${cleanBaseUrl}/v1/chat/completions`;
 
-      if (textMask && recentMessages.some(msg => msg.attachments?.some(file => file.contentKind === 'image'))) {
+      if (textMask && latestUserMessage?.attachments?.some(file => file.contentKind === 'image')) {
         throw new Error('文本遮罩不能识别图片中的敏感信息。请移除图片或关闭文本遮罩后重试。');
       }
       const visionImages = new VisionImageLoader();
@@ -1845,7 +1846,7 @@ ${mcpInfoText}
             let text = msg.content || '';
             // 参照 DSH 规范结构化注入挂载/引用的文件信息，带绝对路径与相对路径，赋予大模型分析与精准编辑能力
             if (msg.attachments && msg.attachments.length > 0) {
-              const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
+              const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, msg === latestUserMessage && file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
               text = `${fileDescriptions}\n\n${text}`;
             }
 
@@ -1856,8 +1857,7 @@ ${mcpInfoText}
               text = `${refDesc}\n\n${text}`;
             }
 
-            const images = (msg.attachments || []).filter(file => file.contentKind === 'image' && file.fullPath)
-              .map(file => openAiImagePart(visionImages.load(file.fullPath!)));
+            const images = msg === latestUserMessage ? inlineImagePaths(msg.attachments).map(file => openAiImagePart(visionImages.load(file))) : [];
             conversationHistory.push({ role: 'user', content: images.length ? [{ type: 'text', text }, ...images] : text });
           } else if (msg.role === 'assistant') {
             // 关键修复：如果前序轮次调用过工具，严格按照标准时序复原：assistant(tool_calls) -> tool(result) -> assistant(content)！
@@ -2811,11 +2811,12 @@ ${currentCompactionSummary.summary}
         { role: 'model', parts: [{ text: '已读取前序检查点，继续处理后续请求。' }] });
     }
 
+    const latestUserMessage = recentMessages.findLast(message => message.role === 'user');
     for (const msg of recentMessages) {
       if (msg.role === 'user') {
         let text = msg.content || '';
         if (msg.attachments && msg.attachments.length > 0) {
-          const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
+          const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, msg === latestUserMessage && file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
           text = `${fileDescriptions}\n\n${text}`;
         }
 
@@ -2826,8 +2827,7 @@ ${currentCompactionSummary.summary}
           text = `${refDesc}\n\n${text}`;
         }
 
-        const images = (msg.attachments || []).filter(file => file.contentKind === 'image' && file.fullPath)
-          .map(file => geminiImagePart(visionImages.load(file.fullPath!)));
+        const images = msg === latestUserMessage ? inlineImagePaths(msg.attachments).map(file => geminiImagePart(visionImages.load(file))) : [];
         geminiContents.push({ role: 'user', parts: [{ text }, ...images] });
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {

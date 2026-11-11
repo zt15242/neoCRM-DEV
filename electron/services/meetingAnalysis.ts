@@ -9,11 +9,85 @@ const SUMMARY_SCHEMA = `{"summary":{"executiveSummary":"分段概述会议目的
 const stringList = (items: unknown): string[] => Array.isArray(items) ? items.filter((v): v is string => typeof v === 'string' && !!v.trim()) : [];
 const rows = (items: unknown): any[] => Array.isArray(items) ? items.filter(v => v && typeof v === 'object' && !Array.isArray(v)) : [];
 const str = (value: unknown, fallback = ''): string => typeof value === 'string' ? value : fallback;
+const SPEECH_SCHEMA = `{"speechArt":{"overallAtmosphere":"efficient|collaborative|contentious|deliberative|instructive","atmosphereLabel":"沟通氛围","atmosphereScore":75,"speakerProfiles":[{"speakerId":"输入中的发言人ID","speakerName":"输入中的发言人名称","styleType":"decisive|analytical|collaborative|critical|action_driven","styleLabel":"沟通风格","toneDominance":"措辞特征","questionRatio":20,"assertivenessScore":70,"empathyScore":70,"clarityScore":70,"strengths":[],"improvementAreas":[]}],"coachingSuggestions":[{"targetSpeaker":"发言人名称","scenario":"具体场景","observation":"转写依据","suggestion":"改进建议"}],"cadenceSummary":"基于转写的沟通节奏观察"}}`;
+
+function parseJson(content: string, label: string): any {
+  const clean = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(clean); }
+  catch { throw new Error(`模型返回的${label}不是完整 JSON，可能已被输出额度截断，请重试或更换模型`); }
+}
+
+export async function analyzeMeetingSpeechArt(
+  meeting: MeetingRecord, request: AnalysisRequest, onProgress: (message: string) => void = () => {},
+): Promise<SpeechArtAnalysis> {
+  const chunks = splitMeetingTranscript(meeting);
+  if (!chunks.length) throw new Error('会议没有有效转写文本，请先完成转写');
+  const speakers = new Map(meeting.speakers.map(s => [s.id, s.name]));
+  for (const segment of meeting.segments) {
+    if (segment.text.trim() && segment.speakerId && segment.speakerName) speakers.set(segment.speakerId, segment.speakerName);
+  }
+  const header = `会议：${meeting.title}\n发言人：${JSON.stringify([...speakers])}\n`;
+  let input = chunks[0];
+  if (chunks.length > 1) {
+    const extract = async (prompt: string, source: string) => {
+      const parsed = parseJson(await request(`${EVIDENCE_RULES}\n${prompt} 输出 {"evidence":["发言人、时间和沟通观察"]}。`, source, 2500), '语艺分析材料');
+      if (!Array.isArray(parsed?.evidence)) throw new Error('模型没有返回有效的语艺分析材料');
+      return stringList(parsed.evidence).join('\n');
+    };
+    let notes: string[] = [];
+    for (const [i, chunk] of chunks.entries()) {
+      onProgress(`正在提取语艺证据 ${i + 1}/${chunks.length} 段`);
+      notes.push(await extract('提取可用于沟通分析的发言证据，保留具体措辞、时间、发言人和互动对象。', chunk));
+    }
+    for (let level = 0; notes.join('\n').length > 26000; level++) {
+      if (level >= 6) throw new Error('语艺分析材料过长，模型未能完成有效合并');
+      const merged: string[] = [];
+      for (let i = 0; i < notes.length; i += 2) {
+        merged.push(await extract('合并这些分段证据，去掉重复描述并保留不同发言人的关键观察。', notes.slice(i, i + 2).join('\n')));
+      }
+      notes = merged;
+    }
+    input = notes.join('\n');
+    if (!input.trim()) throw new Error('未提取到有效沟通证据，请检查会议转写');
+  }
+  onProgress('正在生成语艺沟通画像');
+  const parsed = parseJson(await request(
+    `${EVIDENCE_RULES}\n只分析沟通方式，必须返回非空 speechArt 及有文本证据的 speakerProfiles。使用转写中的发言人，不推测身份、声学语气或心理状态。评分为文本观察参考，数值为 0 到 100。每项枚举只选一个值。结构：${SPEECH_SCHEMA}`,
+    header + input, 6000,
+  ), '语艺画像');
+  const art = parsed?.speechArt;
+  const normalized = parseMeetingSpeechArt(art);
+  if (normalized) {
+    const seen = new Set<string>();
+    normalized.speakerProfiles = normalized.speakerProfiles.flatMap(profile => {
+      const matches = [...speakers].filter(([, name]) => name === profile.speakerName);
+      const id = speakers.has(profile.speakerId) ? profile.speakerId : matches.length === 1 ? matches[0][0] : undefined;
+      if (!id || seen.has(id)) return [];
+      seen.add(id);
+      return [{ ...profile, speakerId: id, speakerName: speakers.get(id)! }];
+    });
+  }
+  if (!normalized || !normalized.speakerProfiles.length) throw new Error('模型没有返回有效的语艺画像，请重试或更换模型');
+  return normalized;
+}
+
+function parseMeetingSpeechArt(art: any): SpeechArtAnalysis | undefined {
+  if (!art || !str(art.cadenceSummary).trim() || !Array.isArray(art.speakerProfiles)) return undefined;
+  return {
+    ...art, atmosphereLabel: str(art.atmosphereLabel, '基于文本的沟通观察'),
+    speakerProfiles: rows(art.speakerProfiles).filter(p => str(p.speakerName).trim()).map((p, i) => ({
+      ...p, speakerId: str(p.speakerId, `speaker_${i}`), strengths: stringList(p.strengths),
+      improvementAreas: stringList(p.improvementAreas), styleLabel: str(p.styleLabel), toneDominance: str(p.toneDominance),
+    })),
+    coachingSuggestions: rows(art.coachingSuggestions).map(c => ({
+      targetSpeaker: str(c.targetSpeaker), scenario: str(c.scenario), observation: str(c.observation), suggestion: str(c.suggestion),
+    })),
+    speakerRadars: undefined, interactionFlows: undefined,
+  };
+}
 
 export function parseMeetingAnalysis(content: string): { summary: MeetingSummary; speechArt?: SpeechArtAnalysis } {
-  const clean = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  let parsed: any;
-  try { parsed = JSON.parse(clean); } catch { throw new Error('模型返回的纪要不是完整 JSON，可能已被输出额度截断，请重试或更换模型'); }
+  const parsed = parseJson(content, '纪要');
   const s = parsed?.summary;
   if (!s || !str(s.executiveSummary).trim() || !Array.isArray(s.topics)) throw new Error('模型没有返回有效的会议摘要及议题，请重新生成');
   const summary: MeetingSummary = {
@@ -32,17 +106,7 @@ export function parseMeetingAnalysis(content: string): { summary: MeetingSummary
     children: summary.topics.map(t => ({ id: t.id, title: t.title, type: 'topic', timeRange: t.timeRange,
       children: t.keyPoints.map((p, i) => ({ id: `${t.id}_${i}`, title: p, type: 'topic' })) })),
   };
-  let speechArt: SpeechArtAnalysis | undefined;
-  const art = parsed.speechArt;
-  if (art && str(art.cadenceSummary).trim() && Array.isArray(art.speakerProfiles)) {
-    speechArt = {
-      ...art, atmosphereLabel: str(art.atmosphereLabel, '基于文本的沟通观察'),
-      speakerProfiles: rows(art.speakerProfiles).filter(p => str(p.speakerName).trim()).map((p, i) => ({ ...p, speakerId: str(p.speakerId, `speaker_${i}`), strengths: stringList(p.strengths), improvementAreas: stringList(p.improvementAreas), styleLabel: str(p.styleLabel), toneDominance: str(p.toneDominance) })),
-      coachingSuggestions: rows(art.coachingSuggestions).map(c => ({ targetSpeaker: str(c.targetSpeaker), scenario: str(c.scenario), observation: str(c.observation), suggestion: str(c.suggestion) })),
-      speakerRadars: undefined, interactionFlows: undefined,
-    };
-  }
-  return { summary, speechArt };
+  return { summary, speechArt: parseMeetingSpeechArt(parsed.speechArt) };
 }
 
 /** Every character is assigned to a chunk; even an unusually long individual segment is split. */

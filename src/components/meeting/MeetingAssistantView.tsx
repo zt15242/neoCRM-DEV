@@ -372,9 +372,10 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
   };
 
   // 7. 触发大模型会议总结与语艺分析；实时更新使用防抖且保证串行
-  const triggerSummarize = async (meetingId?: string, options?: { live?: boolean; silent?: boolean }) => {
+  const triggerSummarize = async (meetingId?: string, options?: { live?: boolean; silent?: boolean; kind?: 'speech_art' }) => {
     const targetId = meetingId || activeMeetingId;
     if (!targetId) return;
+    const speechOnly = options?.kind === 'speech_art';
     if (!window.neoApi?.meetingSummarizeMeeting) {
       if (!options?.live) updateAudioProcessing(targetId, { stage: 2, label: '未检测到会议总结接口', tone: 'error' });
       return;
@@ -390,7 +391,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
             fileName: previous?.fileName || meetings.find((meeting) => meeting.id === targetId)?.audioFileName,
             stage: 2,
             startedAt: previous?.tone === 'info' ? previous.startedAt : Date.now(),
-            label: '正在生成会议总结、待办与图表...',
+            label: speechOnly ? '正在生成语艺沟通画像...' : '正在生成会议总结、待办与图表...',
             tone: 'info',
           },
         };
@@ -407,16 +408,16 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
         }
       } catch { /* The final request still reports errors. */ }
     }, 2000);
-    if (!options?.silent) showToast?.('info', options?.live ? '正在根据最新转写片段更新会议摘要...' : '大模型正在提炼会议决策、待办、语艺画像与图表...');
+    if (!options?.silent) showToast?.('info', speechOnly ? '正在生成语艺沟通画像...' : options?.live ? '正在根据最新转写片段更新会议摘要...' : '大模型正在提炼会议决策、待办与图表...');
 
     try {
-      const updated = await window.neoApi.meetingSummarizeMeeting(targetId, { live: options?.live });
+      const updated = await window.neoApi.meetingSummarizeMeeting(targetId, { live: options?.live, kind: options?.kind });
       summaryPending = false;
       setMeetings((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (!options?.live) {
-        updateAudioProcessing(targetId, { stage: 3, label: '音频转写与会议分析已完成', tone: 'success' });
+        updateAudioProcessing(targetId, { stage: 3, label: speechOnly ? '语艺沟通画像已生成' : '音频转写与会议分析已完成', tone: 'success' });
       }
-      if (!options?.silent) showToast?.('success', `会议纪要已生成，共 ${updated.summary?.topics.length || 0} 个议题`);
+      if (!options?.silent) showToast?.('success', speechOnly ? '语艺沟通画像已生成' : `会议纪要已生成，共 ${updated.summary?.topics.length || 0} 个议题`);
     } catch (err: any) {
       summaryPending = false;
       try {
@@ -424,9 +425,9 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
         if (current) setMeetings(prev => prev.map(m => m.id === targetId ? current : m));
       } catch { /* Keep the original analysis error visible. */ }
       if (!options?.live) {
-        updateAudioProcessing(targetId, { label: `总结失败：${err?.message || 'AI 分析服务异常'}`, tone: 'error' });
+        updateAudioProcessing(targetId, { label: err?.message || 'AI 分析服务异常', tone: 'error' });
       }
-      if (!options?.silent) showToast?.('error', `大模型总结失败: ${err.message}`);
+      if (!options?.silent) showToast?.('error', err?.message || 'AI 分析服务异常');
       else console.warn('[MeetingAssistantView] 实时总结失败:', err);
     } finally {
       summaryPending = false;
@@ -964,7 +965,7 @@ export const MeetingAssistantView: React.FC<MeetingAssistantViewProps> = ({
                   {rightTab === 'speech_art' && (
                     <MeetingSpeechArtPane
                       speechArt={activeMeeting.speechArt}
-                      onTriggerSummarize={() => triggerSummarize()}
+                      onTriggerSummarize={() => triggerSummarize(undefined, { kind: 'speech_art' })}
                       isSummarizing={isSummarizing}
                     />
                   )}

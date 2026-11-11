@@ -15,7 +15,7 @@ async function load(entryPoint, plugins = []) {
   return module.exports;
 }
 try {
-  const { analyzeMeeting, splitMeetingTranscript, parseMeetingAnalysis } = await load('electron/services/meetingAnalysis.ts');
+  const { analyzeMeeting, analyzeMeetingSpeechArt, splitMeetingTranscript, parseMeetingAnalysis } = await load('electron/services/meetingAnalysis.ts');
   const { formatMeetingMarkdown } = await load('shared/meetingMarkdown.ts');
   const { saveMeetingDocument } = await load('electron/services/meetingDocument.ts');
   const { selectMeetingModel, readMeetingModelStream, requestMeetingModelText } = await load('electron/services/meetingModelClient.ts');
@@ -234,6 +234,38 @@ try {
   assert.equal(completed.summary.actionItems[0].completed, true);
   assert.deepEqual(completed.charts.sentimentTrajectory, []);
   assert.equal(completed.charts.milestoneGantt, undefined);
+  const portrait = { speechArt: {
+    overallAtmosphere: 'analytical', atmosphereLabel: '审慎讨论', atmosphereScore: 75,
+    cadenceSummary: '发言围绕接口权限逐项核对。',
+    speakerProfiles: [{ speakerId: 's1', speakerName: '张工', styleType: 'analytical', strengths: ['逐项确认'] }],
+  } };
+  let returnPortrait = true;
+  const artService = new MeetingService({
+    getAiConfig: () => ({ providers: [provider], settings: { defaultProviderId: 'workbuddy', defaultModelId: 'model-a' } }),
+    requestMeetingAnalysisText: async (p, model, system, input) => {
+      assert.match(system, /只分析沟通方式/);
+      assert.match(input, /唯一标记0/);
+      return JSON.stringify(returnPortrait ? portrait : { speechArt: null });
+    },
+  });
+  const withArt = await artService.summarizeMeeting(small.id, { kind: 'speech_art' });
+  assert.equal(withArt.speechArt.speakerProfiles[0].speakerId, 's1');
+  assert.deepEqual(withArt.summary, JSON.parse(JSON.stringify(completed.summary)));
+  assert.deepEqual(withArt.charts, JSON.parse(JSON.stringify(completed.charts)));
+  returnPortrait = false;
+  await assert.rejects(() => artService.summarizeMeeting(small.id, { kind: 'speech_art' }), /没有返回有效的语艺画像/);
+  assert.deepEqual(artService.getMeetingById(small.id).speechArt, JSON.parse(JSON.stringify(withArt.speechArt)));
+  assert.deepEqual((await successful.summarizeMeeting(small.id)).speechArt, JSON.parse(JSON.stringify(withArt.speechArt)));
+  const observedChunks = [];
+  await analyzeMeetingSpeechArt(meeting, async (system, input) => {
+    if (system.includes('只分析沟通方式')) {
+      assert.match(input, /尾段证据/);
+      return JSON.stringify(portrait);
+    }
+    observedChunks.push(input);
+    return JSON.stringify({ evidence: [input.includes('唯一标记578；') ? '尾段证据' : '其他时段证据'] });
+  });
+  assert.equal(observedChunks.length, chunks.length);
   console.log('会议纪要测试通过：579 段全文覆盖、超长单段、失败保留、JSON 校验、完整复制文档、实际文件保存/取消/失败、WorkBuddy SSE、四种模型协议、网关路径兼容、404 分类和错误脱敏。');
 } finally {
   await fs.rm(temporary, { recursive: true, force: true });
