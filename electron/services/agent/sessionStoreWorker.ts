@@ -107,12 +107,13 @@ function get(id: string, before?: number, limit?: number) {
   if (session.messages.length !== end - offset) throw new Error('会话消息数量不一致，请检查历史数据库');
   return { session, offset, nextBefore: offset > 0 ? offset : null, total };
 }
-function save(session: AiChatSession, options: { fromAgent?: boolean; active?: boolean } = {}) {
+function save(session: AiChatSession, options: { fromAgent?: boolean; active?: boolean; allowOrphanAgent?: boolean } = {}) {
   if (typeof session?.id !== 'string' || !session.id) throw new Error('缺少有效会话 ID');
   if (db.prepare('SELECT id FROM tombstones WHERE id=?').get(session.id)) throw new Error('会话已删除，已拒绝迟到的保存请求');
   const stored = db.prepare('SELECT metadata,message_count,ordinal FROM sessions WHERE id=?').get(session.id) as any;
   const previous = stored ? JSON.parse(stored.metadata) as AiChatSession : undefined;
-  if (!stored && session.agentRun && !db.prepare('SELECT id FROM sessions WHERE id=?').get(session.agentRun.createdBySessionId)) throw new Error('主会话已删除，代理未创建');
+  if (!stored && session.agentRun && !options.allowOrphanAgent
+    && !db.prepare('SELECT id FROM sessions WHERE id=?').get(session.agentRun.createdBySessionId)) throw new Error('主会话已删除，代理未创建');
   let keepMessages = session.messagesLoaded === false || (!options.fromAgent && !!previous?.agentRun);
   if (session.messagesLoaded === false && !stored) throw new Error('会话摘要不能作为完整会话保存');
   const input = session.messagesLoaded === false ? { ...previous!, title: session.title, pinned: session.pinned, updatedAt: session.updatedAt, messages: [] } : session;
@@ -201,13 +202,22 @@ async function initializeDatabase() {
         if (await fileHash(backup) !== digest) throw new Error('旧会话备份校验失败，迁移已停止');
         info.backupPath = backup;
       }
+      const legacySessionIds = new Set<string>();
+      if (info.backupPath) for await (const session of legacySessions(info.backupPath)) {
+        validate(session);
+        if (legacySessionIds.has(session.id)) throw new Error(`旧历史存在重复会话 ID：${session.id}`);
+        legacySessionIds.add(session.id);
+      }
       db = new DatabaseSync(temp); configure(db); schema(db);
       db.exec('BEGIN IMMEDIATE');
       try {
-        if (info.backupPath) for await (const session of legacySessions(info.backupPath)) {
-          validate(session);
-          if (db.prepare('SELECT id FROM sessions WHERE id=?').get(session.id)) throw new Error(`旧历史存在重复会话 ID：${session.id}`);
-          const saved = save(session);
+        if (info.backupPath) for await (const legacy of legacySessions(info.backupPath)) {
+          let session = legacy;
+          if (session.agentRun && !legacySessionIds.has(session.agentRun.createdBySessionId)) {
+            const { agentRun: _orphanedRun, ...detached } = session;
+            session = detached;
+          }
+          const saved = save(session, { allowOrphanAgent: true });
           if (JSON.stringify({ ...metadata(session), messages: session.messages }) !== JSON.stringify({ ...metadata(saved), messages: saved.messages })) throw new Error(`会话 ${session.id} 迁移校验不一致`);
           info.migratedSessions++; info.migratedMessages += session.messages.length;
         }

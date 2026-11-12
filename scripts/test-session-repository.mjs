@@ -100,6 +100,23 @@ try {
   await close(competing);
   console.log('PASS migration: 206 sessions/1,405 messages, exact backup, checkpoint/tool roundtrip, paged reads, large resource, incremental rows, concurrent saves and exclusive open');
 
+  const orphanDirectory = path.join(root, 'orphan-agent-migration'); await fs.mkdir(orphanDirectory);
+  const migrationParent = session('migration-parent');
+  const ownedChild = { ...session('owned-child', 2), agentRun: { kind: 'subagent', createdBySessionId: migrationParent.id,
+    parentSessionId: migrationParent.id, status: 'completed', requestId: 'owned-run', messageId: 'owned-answer' } };
+  const orphanedChild = { ...session('orphaned-child', 3), agentRun: { kind: 'subagent', createdBySessionId: 'deleted-parent',
+    parentSessionId: 'deleted-parent', status: 'completed', requestId: 'orphan-run', messageId: 'orphan-answer' } };
+  await fs.writeFile(path.join(orphanDirectory, 'neocrm_ai_sessions.json'), JSON.stringify([ownedChild, orphanedChild, migrationParent]));
+  const orphanMigration = repository(orphanDirectory);
+  assert.equal((await orphanMigration.initialize()).migratedSessions, 3);
+  assert.equal((await orphanMigration.get(ownedChild.id)).agentRun.createdBySessionId, migrationParent.id,
+    'migration preserves agent ownership when the parent appears later in the legacy file');
+  const recoveredOrphan = await orphanMigration.get(orphanedChild.id);
+  assert.equal(recoveredOrphan.agentRun, undefined, 'a deleted parent detaches the child from live agent ownership');
+  assert.deepEqual(recoveredOrphan.messages, orphanedChild.messages, 'orphan detachment retains all conversation history');
+  await close(orphanMigration);
+  console.log('PASS migration recovers orphan agent history and preserves children whose parent appears later');
+
   const parent = session('parent');
   const child = { ...session('child', 2), agentRun: { kind: 'subagent', createdBySessionId: parent.id, status: 'running', requestId: 'r', messageId: 'child-1' } };
   child.messages[1].toolCalls = [{ id: 'in-flight', name: 'write', arguments: {}, status: 'running' }];
