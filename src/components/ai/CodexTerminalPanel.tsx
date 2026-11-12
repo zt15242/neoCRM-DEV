@@ -152,7 +152,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
   const [activeDiffContent, setActiveDiffContent] = useState<string>('');
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(64);
+  const [panelWidth, setPanelWidth] = useState(44);
   const hasOpened = useRef(false);
   if (isOpen) hasOpened.current = true;
   const resizePanel = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -160,7 +160,7 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
     const bounds = handle.parentElement?.parentElement?.getBoundingClientRect();
     if (!bounds) return;
     handle.setPointerCapture(event.pointerId);
-    const move = (pointer: PointerEvent) => setPanelWidth(Math.max(45, Math.min(74, (pointer.clientX - bounds.left) / bounds.width * 100)));
+    const move = (pointer: PointerEvent) => setPanelWidth(Math.max(32, Math.min(70, (bounds.right - pointer.clientX) / bounds.width * 100)));
     const end = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end); };
     handle.addEventListener('pointermove', move);
     handle.addEventListener('pointerup', end);
@@ -497,9 +497,9 @@ export const CodexTerminalPanel: React.FC<CodexTerminalPanelProps> = ({
       style={{ '--workbench-width': `${panelWidth}%` } as React.CSSProperties}
     >
       <div className="workspace-resize" role="separator" tabIndex={0} aria-label="调整代码区宽度"
-        aria-orientation="vertical" aria-valuemin={45} aria-valuemax={74} aria-valuenow={panelWidth}
+        aria-orientation="vertical" aria-valuemin={32} aria-valuemax={70} aria-valuenow={panelWidth}
         onPointerDown={resizePanel} onKeyDown={event => {
-          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth(value => Math.max(45, Math.min(74, value + (event.key === 'ArrowLeft' ? -3 : 3)))); }
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth(value => Math.max(32, Math.min(70, value + (event.key === 'ArrowLeft' ? 3 : -3)))); }
         }} />
       {/* 顶部标签栏 */}
       <div className="workspace-panel-tabs h-10 border-b border-slate-200/80 bg-slate-50/80 px-2 flex items-center justify-between shrink-0">

@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { sendModelText } from './fixtures/model-gateway-responses.mjs';
 
 const require = createRequire(import.meta.url);
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'neocrm-meeting-test-'));
@@ -105,11 +106,10 @@ try {
     res.setHeader('content-type', 'application/json');
     if (respond) return respond(req, res);
     const pathname = new URL(req.url, 'http://localhost').pathname;
-    const response = pathname.endsWith('/messages') ? { content: [{ type: 'text', text: '消息协议' }] }
-      : pathname.endsWith('/responses') ? { output: [{ content: [{ type: 'output_text', text: '响应协议' }] }] }
-      : req.url.includes('generateContent') ? { candidates: [{ content: { parts: [{ text: '原生协议' }] } }] }
-      : { choices: [{ message: { content: '补全协议' } }] };
-    res.end(JSON.stringify(response));
+    if (pathname.endsWith('/messages')) sendModelText(res, 'anthropic', '消息协议');
+    else if (pathname.endsWith('/responses')) sendModelText(res, 'responses', '响应协议');
+    else if (req.url.includes('streamGenerateContent')) sendModelText(res, 'gemini', '原生协议');
+    else sendModelText(res, 'chat', '补全协议');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
@@ -128,7 +128,7 @@ try {
       ]) {
         const before = requests.length;
         assert.equal(await call({ baseUrl: origin + basePath, protocol }), expected);
-        assert.equal(requests.at(-1).url, expectedRoute);
+        assert.equal(requests.at(-1).url, protocol === 'google-gemini' ? expectedRoute.replace(':generateContent', ':streamGenerateContent') + '?alt=sse' : expectedRoute);
         assert.equal(requests.length - before, 1, 'complete endpoints must not be duplicated or probed');
         if (protocol === 'google-gemini') {
           assert.equal(requests.at(-1).headers['x-goog-api-key'], custom.apiKey);
@@ -147,7 +147,7 @@ try {
       ['/compatible-mode/v1', 'openai-completions', '/compatible-mode/v1/chat/completions'],
       ['/v1beta/openai', 'google-gemini', '/v1beta/openai/chat/completions'],
       ['/v1beta/openai/chat/completions', 'google-gemini', '/v1beta/openai/chat/completions'],
-      ['/v1beta/models/previous-model:generateContent', 'google-gemini', '/v1beta/models/model-a:generateContent'],
+      ['/v1beta/models/previous-model:generateContent', 'google-gemini', '/v1beta/models/model-a:streamGenerateContent?alt=sse'],
     ]) {
       await call({ baseUrl: origin + basePath, protocol });
       assert.equal(requests.at(-1).url, expectedRoute);
@@ -162,7 +162,7 @@ try {
     ]) {
       respond = (req, res) => {
         if (req.url === routes[0]) { res.statusCode = 404; return res.end('<html>Cannot POST</html>'); }
-        res.end(JSON.stringify({ choices: [{ message: { content: '路由兼容成功' } }] }));
+        sendModelText(res, 'chat', '路由兼容成功');
       };
       const before = requests.length;
       assert.equal(await call({ baseUrl: origin + prefix }), '路由兼容成功');

@@ -6,7 +6,11 @@ node_modules/
 dist/
 dist-electron/
 release/
+public/opencode-ui/
 resources/ffmpeg/
+resources/neo-cli/darwin-*/
+resources/neo-cli/win32-*/
+resources/neo-cli/linux-*/
 
 # Logs
 npm-debug.log*

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "electron/services/agent/**/*.ts",
+    "electron/services/agentSessionService.ts",
+    "electron/services/meetingModelClient.ts",
+    "electron/services/workspaceMutationService.ts",
+    "electron/services/projectEditorService.ts"
+  ]
+}

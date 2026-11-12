@@ -13,6 +13,8 @@ export function appendToolArguments(previous: string, incoming: unknown): string
 
 export function toolArgumentError(name: string): string {
   const base = '工具参数 JSON 不完整或无效，尚未执行工具。';
+  if (name === 'bash') return base + 'bash 必须提供完整的 JSON 对象和 command 字符串；请缩短命令、不要输出 Markdown 围栏，并在重试时只重新给出完整参数。';
+  if (name === 'skill') return base + 'skill 必须提供 name 字符串；resource、script 和 args 需符合技能工具定义。请只重新给出完整 JSON 参数。';
   if (name === 'browser_control') return base + 'browser_control 必须提供完整 JSON 对象和 action；元素操作需要最近快照返回的 ref，tabId 使用 tabs 返回的标签页 ID。请重新生成本次调用参数，不要重复已成功的点击或输入。';
   if (name === 'write') return base + 'write 必须提供 file_path 和完整 content；输出被截断时请缩短或拆分 content 后重新调用。';
   if (name === 'run_code') return base + 'run_code 必须提供完整 code；输出被截断时请缩短或拆分 code 后重新调用。';

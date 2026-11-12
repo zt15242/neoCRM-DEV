@@ -8,8 +8,8 @@ interface Props {
   projectPath: string;
   projectName: string;
   refreshVersion: string;
-  isPullingCode: boolean;
-  onPullProjectCode: () => void;
+  isPullingCode?: boolean;
+  onPullProjectCode?: () => void;
   onPreviewFile: (name: string, path: string) => void;
   onOpenFile: (path: string) => void;
   onRevealFile: (path: string) => void;
@@ -195,10 +195,10 @@ export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, ref
           className="w-full pl-7 pr-7 py-1 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:border-amber-400" />
         {searchText && <button title="清除搜索" onClick={() => setSearchText('')} className="absolute right-1 top-1 p-0.5 text-slate-400 hover:text-slate-700"><X className="w-3.5 h-3.5" /></button>}
       </div>
-      <button onClick={onPullProjectCode} disabled={isPullingCode || !projectPath} title="拉取当前 CRM 环境的代码与元数据"
+      {onPullProjectCode && <button onClick={onPullProjectCode} disabled={isPullingCode || !projectPath} title="拉取当前 CRM 环境的代码与元数据"
         className="p-1.5 rounded-lg border border-slate-200 hover:bg-amber-50 text-slate-500 hover:text-amber-600 cursor-pointer shrink-0 disabled:opacity-50">
         <Download className={`w-3.5 h-3.5 ${isPullingCode ? 'animate-bounce text-amber-600' : ''}`} />
-      </button>
+      </button>}
       <button onClick={() => void refresh()} disabled={busy || !projectPath} title="刷新目录，保留展开位置"
         className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-500 cursor-pointer shrink-0 disabled:opacity-50">
         <RefreshCw className={`w-3.5 h-3.5 ${busy ? 'animate-spin text-amber-600' : ''}`} />
@@ -224,7 +224,7 @@ export const ProjectFileTree: React.FC<Props> = ({ projectPath, projectName, ref
       {!rows.length ? <div className="py-12 text-center text-xs text-slate-400">
         {busy ? <span className="inline-flex items-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" />{query ? '正在搜索…' : '正在读取目录…'}</span>
           : rootError ? '请重试读取目录' : !projectPath ? '请先选择项目目录' : query ? '没有找到匹配的文件或目录' : '此目录为空'}
-        {!busy && !rootError && !query && projectPath && <button onClick={onPullProjectCode} disabled={isPullingCode}
+        {!busy && !rootError && !query && projectPath && onPullProjectCode && <button onClick={onPullProjectCode} disabled={isPullingCode}
           className="mx-auto mt-3 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs flex items-center gap-1.5 cursor-pointer">
           <Download className={`w-3.5 h-3.5 ${isPullingCode ? 'animate-bounce' : ''}`} />
           {isPullingCode ? '正在拉取代码与元数据…' : '拉取代码与元数据'}

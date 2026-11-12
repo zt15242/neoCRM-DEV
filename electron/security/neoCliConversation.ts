@@ -59,19 +59,19 @@ export function assertNeoConnectorToolAccess(name: string, args: Record<string, 
 }
 
 export const NEO_CLI_FIRST_ROUTING = `【销售易功能统一 CLI 优先路由】
-对当前销售易连接器的每项租户操作，先判断 CLI 1.0.8 是否有对应命令。存在时先在当前工作区执行实际 neo 命令，再使用结果；CLI 命令失败、超时或返回无效结果后，才允许调用对应的旧连接器工具作为兼容回退。回退必须报告 CLI 命令、失败原因和最终数据来源，不能把连接器回退描述成 CLI 成功。CLI 成功返回空数据是有效结果，不得回退。
+对当前销售易连接器的每项租户操作，先判断 CLI 1.1.2 是否有对应命令。存在时先在当前工作区执行实际 neo 命令，再使用结果；CLI 命令失败、超时或返回无效结果后，才允许调用对应的旧连接器工具作为兼容回退。回退必须报告 CLI 命令、失败原因和最终数据来源，不能把连接器回退描述成 CLI 成功。CLI 成功返回空数据是有效结果，不得回退。
 
 CLI 已覆盖的功能包括：
 - 实体列表与字段结构：neo list object；neo describe object --api-key <apiKey>。
 - 审批流：neo list approvalprocess；neo retrieve approvalprocess --definition-id <id>。
 - 页面布局、通用选项集、校验/查重规则、UI 组件、NEX、后端代码包：使用对应的 neo list / describe / retrieve / generate / deploy / enable / disable 命令。
-- 自动流程或指定元数据类型若 CLI 1.0.8 没有对应子命令，则使用既有连接器流程适配器，并标明 CLI 不覆盖该能力。
+- 自动流程或指定元数据类型若 CLI 1.1.2 没有对应子命令，则使用既有连接器流程适配器，并标明 CLI 不覆盖该能力。
 
-CLI 1.0.8 没有普通业务记录 XOQL 查询、记录创建/更新/删除或打印模板查询命令。这些操作直接使用现有连接器工具；不要虚构 neo query 或 neo data 命令。
+CLI 1.1.2 支持只读业务数据查询：neo query --sql <XOQL SELECT> --json；字段敏感信息仅在用户明确需要时加 --include-sensitive。记录创建/更新/删除和打印模板查询继续使用现有连接器工具；不要虚构 neo data 命令。
 
 用户提供销售易 API 路径/完整 URL 并要求执行时，使用 execute_open_api；完整 URL 的原域名由宿主自动替换为当前连接器实例。/rest/ 接口由宿主使用连接器 OAuth Token，/admin/ 后台接口由宿主使用后台会话 Cookie（打印模板上传属于后台接口）；不要要求用户提供或读取 token/Cookie，不要用 bash/curl 手动请求。写请求先展示租户、方法、路径、查询参数和请求体，获得明确确认后再执行。
 
-业务类型查询、创建和更新由 list_business_types / deploy_business_type 专用工具处理：CLI 1.0.8 没有对应写入命令，宿主复用当前连接器授权调用 Metadata API 并回读，不要求用户去后台操作。不要虚构 neo deploy business-type，也不要把 enableBusitype 开关或子表单布局配置当作创建业务类型。
+业务类型可使用 neo list busitype --entity <实体> --json 查询，neo deploy busitype --entity <实体> --api-key <业务类型> --dry-run 预演；也可使用现有 list_business_types / deploy_business_type 专用工具。写入前应核对 CLI 帮助和本地 source，并遵守确认门禁；不要把 enableBusitype 开关或子表单布局配置当作创建业务类型。
 
 销售易自定义对象与字段写入必须使用 source-driven 的 neo generate / neo deploy 流程。禁止用旧连接器 create_custom_entity / create_custom_field 直写或在 CLI 写入失败后降级直写；先检查 source 与 dry-run，并遵守部署确认门禁。
 
@@ -79,7 +79,7 @@ CLI 1.0.8 没有普通业务记录 XOQL 查询、记录创建/更新/删除或�
 
 export const NEO_NEX_CLI_ROUTING = `【NEX 查询与源码获取执行通道】
 NEX 必须按已加载的 neo-cli-usage 和 neo-nex-dev 技能使用当前工作区的 neo CLI。禁止调用旧 list_nex_extensions / get_nex_extension_code / generate_nex_extension / deploy_nex_extension，也不能探测旧 BFF 接口或用本地 src/nex 扫描冒充租户结果。
-通过 bash（PTC 用 tools.bash）先执行 neo list nex --help 与 neo retrieve nex --help 核实参数，再执行 neo list nex 查询真实 codeName、终端和版本。CLI 1.0.8 的这两个命令不支持 --json。
+通过 bash（PTC 用 tools.bash）先执行 neo list nex --help 与 neo retrieve nex --help 核实参数，再执行 neo list nex 查询真实 codeName、终端和版本。
 用户只要求“列出/有哪些”时，报告真实远端列表即可；用户说“获取/拉取/下载 NEX”时，必须进一步执行 neo retrieve nex -n <真实 codeName> --nex-version <列表中的 v1.0 或 v2.0>，或用 --object <真实对象 apiKey> 拉取该对象下所有 NEX，并核实命令返回的本地源码路径。单段命令默认 v2.0，列表标记 v1.0 时必须显式指定。泛指“获取 NEX”时，先 list，再按返回的真实范围拉取；不能只列目录就声称源码已获取。
 若 API 返回资源不存在（1010003）、权限不足或认证错误，如实说明 CLI 返回与未完成范围；禁止静默改成展示本地草稿并声称查询成功。没有返回任何扩展时，说明远端返回为空，不能编造代码。
 本地源码目录以 neo-project.json 的 sourceDir 和 CLI 实际输出为准。上传草稿、发布、停用仍须用户明确授权；查询与源码拉取无需重新登录。`;
@@ -101,7 +101,7 @@ export function shouldLoadBusinessTypeSkill(latestUserContent: string, recentCon
 
 export const NEO_BUSINESS_TYPE_ROUTING = `【销售易业务类型创建与部署】
 当前已加载 neo-entity-management。用户要求查询、创建、修改或部署业务类型时，主动调用 list_business_types 查询真实目标对象的业务类型。创建业务类型与启用对象的 enableBusitype、配置业务类型子表单是不同操作。
-CLI 1.0.8 没有业务类型写入命令，使用宿主 deploy_business_type；它复用连接器登录态，不重新鉴权，不用 bash/curl 读取凭证或手写 HTTP。
+CLI 1.1.2 支持 neo list busitype 和 neo deploy busitype；也可使用宿主 deploy_business_type，它复用连接器登录态，不重新鉴权，不用 bash/curl 读取凭证或手写 HTTP。写入前核对 source、预演并遵守确认门禁。
 这是已内置的部署通道，不询问用户选用 token、后台手工或本地 source 通道。旧接口报错后仍通过当前 list_business_types / deploy_business_type 核实，不沿用历史凭证结论。
 可以传 entityApiKey 和 apiKey、label、description、active，或传 entityApiKey 和当前项目内已有的 sourceFile（businessTypes/*.business-type.json）。先用 dryRun=true 取得目标租户、create/update/unchanged 判定和变更清单；本地生成 source 不代表已部署。
 向用户展示预演结果。用户已明确授权同一租户、同一范围的写入时继续执行 dryRun=false、confirm=true；否则请求用户确认该清单。不要在已获得明确授权后再次要求重复确认。

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build, transform } from 'esbuild';
+import { buildSessionWorker } from './fixtures/build-session-worker.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-cli-conversation-'));
@@ -16,8 +17,10 @@ fs.mkdirSync(userData);
 process.env.HOME = fixture;
 process.env.USERPROFILE = fixture;
 let store;
+let historyService;
 
 try {
+  await buildSessionWorker(fixture);
   const output = path.join(fixture, 'test-subject.cjs');
   await build({
     stdin: { contents: `
@@ -167,7 +170,7 @@ try {
   assert.match(getProtectedSkillInstruction('skill-neo-cli-usage'), /neo-project.json/);
   assert.match(NEO_CLI_FIRST_ROUTING, /neo list object/);
   assert.match(NEO_CLI_FIRST_ROUTING, /neo describe object/);
-  assert.match(NEO_CLI_FIRST_ROUTING, /没有普通业务记录 XOQL 查询/);
+  assert.match(NEO_CLI_FIRST_ROUTING, /neo query --sql/);
   assert.match(NEO_CLI_FIRST_ROUTING, /CLI 命令失败.*才允许调用对应的旧连接器工具/s);
   assert.match(NEO_CLI_FIRST_ROUTING, /禁止调用 neo login、neo logout 或会输出令牌的 neo loginstatus/);
   for (const skillName of ['neo-cli-usage', 'neo-nex-dev', 'neo-approval-flow-designer', 'neo-entity-management',
@@ -179,6 +182,7 @@ try {
   }
 
   const ai = new AiService(store, {}, {});
+  historyService = ai;
   const fixtureConfig = { providers: [{ id: 'fixture', name: 'Fixture', baseUrl: 'http://127.0.0.1:1', apiKey: 'fixture-key',
     protocol: 'openai', models: [{ id: 'fixture', tools: true, contextWindow: 128000, maxOutputTokens: 8192 }] }],
     settings: { enableCrmTools: true, injectTenantContext: false, maxTokens: 512, contextMessageLimit: 10 }, mcpServers: [], skills: [] };
@@ -429,8 +433,16 @@ try {
   assert.equal(requests[0].tools.some((tool) => tool.function.name === 'execute_open_api'), true);
   assert.match(generalPrompt, /已加载技能 neo-cli-usage/);
   assert.match(generalPrompt, /销售易功能统一 CLI 优先路由/);
+  fixtureConfig.mcpServers = [{ id: 'neocrm-paas-mcp', type: 'builtin', enabled: false, tools: [] }];
+  requests.length = 0;
+  await ai.startChatStream({ requestId: 'builtin-disabled', sessionId: 'fixture-session', messageId: 'disabled-msg',
+    providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true,
+    messages: [{ id: 'disabled-user', role: 'user', content: '检查租户', createdAt: Date.now() }], mode: 'standard' }, () => {});
+  assert.equal(requests[0].tools.some(tool => tool.function.name === 'get_tenant_info'), false, 'disabled built-in MCP removes tenant tools from model requests');
+  fixtureConfig.mcpServers = [];
+  requests.length = 0;
   assert.match(generalPrompt, /CLI 成功返回空数据是有效结果/);
-  assert.match(generalPrompt, /这些操作直接使用现有连接器工具/);
+  assert.match(generalPrompt, /neo query --sql/);
   assert.match(generalPrompt, /Diagram Design 绘图技能/);
   assert.match(generalPrompt, /先调用 skill\(\{name:"diagram-design"\}\)/);
   assert.doesNotMatch(generalPrompt, /Forty-five visual types/);
@@ -729,6 +741,22 @@ try {
   console.log('PASS no/expired license: NEX and approval run; automatic flows and BI stay locked');
 
   const persistedAi = new AiService(store, {}, {});
+  await persistedAi.saveMcpServer({ id: 'fixture-external', name: 'External', type: 'sse', enabled: true,
+    url: 'https://example.invalid/mcp', bearerToken: 'fixture-secret', tools: [] });
+  await persistedAi.setMcpServerEnabled('neocrm-paas-mcp', false);
+  await persistedAi.setMcpServerEnabled('fixture-external', false);
+  let mcpConfig = await persistedAi.getAiConfigAsync();
+  assert.equal(mcpConfig.mcpServers.find(server => server.id === 'neocrm-paas-mcp').enabled, false);
+  assert.equal(mcpConfig.mcpServers.find(server => server.id === 'fixture-external').bearerToken, 'fixture-secret');
+  assert.equal(mcpConfig.mcpServers.find(server => server.id === 'fixture-external').enabled, false);
+  await persistedAi.setMcpServerEnabled('neocrm-paas-mcp', true);
+  await persistedAi.setMcpServerEnabled('fixture-external', true);
+  mcpConfig = await persistedAi.getAiConfigAsync();
+  assert.equal(mcpConfig.mcpServers.find(server => server.id === 'neocrm-paas-mcp').enabled, true);
+  assert.equal(mcpConfig.mcpServers.find(server => server.id === 'fixture-external').enabled, true);
+  await assert.rejects(() => persistedAi.setMcpServerEnabled('missing-mcp', true), /未找到/);
+  await persistedAi.deleteMcpServer('fixture-external');
+  console.log('PASS MCP enable state persists independently and preserves external credentials');
   for (const [presetId, skill] of [['nex-architect', 'neo-nex-dev'], ['approval-architect', 'neo-approval-flow-designer']]) {
     assert.equal(requiresRoleLicense(presetId), false);
     for (const alias of [presetId, `preset-${presetId}`, skill, `skill-${skill}`]) {
@@ -747,7 +775,7 @@ try {
   console.log('PASS unlocked skills retain built-in identity and resist editing, deletion and export');
 
   // Exercise real tool response loops; only the model receives the decrypted skill body.
-  for (const protocol of ['openai', 'google-gemini']) {
+  for (const [protocol, preloaded] of ['openai', 'google-gemini'].flatMap(protocol => [[protocol, true], [protocol, false]])) {
     fixtureConfig.providers[0].protocol = protocol;
     requests.length = 0;
     const traced = [];
@@ -755,10 +783,11 @@ try {
       const body = JSON.parse(options.body);
       requests.push(body);
       let data;
-      if (requests.length === 1) {
+      if (requests.length === 1 || (!preloaded && requests.length === 2)) {
+        const name = requests.length === 1 ? 'neo-nex-dev' : 'skill-neo-nex-dev';
         data = protocol === 'google-gemini'
-          ? { candidates: [{ content: { parts: [{ functionCall: { name: 'skill', args: { name: 'neo-nex-dev' } } }] }, finishReason: 'STOP' }] }
-          : { choices: [{ delta: { tool_calls: [{ index: 0, id: 'load-skill', type: 'function', function: { name: 'skill', arguments: '{"name":"neo-nex-dev"}' } }] }, finish_reason: 'tool_calls' }] };
+          ? { candidates: [{ content: { parts: [{ functionCall: { name: 'skill', args: { name } } }] }, finishReason: 'STOP' }] }
+          : { choices: [{ delta: { tool_calls: [{ index: 0, id: `load-skill-${requests.length}`, type: 'function', function: { name: 'skill', arguments: JSON.stringify({ name }) } }] }, finish_reason: 'tool_calls' }] };
       } else {
         data = protocol === 'google-gemini'
           ? { candidates: [{ content: { parts: [{ text: 'fixture response' }] }, finishReason: 'STOP' }] }
@@ -769,21 +798,57 @@ try {
     };
     await ai.startChatStream({ requestId: `skill-${protocol}`, sessionId: 'fixture-session', messageId: 'fixture-msg',
       providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true,
-      presetPrompt: '[PROTECTED_PRESET::nex-architect]', mode: 'standard',
-      messages: [{ id: 'fixture-u', role: 'user', content: '核实扩展技能', createdAt: Date.now() }] },
+      presetPrompt: preloaded ? '[PROTECTED_PRESET::nex-architect]' : undefined, mode: 'standard',
+      messages: [{ id: 'fixture-u', role: 'user', content: '核实配置', skillIds: preloaded ? ['skill-neo-nex-dev'] : [], createdAt: Date.now() }] },
       (event) => traced.push(event));
     assert.equal(traced.some((event) => event.type === 'error'), false, JSON.stringify(traced));
-    assert.equal(requests.length, 2, protocol);
+    assert.equal(requests.length, preloaded ? 2 : 3, protocol);
     const toolResult = protocol === 'google-gemini'
-      ? requests[1].contents.flatMap((entry) => entry.parts).find((part) => part.functionResponse)?.functionResponse.response.result
+      ? JSON.parse(requests[1].contents.flatMap((entry) => entry.parts).find((part) => part.functionResponse)?.functionResponse.response.content)
       : JSON.parse(requests[1].messages.find((message) => message.role === 'tool').content);
-    assert(toolResult.instruction?.length > 100, protocol + ' model tool instruction preserved');
+    if (preloaded) {
+      assert.equal(toolResult.instructionAlreadyLoaded, true, protocol + ' automatic/preset/@ instruction is not repeated in the tool receipt');
+      assert.equal(toolResult.instruction, undefined);
+      const system = protocol === 'google-gemini' ? JSON.stringify(requests[0].systemInstruction) : requests[0].messages[0].content;
+      const instruction = protocol === 'google-gemini' ? JSON.stringify(nexInstruction).slice(1, -1) : nexInstruction;
+      assert.equal(system.split(instruction).length - 1, 1, 'Automatic + preset + explicit skill inject the body once');
+    } else {
+      assert(toolResult.instruction?.length > 100, protocol + ' first model tool instruction preserved');
+      const receipts = protocol === 'google-gemini'
+        ? requests[2].contents.flatMap(entry => entry.parts).filter(part => part.functionResponse).map(part => JSON.parse(part.functionResponse.response.content))
+        : requests[2].messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content));
+      assert.equal(receipts[1].instructionAlreadyLoaded, true);
+      assert.equal(receipts[1].instruction, undefined, 'Second alias keeps resources but omits the same body');
+    }
     assert.equal(JSON.stringify(traced).includes(nexInstruction.slice(0, 80)), false, protocol + ' renderer leaked instruction');
     const toolTrace = traced.filter((event) => event.type === 'tool_update' && event.toolCall?.name === 'skill');
     assert(toolTrace.length > 0);
     assert(toolTrace.every((event) => event.toolCall.resultData.protectedBuiltin === true));
   }
-  console.log('PASS OpenAI/Gemini skill tool calls: model keeps full instructions; renderer sees protected metadata');
+  console.log('PASS OpenAI/Gemini skills: automatic/preset/@ and repeated aliases share one body; first on-demand load retains full instructions; renderer sees protected metadata');
+
+  const previousFileTools = ai.dshToolService;
+  ai.dshToolService = new subject.DshToolService();
+  fixtureConfig.providers[0].protocol = 'openai';
+  requests.length = 0;
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    const data = requests.length === 1
+      ? { choices: [{ delta: { tool_calls: [{ index: 0, id: 'ptc-skill', type: 'function', function: { name: 'run_code',
+          arguments: JSON.stringify({ code: 'const loaded = await tools.skill({name:"neo-nex-dev"}); if (typeof loaded.instruction !== "string") throw new Error("PTC needs the full skill body"); console.log("full-skill-body-ok");' }) } }] }, finish_reason: 'tool_calls' }] }
+      : { choices: [{ delta: { content: 'PTC 完成' }, finish_reason: 'stop' }] };
+    return new Response(`data: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  const ptcEvents = [];
+  await ai.startChatStream({ requestId: 'ptc-skill-body', sessionId: 'fixture-session', messageId: 'fixture-msg',
+    providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true, mode: 'ptc',
+    presetPrompt: '[PROTECTED_PRESET::nex-architect]', messages: [{ id: 'u', role: 'user', content: '检查配置', createdAt: Date.now() }] }, event => ptcEvents.push(event));
+  assert(!ptcEvents.some(event => event.type === 'error'), JSON.stringify(ptcEvents));
+  const ptcReceipt = JSON.parse(requests[1].messages.find(message => message.role === 'tool').content);
+  assert(!ptcReceipt.error, JSON.stringify(ptcReceipt));
+  assert(ptcReceipt.logs.includes('full-skill-body-ok'));
+  ai.dshToolService = previousFileTools;
+  console.log('PASS PTC skill code can still inspect the full body when its model context already contains that skill');
 
   // Screenshots must reach each model protocol without entering tool events or text receipts.
   const savedBrowserStatus = subject.browserBridge.status;
@@ -863,6 +928,54 @@ try {
     subject.browserBridge.execute = savedBrowserExecute;
   }
   console.log('PASS browser arguments: object snapshots, string deltas, native JSON strings, final SSE lines and invalid-call rejection');
+
+  const originalAutoContinue = fixtureConfig.settings.autoContinueTruncated;
+  const originalUnifiedTool = ai.executeUnifiedTool;
+  fixtureConfig.settings.autoContinueTruncated = true;
+  const recoveredExecutions = [];
+  ai.executeUnifiedTool = async (name, args) => {
+    recoveredExecutions.push({ name, args });
+    return { data: { executed: true }, summary: '已安全执行' };
+  };
+  try {
+    for (const scenario of [
+      { name: 'bash', broken: '{"command":"echo incomplete', valid: { command: 'echo repaired', description: '验证命令' } },
+      { name: 'skill', broken: '{"name":', valid: { name: 'neo-cli-usage' } },
+    ]) {
+      fixtureConfig.providers[0].protocol = 'openai';
+      fixtureConfig.settings.autoContinueTruncated = scenario.name !== 'skill';
+      requests.length = 0;
+      recoveredExecutions.length = 0;
+      const traced = [];
+      globalThis.fetch = async (_url, options) => {
+        const body = JSON.parse(options.body);
+        requests.push(body);
+        const count = requests.length;
+        const chunk = count === 1
+          ? { choices: [{ delta: { tool_calls: [{ index: 0, id: 'broken', type: 'function', function: { name: scenario.name, arguments: scenario.broken } }] }, finish_reason: 'length' }] }
+          : count === 2
+            ? { choices: [{ delta: { tool_calls: [{ index: 0, id: 'repaired', type: 'function', function: { name: scenario.name, arguments: JSON.stringify(scenario.valid) } }] }, finish_reason: 'tool_calls' }] }
+            : { choices: [{ delta: { content: '恢复调用完成' }, finish_reason: 'stop' }] };
+        return new Response('data: ' + JSON.stringify(chunk) + '\n\ndata: [DONE]\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      };
+      await ai.startChatStream({ requestId: 'repair-' + scenario.name, sessionId: 'repair-' + scenario.name, messageId: 'repair-msg',
+        providerId: 'fixture', modelId: 'fixture', projectPath: project, enableTools: true, mode: 'standard',
+        messages: [{ id: 'repair-user', role: 'user', content: '执行已授权任务', createdAt: Date.now() }] }, event => traced.push(event));
+      assert.equal(traced.some(event => event.type === 'error'), false, scenario.name + ': ' + JSON.stringify(traced));
+      assert.equal(requests.length, 3, scenario.name);
+      assert.match(requests[1].messages.at(-1).content, /工具参数不是完整 JSON/);
+      assert.doesNotMatch(JSON.stringify(requests[1]), /echo incomplete|\\"name\\":$/);
+      assert.deepEqual(recoveredExecutions, [{ name: scenario.name, args: scenario.valid }]);
+      assert(traced.some(event => event.type === 'tool_update' && event.toolCall.name === scenario.name &&
+        event.toolCall.status === 'success' && JSON.stringify(event.toolCall.arguments) === JSON.stringify(scenario.valid)), JSON.stringify(traced));
+      assert.equal(traced.some(event => event.type === 'content_delta' && /工具参数不完整，未执行/.test(event.delta)), true);
+    }
+  } finally {
+    fixtureConfig.settings.autoContinueTruncated = originalAutoContinue;
+    ai.executeUnifiedTool = originalUnifiedTool;
+    globalThis.fetch = originalModelFetch;
+  }
+  console.log('PASS malformed bash/skill arguments are regenerated before execution, preserving no-op safety');
 
   const originalBrowserStage = subject.browserBridge.stageUpload;
   const originalBrowserExecute = subject.browserBridge.execute;
@@ -1048,6 +1161,7 @@ try {
 
   await new Promise((resolve) => setTimeout(resolve, 150));
 } finally {
+  await historyService?.shutdown();
   store?.neoCliAuthWatcher?.close();
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;

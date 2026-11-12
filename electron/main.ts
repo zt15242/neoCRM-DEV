@@ -5,7 +5,8 @@ import { configureAppPermissions } from './security/appPermissions';
 import { LoggerService } from './services/loggerService';
 import { GetLogsOptions, LogLevel } from '../shared/types';
 import { CodeSyncService } from './services/codeSyncService';
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, desktopCapturer, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, desktopCapturer, Notification, net, protocol } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EnvService } from './services/envService';
@@ -37,6 +38,7 @@ import { saveMeetingDocument } from './services/meetingDocument';
 import { WorkspaceService } from './services/workspaceService';
 import { configurePackagedEsbuildBinary } from './services/esbuildRuntime';
 import { FeishuService } from './services/feishuService';
+import { AgentRuntimeHost } from './services/agent/agentRuntimeHost';
 import { licenseService } from './security/licenseService';
 import { CreateEntityPayload, CreateFieldPayload, WorkflowDeployPlan } from '../shared/types';
 import type { AiStreamEvent } from '../shared/types';
@@ -48,6 +50,10 @@ const currentDir = typeof __dirname !== 'undefined'
 process.env.DIST = path.join(currentDir, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public');
 configurePackagedEsbuildBinary();
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'neocrm-ui',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, codeCache: true, corsEnabled: true },
+}]);
 if (process.platform === 'win32') {
   app.setAppUserModelId(app.isPackaged ? 'com.neocrm.developer.desktop' : process.execPath);
 }
@@ -125,7 +131,24 @@ dataService.setTokenRefreshCallback(handleTokenRefresh);
 
 const dshToolService = new DshToolService();
 browserBridge.configurePersistence(path.join(app.getPath('userData'), 'browser-control-pairing.json'));
-void app.whenReady().then(() => { if (browserBridge.autoStartEnabled) return browserBridge.start().catch(error => console.warn('[Browser Control] 自动连接启动失败:', error.message)); });
+void app.whenReady().then(() => {
+  const uiBase = app.isPackaged ? process.env.DIST : process.env.VITE_PUBLIC;
+  const uiRoot = path.resolve(uiBase || '', 'opencode-ui');
+  protocol.handle('neocrm-ui', async request => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405 });
+    let pathname: string;
+    try { pathname = decodeURIComponent(new URL(request.url).pathname); }
+    catch { return new Response('Bad path', { status: 400 }); }
+    if (pathname.startsWith('/workspace/')) pathname = pathname.slice('/workspace'.length);
+    const relative = pathname.replace(/^[/\\]+/, '');
+    let target = path.resolve(uiRoot, relative || 'workspace.html');
+    if (target !== uiRoot && !target.startsWith(`${uiRoot}${path.sep}`)) return new Response('Forbidden', { status: 403 });
+    if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) target = path.join(uiRoot, 'workspace.html');
+    if (!fs.existsSync(target)) return new Response('OpenCode workspace is not built', { status: 503 });
+    return net.fetch(pathToFileURL(target).toString());
+  });
+  if (browserBridge.autoStartEnabled) return browserBridge.start().catch(error => console.warn('[Browser Control] 自动连接启动失败:', error.message));
+});
 ipcMain.handle('browser-control:start', () => browserBridge.start());
 ipcMain.handle('browser-control:status', () => browserBridge.status());
 ipcMain.handle('browser-control:preview', (_, sessionId: string) => browserBridge.previewSession(String(sessionId || '')));
@@ -133,6 +156,17 @@ ipcMain.handle('browser-control:stop', () => { browserBridge.stop(); return brow
 ipcMain.handle('browser-control:open-extension', () => shell.openPath(app.isPackaged ? path.join(process.resourcesPath, 'browser-extension') : path.join(app.getAppPath(), 'browser-extension')));
 app.on('before-quit', () => browserBridge.stop(false));
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
+const agentRuntime = new AgentRuntimeHost(path.join(currentDir, 'agent-runtime-process.js'), {
+  onDiagnostic: (message, detail) => loggerService.warn('AgentRuntime', message, detail as any),
+});
+aiService.setModelGateway(agentRuntime);
+let historyClosed = false;
+app.on('before-quit', event => {
+  if (historyClosed) return;
+  event.preventDefault();
+  historyClosed = true;
+  void aiService.shutdown().catch(error => console.warn('[History] 关闭存储失败:', error.message)).finally(() => app.quit());
+});
 aiService.onAgentSessionChanged((session) => {
   if (!restrictedFeatureService.canUseRole(session.presetId)) return;
   if (win && !win.isDestroyed()) {
@@ -729,15 +763,22 @@ ipcMain.handle('ai:deleteProvider', async (_, providerId: string) => aiService.d
 ipcMain.handle('ai:testProvider', async (_, provider) => aiService.testProvider(provider));
 ipcMain.handle('ai:fetchModels', async (_, provider) => aiService.fetchAvailableModels(provider));
 
-ipcMain.handle('ai:getSessions', async () => visibleSessions(aiService.getSessions()));
-ipcMain.handle('ai:saveSession', async (_, session) => visibleSessions(aiService.saveSession(session)));
+ipcMain.handle('ai:getSessions', async () => visibleSessions(await aiService.sessionSummaries()));
+ipcMain.handle('ai:getSession', async (_, id: string) => {
+  const session = await aiService.getSession(id);
+  return session && restrictedFeatureService.canUseRole(session.presetId) ? session : null;
+});
+ipcMain.handle('ai:getSessionMessages', async (_, id: string, before?: number, limit?: number) => {
+  const page = await aiService.getSessionMessages(id, before, limit);
+  return page && restrictedFeatureService.canUseRole(page.session.presetId) ? page : null;
+});
+ipcMain.handle('ai:saveSession', async (_, session) => visibleSessions(await aiService.saveSession(session)));
 ipcMain.handle('ai:persistSession', async (_, session, returnRecord = true) => {
-  const sessions = aiService.saveSession(session);
+  const saved = await aiService.persistSession(session);
   if (!returnRecord) return null;
-  const saved = sessions.find(item => item.id === session.id);
   return saved && restrictedFeatureService.canUseRole(saved.presetId) ? saved : null;
 });
-ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => visibleSessions(aiService.deleteSession(sessionId)));
+ipcMain.handle('ai:deleteSession', async (_, sessionId: string) => visibleSessions(await aiService.deleteSession(sessionId)));
 ipcMain.handle('ai:clearSessions', async () => aiService.clearSessions());
 
 ipcMain.handle('ai:startChatStream', async (_, params) => {
@@ -745,6 +786,10 @@ ipcMain.handle('ai:startChatStream', async (_, params) => {
   const action = parseAccessCommand(latestInput);
   if (action !== null) {
     runAccessCommand(action);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('ai:streamEvent', { requestId: params.requestId, sessionId: params.sessionId,
+        messageId: params.messageId, type: 'done', completionStatus: 'completed' });
+    }
     return true;
   }
   let terminal = false;
@@ -784,7 +829,8 @@ ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: Array
   return fileService.parseBuffer(fileName, Buffer.from(bufferData));
 });
 ipcMain.handle('file:previewMessage', async (_, request: MessagePreviewRequest) => {
-  const session = visibleSessions(aiService.getSessions()).find(item => item.id === request.sessionId);
+  const stored = await aiService.getSession(request.sessionId);
+  const session = stored && restrictedFeatureService.canUseRole(stored.presetId) ? stored : undefined;
   const projects = projectService.getProjects();
   const project = session?.projectId ? projects.find(item => item.id === session.projectId) : undefined;
   const root = project?.localPath || projects.find(item => path.resolve(item.localPath) === path.resolve(request.projectPath || '.'))?.localPath;
@@ -794,12 +840,13 @@ ipcMain.handle('file:previewMessage', async (_, request: MessagePreviewRequest) 
 
 // ================= MCP 与 Skill 技能管理 =================
 ipcMain.handle('ai:saveMcpServer', async (_, server) => aiService.saveMcpServer(server));
+ipcMain.handle('ai:setMcpServerEnabled', async (_, id: string, enabled: boolean) => aiService.setMcpServerEnabled(id, enabled));
 ipcMain.handle('ai:deleteMcpServer', async (_, id: string) => aiService.deleteMcpServer(id));
 ipcMain.handle('ai:syncMcpTools', async (_, id: string) => aiService.syncMcpTools(id));
 ipcMain.handle('ai:saveSkill', async (_, skill) => visibleSkills(await aiService.saveSkill(skill)));
 ipcMain.handle('ai:deleteSkill', async (_, id: string) => visibleSkills(await aiService.deleteSkill(id)));
 ipcMain.handle("ai:compactSession", async (_, sessionId: string) => {
-  const target = aiService.getSessions().find((item) => item.id === sessionId);
+  const target = await aiService.getSession(sessionId);
   if (!restrictedFeatureService.canUseRole(target?.presetId)) return null;
   return aiService.compactSession(sessionId);
 });

@@ -26,7 +26,7 @@ try {
     plugins: [{ name: 'fixture-host', setup(builder) {
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'fixture-host' }));
       builder.onLoad({ filter: /.*/, namespace: 'fixture-host' }, () => ({ contents: `
-        export const app = { getPath: () => ${JSON.stringify(userData)} };
+        export const app = { getPath: () => ${JSON.stringify(userData)}, getAppPath: () => ${JSON.stringify(fixture)} };
         export const dialog = {}, shell = {}, BrowserWindow = class {};
       ` }));
       builder.onResolve({ filter: /security\/licenseService$/ }, () => ({ path: 'license', namespace: 'fixture-license' }));

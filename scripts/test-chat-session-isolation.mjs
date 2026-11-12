@@ -48,11 +48,18 @@ try {
       presetId: 'harness-agent', providerId: 'fixture', modelId: 'fixture', createdAt: 1, updatedAt: 1,
       messages: [{id: 'old-' + id, role: 'user', content: 'original ' + id, createdAt: 1}] }));
     let persisted = structuredClone(initial), listener, agentListener;
+    const summaries = list => list.map(session => ({...session, messages: [], messagesLoaded: false, messageCount: session.messages.length}));
     window.started = []; window.aborted = []; window.toasts = []; window.saves = [];
+    window.historyReads = [];
     window.neoApi = {
       aiGetConfig: async () => ({ providers: [{ id: 'fixture', name: 'Fixture', apiKey: 'test-only', models: [{ id: 'fixture', name: 'Fixture' }] }],
         settings: { defaultProviderId: 'fixture', defaultModelId: 'fixture', enableCrmTools: false }, skills: [], mcpServers: [] }),
-      aiGetSessions: async () => structuredClone(persisted),
+      aiGetSessions: async () => summaries(structuredClone(persisted)),
+      aiGetSession: async id => {
+        window.historyReads.push(id);
+        const session = persisted.find(session => session.id === id);
+        return session ? {...structuredClone(session), messagesLoaded: true} : null;
+      },
       workflowGetLicenseStatus: async () => ({ isAuthorized: true }),
       aiSaveSession: async session => {
         window.saves.push(session.id);
@@ -60,7 +67,11 @@ try {
         const snapshot = structuredClone(persisted);
         if (window.failSave === session.id) { window.failSave = null; throw new Error('fixture save failed'); }
         if (window.delaySave === session.id) await new Promise(resolve => { window.resolveSave = resolve; });
-        return snapshot;
+        return summaries(snapshot);
+      },
+      aiPersistSession: async (session, returnRecord = true) => {
+        const list = await window.neoApi.aiSaveSession(session);
+        return returnRecord ? {...structuredClone(persisted.find(item => item.id === session.id)), messagesLoaded: true} : null;
       },
       aiStartChatStream: async params => {
         if (window.failStart === params.sessionId) { window.failStart = null; throw new Error('fixture start failed'); }
@@ -77,7 +88,7 @@ try {
     };
     function Harness() {
       const [id, setId] = useState('sess-a');
-      const [sessions, setSessions] = useState(initial);
+      const [sessions, setSessions] = useState(summaries(initial));
       window.selectSession = next => flushSync(() => setId(next));
       window.snapshot = () => ({ id, sessions });
       return <AiHarnessStudio crmSession={{isLoggedIn: false}} activeSessionId={id} onSelectSession={setId}
@@ -128,10 +139,16 @@ try {
         throw new Error('Timed out: ' + predicate);
       };
       const send = text => run('window.composer.onSend(' + JSON.stringify(text) + ')');
-      const select = id => run('window.selectSession(' + JSON.stringify(id) + ')');
+      const select = async id => {
+        await run('window.selectSession(' + JSON.stringify(id) + ')');
+        if (id) await wait('window.snapshot().sessions.find(s => s.id === ' + JSON.stringify(id) + ')?.messagesLoaded !== false');
+      };
       try {
         await win.loadFile(${JSON.stringify(path.join(fixture, 'index.html'))});
         await wait('window.composer && window.composer.currentProviderId === "fixture"');
+        await wait('window.snapshot().sessions.find(s => s.id === "sess-a")?.messagesLoaded === true');
+        assert.deepEqual(await run('[...new Set(window.historyReads)]'), ['sess-a']);
+        assert(await run('window.snapshot().sessions.filter(s => s.id !== "sess-a").every(s => s.messages.length === 0)'));
         await send('Start A');
         await wait('window.started.length === 1 && window.composer.isStreaming');
         await run('window.emit(window.started[0], "content_delta", { delta: "A live content" }); window.emit(window.started[0], "usage", {usage:{source:"estimated",promptTokens:120,completionTokens:20,totalTokens:140,estimatedCost:0.001,costCurrency:"USD"}})');
@@ -182,7 +199,8 @@ try {
         await wait('window.started.some(s => s.sessionId === "sess-c")');
         assert.equal(await run('window.snapshot().id'), 'sess-d');
         assert.equal(await run('window.snapshot().sessions.find(s => s.id === "sess-d").messages.at(-1).content'), 'D live');
-        assert.equal(await run('window.snapshot().sessions.find(s => s.id === "sess-a").messages.at(-1).content'), 'A live content still running completed');
+        assert.equal(await run('window.snapshot().sessions.find(s => s.id === "sess-a").messagesLoaded'), false);
+        assert.equal(await run('window.neoApi.aiGetSession("sess-a").then(s => s.messages.at(-1).content)'), 'A live content still running completed');
         await run('window.emit(window.started.find(s => s.sessionId === "sess-c"), "error", {error: "fixture provider error"})');
         assert.equal(await run('window.composer.isStreaming'), true);
         await select('sess-c');

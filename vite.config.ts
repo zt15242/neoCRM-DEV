@@ -17,10 +17,20 @@ export default defineConfig({
     react(),
     electron([
       {
-        entry: 'electron/main.ts',
+        entry: {
+          main: 'electron/main.ts',
+          'agent-model-gateway': 'electron/services/agent/modelGateway.ts',
+          'agent-session-store': 'electron/services/agent/sessionStoreWorker.ts',
+          'agent-session-repository': 'electron/services/agent/sessionRepository.ts',
+          'agent-runtime-process': 'electron/services/agent/agentRuntimeProcess.ts',
+          'agent-runtime-host': 'electron/services/agent/agentRuntimeHost.ts',
+        },
         vite: {
           build: {
             outDir: 'dist-electron',
+            // Main and preload builds may overlap. Cleaning here can delete the
+            // other build's output, leaving BrowserWindow without its bridge.
+            emptyOutDir: false,
             rollupOptions: {
               external: ['electron', 'esbuild', 'ws', '@tailwindcss/postcss', 'postcss', /^pdfjs-dist\//, 'word-extractor'],
             },

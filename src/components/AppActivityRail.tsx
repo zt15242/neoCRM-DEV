@@ -1,11 +1,13 @@
 import React from 'react';
-import { Box, Code2, Database, LayoutDashboard, LayoutTemplate, Mail, NotebookPen, Settings } from 'lucide-react';
+import { Box, Code2, Database, LayoutDashboard, LayoutTemplate, Mail, NotebookPen, PanelLeftOpen, Settings } from 'lucide-react';
 import type { AppNavTab } from './AppSidebar';
 
-export function AppActivityRail({ activeTab, onSelectTab, onOpenSettings }: {
+export function AppActivityRail({ activeTab, onSelectTab, onOpenSettings, sidebarCollapsed, onToggleSidebar }: {
   activeTab: AppNavTab;
   onSelectTab: (tab: AppNavTab) => void;
   onOpenSettings: () => void;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }) {
   const applications = [
     { tab: 'ai' as const, label: '代码', title: '代码工作区', icon: Code2 },
@@ -17,7 +19,10 @@ export function AppActivityRail({ activeTab, onSelectTab, onOpenSettings }: {
     { tab: 'workspace' as const, label: '工作台', title: '自定义工作台', icon: LayoutTemplate },
   ];
   return <nav className="app-activity-rail" aria-label="应用导航">
-    <div className="activity-rail-apps">{applications.map(({ tab, label, title, icon: Icon }) => (
+    <div className="activity-rail-apps">
+    {sidebarCollapsed && activeTab === 'ai' && <button title="展开项目与会话侧栏" aria-label="展开项目与会话侧栏"
+      onClick={onToggleSidebar}><PanelLeftOpen size={20} strokeWidth={1.65} /><span>展开</span></button>}
+    {applications.map(({ tab, label, title, icon: Icon }) => (
       <button key={tab} title={title} aria-label={title} aria-current={activeTab === tab ? 'page' : undefined}
         className={activeTab === tab ? 'is-active' : ''} onClick={() => onSelectTab(tab)}>
         <Icon size={20} strokeWidth={1.65} /><span>{label}</span>

@@ -18,8 +18,8 @@ interface Props {
   root: string;
   name: string;
   refreshVersion: string;
-  isPullingCode: boolean;
-  onPullProjectCode: () => void;
+  isPullingCode?: boolean;
+  onPullProjectCode?: () => void;
   onOpenFile: (path: string) => void;
   onRevealFile: (path: string) => void;
   onAttachFile?: (file: { name: string; fullPath: string; relativePath?: string; isDirectory?: boolean }) => void;
@@ -183,7 +183,7 @@ export default function WorkspaceCodeEditor(props: Props) {
 
   return <div className="code-workbench" ref={workbench} style={{ '--explorer-width': `${explorerWidth}px` } as React.CSSProperties}>
     <aside className="code-explorer" ref={explorer} aria-label="项目文件目录"><ProjectFileTree projectPath={root} projectName={name} refreshVersion={props.refreshVersion}
-      isPullingCode={props.isPullingCode} onPullProjectCode={props.onPullProjectCode} onPreviewFile={(_, path) => { void open(path); }}
+      isPullingCode={props.isPullingCode ?? false} onPullProjectCode={props.onPullProjectCode} onPreviewFile={(_, path) => { void open(path); }}
       activePath={active?.path} onOpenFile={props.onOpenFile} onRevealFile={props.onRevealFile} onAttachFile={props.onAttachFile} />
       <div className="code-explorer-resize" role="separator" tabIndex={0} aria-label="调整文件目录宽度" aria-orientation="vertical"
         aria-valuemin={EXPLORER_MIN_WIDTH} aria-valuemax={Math.max(EXPLORER_MIN_WIDTH, Math.min(EXPLORER_MAX_WIDTH, (workbench.current?.clientWidth || 820) - EDITOR_MIN_WIDTH))}

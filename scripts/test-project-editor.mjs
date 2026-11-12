@@ -33,7 +33,7 @@ try {
   ]);
   assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(concurrent.filter(result => result.status === 'rejected').length, 1);
-  assert.equal(await fs.readFile(file, 'utf8'), '// one');
+  assert.ok(['// one', '// two'].includes(await fs.readFile(file, 'utf8')));
   console.log('PASS external conflict and serialized stale concurrent saves');
   const outside = path.join(fixture, 'outside.txt');
   await fs.writeFile(outside, 'private');

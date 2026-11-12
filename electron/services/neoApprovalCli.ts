@@ -20,7 +20,7 @@ function cliExecutable(env: NodeJS.ProcessEnv): { executable: string; prefix: st
   for (const bin of bins) {
     const native = path.join(bin, 'neo.exe');
     if (fs.existsSync(native)) return { executable: native, prefix: [] };
-    for (const directory of [path.join(bin, 'node_modules/neocrm-cli'), path.resolve(bin, '../lib/node_modules/neocrm-cli')]) {
+    for (const directory of [path.resolve(bin, '../neocrm-cli'), path.join(bin, 'node_modules/neocrm-cli'), path.resolve(bin, '../lib/node_modules/neocrm-cli')]) {
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
         const entry = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.neo;

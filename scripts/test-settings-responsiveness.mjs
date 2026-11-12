@@ -45,6 +45,7 @@ try {
     window.mode = kind => flushSync(() => app.render(kind==='catalog'
       ? <CustomProviderModal isOpen initialProvider={custom} onClose={()=>{}} showToast={toast} onSave={async provider=>{window.saves.push(provider); if(window.rejectCatalog) throw new Error('磁盘不可写');}} />
       : <Harness />));
+    window.disableBridge = () => { window.mode('catalog'); delete window.neoApi; window.mode('settings'); };
     function Harness() {
       const [open,setOpen] = useState(true);
       window.openSettings = () => setOpen(true);
@@ -180,6 +181,10 @@ try {
           await wait('document.querySelector('+JSON.stringify(deep)+'+" [role=button]").getAttribute("aria-expanded")==="true"');
           await capture('providers-deepseek-expanded');
           console.log('PASS DeepSeek uses the common expandable provider, supports keyboard, connection test and save');
+          await run('window.disableBridge()');
+          await wait('document.querySelector("[role=alert]")?.textContent.includes("桌面通信桥未加载")');
+          assert(!await run('document.querySelector("[role=alert]").textContent.includes("Cannot read properties")'));
+          console.log('PASS missing preload bridge shows a recoverable desktop restart message');
         }
         win.destroy(); app.exit(0);
       }catch(error){console.error(error);win.destroy();app.exit(1);}

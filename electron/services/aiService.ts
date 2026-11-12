@@ -1,25 +1,24 @@
-import { PAGE_CODE_SKILL_ID, isPageCodeSkill, readPageCodeSkill } from '../security/pageCodeSkill';
 import { restrictedFeatureService } from '../security/restrictedFeatureService';
 import { isRestrictedRole, isRestrictedSkill } from '../../shared/restrictedFeatures';
-import { getRestrictedSkillDiscovery, readRestrictedSkillPackage } from '../security/restrictedSkillPackages';
-import { requiresFlowLicense, requiresRoleLicense } from '../../shared/licensePolicy';
+import { requiresFlowLicense } from '../../shared/licensePolicy';
 import { CodeSyncService } from './codeSyncService';
 import { requestMeetingModelText } from './meetingModelClient';
-import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isContextLimitError, isCompletedWorkSummaryRequest, reportedContextWindow, pruneToolMessages, pruneGeminiContents, assertContextFits, type ModelContextBudget } from './modelContext';
+import { getModelContextBudget, estimateContextTokens, readModelTokenLimits, uncompactedMessages, chooseCompactionCutoff, takeContextText, isCompletedWorkSummaryRequest, pruneToolMessages, assertContextFits } from './modelContext';
 import { NeoMetadataCliReader } from './neoMetadataCli';
 import { NeoBusinessTypeService } from './neoBusinessTypeService';
 import { NeoOpenApiService } from './neoOpenApiService';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { AgentSessionService, type AgentRunContext, type ChatRunParams } from './agentSessionService';
 import { AGENT_TOOLS_SPEC, AGENT_TOOL_NAMES, AGENT_ROUTING_INSTRUCTION } from '../security/agentTools';
-import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../security/documentTools';
-import { DIAGRAM_SKILL_ID, DIAGRAM_ROUTING_INSTRUCTION, isDiagramDesignSkill, readDiagramDesignSkill } from '../security/diagramDesignSkill';
+import { DOCUMENT_SKILL_ID } from '../security/documentTools';
+import { DIAGRAM_SKILL_ID, DIAGRAM_ROUTING_INSTRUCTION } from '../security/diagramDesignSkill';
 import { formatAttachmentContext } from './attachmentContext';
 import { currentDateContext } from './currentDate';
 import { TextMask } from './textMask';
 import { applyModelTokenReference } from '../../shared/modelTokenCatalog';
 import { effectiveModelPrice } from '../../shared/modelPriceCatalog';
-import { VisionImageLoader, inlineImagePaths, openAiImagePart, geminiImagePart } from './visionAttachments';
+import { VisionImageLoader, inlineImagePaths, openAiImagePart } from './visionAttachments';
 import { checkDiagramDelivery, diagramDeliveryFeedback, diagramDeliveryWarning } from './diagramDelivery';
 const isTransientStreamFailure = (error: any): boolean => /terminated|network|socket|fetch failed|connection|econnreset|epipe|timeout|timed out|网络|连接中断/i.test(`${error?.message || ''} ${error?.cause?.code || ''}`);
 const continuationPrompt = (hasAnswer: boolean) => hasAnswer
@@ -54,7 +53,6 @@ import { NexService } from "./nexService";
 import { DshToolService } from "./dshToolService";
 import { licenseService } from "../security/licenseService";
 import fs from 'node:fs';
-import { Readable } from 'node:stream';
 import path from 'node:path';
 import { app } from 'electron';
 import axios from 'axios';
@@ -96,20 +94,35 @@ import type { WorkspacePage } from '../../shared/workspaceTypes';
 import { DeepSeekToolMarkupFilter } from './deepSeekToolMarkup.mjs';
 import { browserBridge } from './browserBridge';
 import { ChatConcurrency } from './chatConcurrency';
-import { appendToolArguments, parseToolArguments } from './toolCallArguments';
+import { parseToolArguments } from './toolCallArguments';
+import { modelGatewayProxy } from './agent/modelGatewayProxy';
+import type { ModelGatewayClient } from './agent/modelGatewayTypes';
+import { ModelGatewayError } from './agent/modelGatewayError';
+import { modelMessagesFromWire, modelToolsFromWire } from './agent/modelWireAdapter';
+import { partialModelStep, runModelStep } from './agent/modelStep';
+import { agentSkillRegistry, appendSkillInstruction, skillResultForContext, type SkillContextMessage } from './agent/skillRegistry';
+import { SessionRepository, sharedSessionRepository, closeSharedSessionRepository } from './agent/sessionRepository';
 import { assertNeoConnectorToolAccess, filterNeoCliTools, getNeoCliSessionInstruction, isNexConversation, isApprovalConversation, shouldLoadBusinessTypeSkill, LEGACY_NEX_TOOLS, NEO_CLI_FIRST_ROUTING, NEO_NEX_CLI_ROUTING, NEO_APPROVAL_CLI_ROUTING, NEO_BUSINESS_TYPE_ROUTING } from '../security/neoCliConversation';
 
 export class AiService {
   private activeControllers = new Map<string, AbortController>();
+  private pendingStarts = new Map<string, { sessionId: string; cancelled: boolean }>();
   private foregroundControllers = new Set<AbortController>();
+  private learnedContextInputCaps = new Map<string, number>();
+  private contextCapsLoaded = false;
   private foregroundRuns = new ChatConcurrency();
-  private agentContext = new AsyncLocalStorage<AgentRunContext>();
+  private agentContext = new AsyncLocalStorage<AgentRunContext & { skillContext?: () => SkillContextMessage[] }>();
   private agentListeners = new Set<(session: AiChatSession) => void>();
-  private recoveredAgentSessions = false;
+  private sessionRepository?: SessionRepository;
   private agentSessions = new AgentSessionService({
-    getSessions: () => this.getSessions(),
-    saveSession: (session) => { this.saveSession(session, true); },
-    run: (params, emit) => this.runWithAgentContext(params, emit, true),
+    getSession: (id) => this.getSession(id),
+    listOwned: async (owner) => {
+      const summaries = await this.history().summaries(owner);
+      const sessions = await Promise.all(summaries.map(session => this.getSession(session.id)));
+      return sessions.filter((session): session is AiChatSession => !!session);
+    },
+    saveSession: async (session) => { await this.persistSession(session, true); },
+    run: (params, emit, snapshot) => this.runWithAgentContext(params, emit, true, snapshot),
     abort: (id) => { this.abortController(id); },
     notify: (session) => { for (const listener of this.agentListeners) listener(session); },
   });
@@ -131,6 +144,7 @@ export class AiService {
   private neoOpenApi = new NeoOpenApiService();
 
   private workbuddyService?: any;
+  private gateway: ModelGatewayClient = modelGatewayProxy;
   private workspaceService?: {
     listPages(projectId?: string): WorkspacePage[];
     getDataSources(): any;
@@ -141,9 +155,10 @@ export class AiService {
   public setWorkBuddyService(service: any) {
     this.workbuddyService = service;
   }
+  public setModelGateway(gateway: ModelGatewayClient) { this.gateway = gateway; }
 
   public requestMeetingAnalysisText(provider: AiProviderConfig, modelId: string, system: string, input: string, maxTokens: number): Promise<string> {
-    return requestMeetingModelText(provider, modelId, system, input, maxTokens, this.workbuddyService);
+    return requestMeetingModelText(provider, modelId, system, input, maxTokens, this.workbuddyService, undefined, 180000, this.gateway);
   }
 
   public setWorkspaceService(service: any) {
@@ -309,9 +324,62 @@ export class AiService {
     return path.join(userData, 'neocrm_ai_config.json');
   }
 
-  private getSessionsPath(): string {
+  private history(): SessionRepository {
     const userData = app?.getPath ? app.getPath('userData') : process.cwd();
-    return path.join(userData, 'neocrm_ai_sessions.json');
+    return this.sessionRepository ??= sharedSessionRepository(userData);
+  }
+
+  public async closeHistory() {
+    await closeSharedSessionRepository(app?.getPath ? app.getPath('userData') : process.cwd());
+    this.sessionRepository = undefined;
+  }
+
+  public async shutdown() {
+    this.abortChatStream();
+    await this.agentSessions.drain();
+    await this.closeHistory();
+    await this.gateway.dispose?.();
+  }
+
+  private getContextCapKey(provider: AiProviderConfig, modelId: string): string {
+    const identity = JSON.stringify([provider.id, provider.baseUrl.trim().replace(/\/+$/, ''), modelId, provider.protocol]);
+    return createHash('sha256').update(identity).digest('hex');
+  }
+
+  private getContextCapsPath(): string {
+    return path.join(app?.getPath ? app.getPath('userData') : process.cwd(), 'neocrm_ai_context_caps.json');
+  }
+
+  private loadLearnedContextCaps(): void {
+    if (this.contextCapsLoaded) return;
+    this.contextCapsLoaded = true;
+    try {
+      const file = this.getContextCapsPath();
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const [key, value] of Object.entries(saved || {})) {
+        if (/^[a-f0-9]{64}$/.test(key) && typeof value === 'number' && Number.isFinite(value) && value >= 1024) {
+          this.learnedContextInputCaps.set(key, Math.floor(value));
+        }
+      }
+    } catch { /* no learned gateway limits yet */ }
+  }
+
+  private rememberContextInputCap(key: string, inputTokens: number): void {
+    this.loadLearnedContextCaps();
+    const next = Math.max(1024, Math.floor(inputTokens));
+    const previous = this.learnedContextInputCaps.get(key);
+    this.learnedContextInputCaps.set(key, previous ? Math.min(previous, next) : next);
+    const file = this.getContextCapsPath();
+    const temporary = `${file}.${process.pid}.tmp`;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.learnedContextInputCaps)), { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(temporary, file);
+      console.info(`[Context] 已记录当前模型网关的安全输入预算：${this.learnedContextInputCaps.get(key)} tokens。`);
+    } catch (error: any) {
+      console.warn('[Context] 无法保存网关上下文预算，将在本次运行中继续使用:', error?.message || error);
+      try { fs.rmSync(temporary, { force: true }); } catch { /* best effort */ }
+    }
   }
 
   // ================= 配置管理 (安全隔离与脱敏) =================
@@ -511,6 +579,15 @@ export class AiService {
 
   // ================= MCP 服务器管理 (内核保护) =================
 
+  public setMcpServerEnabled(serverId: string, enabled: boolean): Promise<void> {
+    if (typeof serverId !== 'string' || !serverId || typeof enabled !== 'boolean') throw new Error('无效的 MCP 状态');
+    return this.updateAiConfig((config) => {
+      const server = (config.mcpServers || []).find(item => item.id === serverId);
+      if (!server) throw new Error('未找到指定的 MCP 服务');
+      server.enabled = enabled;
+    });
+  }
+
   public saveMcpServer(server: any): Promise<any[]> {
     return this.updateAiConfig((config) => {
       if (server.id === "neocrm-paas-mcp" || server.type === "builtin") {
@@ -600,7 +677,7 @@ export class AiService {
       if (signal?.aborted) throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
     };
     checkAbort();
-    const session = this.getSessions().find((item) => item.id === sessionId);
+    const session = await this.getSession(sessionId);
     if (!session || session.messages.length < 2) return session || null;
     const config = this.getAiConfig();
     if (config.settings.maskModelText) throw new Error('文本遮罩模式下暂不支持会话摘要，请先关闭遮罩再手动压缩。');
@@ -640,7 +717,7 @@ export class AiService {
         (text) => ({ messages: summaryMessages(text), tools: [] }));
       assertContextFits(summaryMessages(chunk.head), [], summaryBudget);
       const next = await requestMeetingModelText(provider, modelId, instruction, prefix + chunk.head,
-        summaryBudget.maxOutputTokens, this.workbuddyService, signal, 45000);
+        summaryBudget.maxOutputTokens, this.workbuddyService, signal, 45000, this.gateway);
       checkAbort();
       if (!next.trim()) throw new Error('模型未返回有效上下文摘要，历史内容已保留');
       summary = next.trim();
@@ -648,11 +725,11 @@ export class AiService {
     }
     checkAbort();
     // A delayed summary must not overwrite messages appended by another request.
-    const latest = this.getSessions().find((item) => item.id === sessionId);
+    const latest = await this.getSession(sessionId);
     if (!latest || !session.messages.slice(0, cutoff).every((message, index) => latest.messages[index]?.id === message.id)) return latest || null;
     latest.compactionSummary = { originalMessageCount: cutoff, summary, compactedAt: Date.now() };
     latest.updatedAt = Date.now();
-    this.saveSession(latest);
+    await this.persistSession(latest, true);
     return latest;
   }
 
@@ -905,101 +982,63 @@ export class AiService {
 
   // ================= 会话历史管理 =================
 
-  private writeSessions(sessions: AiChatSession[]) {
-    const filePath = this.getSessionsPath();
-    const temporary = `${filePath}.${process.pid}.tmp`;
-    try {
-      fs.writeFileSync(temporary, JSON.stringify(sessions), { encoding: 'utf-8', mode: 0o600 });
-      fs.renameSync(temporary, filePath);
-    } finally {
-      try { fs.rmSync(temporary, { force: true }); } catch { /* preserve the original write error */ }
+  public async getSessions(_strict = false): Promise<AiChatSession[]> {
+    const summaries = await this.history().summaries();
+    const sessions: AiChatSession[] = [];
+    for (const summary of summaries) {
+      const session = await this.getSession(summary.id);
+      if (session) sessions.push(session);
     }
-  }
-
-  public getSessions(strict = false): AiChatSession[] {
-    const filePath = this.getSessionsPath();
-    try {
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      if (!Array.isArray(data)) throw new Error('会话历史文件格式无效');
-      const list: AiChatSession[] = data;
-      if (!this.recoveredAgentSessions) {
-        this.recoveredAgentSessions = true;
-        let changed = false;
-        for (const session of list) {
-          if (session.agentRun && ['running', 'queued'].includes(session.agentRun.status)) {
-            session.agentRun = { ...session.agentRun, status: 'interrupted', finishedAt: Date.now(), error: '应用已重启，任务中断；可发送消息继续' };
-            for (const message of session.messages || []) {
-              message.toolCalls = message.toolCalls?.map(item => item.status === 'running'
-                ? { ...item, status: 'error', resultSummary: '应用已重启，执行中断' } : item);
-            }
-            changed = true;
-          }
-        }
-        if (changed) {
-          try { this.writeSessions(list); }
-          catch (error) {
-            this.recoveredAgentSessions = false;
-            console.warn('[Agent] 无法保存中断任务状态:', error);
-          }
-        }
-      }
-      return list.filter((s) => Array.isArray(s.messages) && s.messages.length > 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.recoveredAgentSessions = true;
-        return [];
-      }
-      if (strict) throw error;
-      return [];
-    }
-  }
-
-  public saveSession(session: AiChatSession, fromAgent = false): AiChatSession[] {
-    const sessions = this.getSessions(true);
-    const idx = sessions.findIndex((s) => s.id === session.id);
-    if (idx >= 0) {
-      const stored = sessions[idx];
-      sessions[idx] = !fromAgent && stored.agentRun
-        ? { ...session, agentRun: stored.agentRun,
-            ...(this.agentSessions.isActive(session.id) ? { messages: stored.messages, compactionSummary: stored.compactionSummary } : {}) }
-        : session;
-    } else {
-      sessions.unshift(session);
-    }
-    this.writeSessions(sessions);
     return sessions;
   }
 
-  public deleteSession(sessionId: string): AiChatSession[] {
+  public getSession(id: string) { return this.history().get(id); }
+  public listSessions(offset = 0, limit = 100) { return this.history().list(offset, limit); }
+  public sessionSummaries() { return this.history().summaries(); }
+  public getSessionMessages(id: string, before?: number, limit = 50) { return this.history().messages(id, before, limit); }
+  public persistSession(session: AiChatSession, fromAgent = false) {
+    return this.history().save(session, { fromAgent, active: this.agentSessions.isActive(session.id) });
+  }
+  public async saveSession(session: AiChatSession, fromAgent = false): Promise<AiChatSession[]> {
+    await this.persistSession(session, fromAgent);
+    return this.sessionSummaries();
+  }
+  public async deleteSession(sessionId: string): Promise<AiChatSession[]> {
     this.abortChatStream(sessionId);
-    const sessions = this.getSessions(true).filter((s) => s.id !== sessionId && s.agentRun?.createdBySessionId !== sessionId);
-    this.writeSessions(sessions);
-    return sessions;
+    await this.history().delete(sessionId);
+    return this.sessionSummaries();
   }
-
-  public clearSessions(): boolean {
+  public async clearSessions(): Promise<boolean> {
     this.abortChatStream();
-    this.writeSessions([]);
+    await this.history().clear();
     return true;
   }
 
   // ================= 对话流与 Agent Harness 核心 =================
 
   public abortForegroundChatStreams() {
+    for (const pending of this.pendingStarts.values()) pending.cancelled = true;
     for (const controller of this.foregroundControllers) controller.abort();
   }
 
   public abortChatStream(requestIdOrSessionId?: string): boolean {
+    let pendingCancelled = false;
+    for (const [requestId, pending] of this.pendingStarts) {
+      if (!requestIdOrSessionId || requestId === requestIdOrSessionId || pending.sessionId === requestIdOrSessionId) {
+        pending.cancelled = true;
+        pendingCancelled = true;
+      }
+    }
     if (!requestIdOrSessionId) this.agentSessions.stopAll();
     else {
-      const id = this.getSessions().find(item => item.id === requestIdOrSessionId || item.agentRun?.requestId === requestIdOrSessionId)?.id
+      const id = this.agentSessions.sessionForRequest(requestIdOrSessionId)
         || [...this.activeControllers].find(([id, ctrl]) => id.startsWith('sess_') && ctrl === this.activeControllers.get(requestIdOrSessionId))?.[0]
         || requestIdOrSessionId;
       const stoppedChildren = this.agentSessions.stopOwnedBy(id);
       const stopped = this.agentSessions.stop(id);
-      return this.abortController(requestIdOrSessionId) || stopped || stoppedChildren;
+      return this.abortController(requestIdOrSessionId) || stopped || stoppedChildren || pendingCancelled;
     }
-    return this.abortController();
+    return this.abortController() || pendingCancelled;
   }
 
   private abortController(requestIdOrSessionId?: string): boolean {
@@ -1029,20 +1068,32 @@ export class AiService {
   }
 
   public async startChatStream(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void): Promise<void> {
-    const stored = this.getSessions().find(item => item.id === params.sessionId);
-    if (stored?.agentRun) {
-      this.agentSessions.startFromUi(stored, params);
-      return;
+    const pending = { sessionId: params.sessionId, cancelled: false };
+    this.pendingStarts.set(params.requestId, pending);
+    try {
+      const stored = await this.getSession(params.sessionId);
+      if (pending.cancelled) {
+        sendEvent({ requestId: params.requestId, sessionId: params.sessionId, messageId: params.messageId, type: 'done', completionStatus: 'cancelled' });
+        return;
+      }
+      if (stored?.agentRun) {
+        await this.agentSessions.startFromUi(stored, params);
+        return;
+      }
+      return await this.runWithAgentContext(params, sendEvent, false, stored ?? null);
+    } finally {
+      this.pendingStarts.delete(params.requestId);
     }
-    return this.runWithAgentContext(params, sendEvent, false, stored ?? null);
   }
 
-  private runWithAgentContext(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void, managed = false, snapshot?: AiChatSession | null) {
-    const stored = snapshot === undefined ? this.getSessions().find(item => item.id === params.sessionId) : snapshot;
+  private async runWithAgentContext(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void, managed = false, snapshot?: AiChatSession | null) {
+    const stored = snapshot === undefined ? await this.getSession(params.sessionId) : snapshot;
     const effective = { ...params, projectId: stored?.projectId || params.projectId,
       mode: params.mode || stored?.mode || 'standard' as AiSessionMode };
+    const context: AgentRunContext & { skillContext?: () => SkillContextMessage[] } = { params: effective, managed };
     return DshToolService.runInSession(params.sessionId,
-      () => this.agentContext.run({ params: effective, managed }, () => this.runChatStream(effective, sendEvent, stored?.presetId)));
+      () => this.agentContext.run(context, () => this.runChatStream(effective, sendEvent, stored?.presetId)
+        .finally(() => { delete context.skillContext; })));
   }
 
   private async runChatStream(
@@ -1295,6 +1346,15 @@ export class AiService {
 
       // 1. 组装 System Prompt (全面植入 DeepSeek Harness 官方智能体自主行动协议)
       const systemParts: string[] = [currentDateContext()];
+      systemParts.push('【文件修改保护】修改现有文本文件前，先在本轮用 read 或 str_replace_editor.view 读取；文件版本冲突时重新读取并合并用户修改。新文件可直接创建。字面量替换须唯一匹配，多处替换需明确 replace_all。');
+      const loadSystemSkill = (name: string, heading: string) => {
+        const loaded = agentSkillRegistry.load(config.skills || [], { name }, { authorized: licenseService.getLicenseStatus().isAuthorized });
+        appendSkillInstruction(systemParts, loaded, heading);
+        return loaded;
+      };
+      const loadAutomaticSkill = (name: string, heading: string) => {
+        if (agentSkillRegistry.isEnabled(config.skills || [], name) && restrictedFeatureService.canUseSkill(name)) return loadSystemSkill(name, heading);
+      };
       const diagramSkillAvailable = config.skills?.find(skill => skill.id === DIAGRAM_SKILL_ID)?.enabled !== false
         && mode !== 'minimal' && enableTools !== false && config.settings.enableCrmTools && builtinMcpEnabled;
       systemParts.push('【回复中的图片与图表】展示图片请用 ![图片说明](真实图片 URL 或当前项目文件路径)。复杂图表先保存并校验当前项目内的完整 .svg/.html 文件，再在 diagram 代码块中只输出真实文件路径；不要重复长源码，以免回复截断导致图表无法预览。简短图可直接用 mermaid 与 svg 代码块，简短 HTML 图表用 html:diagram 代码块；客户端仅静态预览 SVG，不执行脚本。已存在的 XMind 文件请使用 [文件名](真实 .xmind 路径) 链接，客户端可预览主题层级，也可用 read_document 按画布读取。不要虚构图片链接或文件路径。');
@@ -1314,8 +1374,7 @@ export class AiService {
       const documentTask = messages.some(message => message.role === 'user' && message.attachments?.length)
         || /excel|word|pdf|ppt|xmind|思维导图|幻灯片|读取文件|文档|表格|\.(?:xlsx?|docx?|pptx?)\b/i.test([...messages].reverse().find(m => m.role === 'user')?.content || '');
       if (!isMinimalMode && documentTask && config.skills?.find(skill => skill.id === DOCUMENT_SKILL_ID)?.enabled !== false) {
-        const instruction = getDocumentReadingSkill(DOCUMENT_SKILL_ID)!;
-        systemParts.push(`【已加载技能 document-reader】\n${instruction}`);
+        loadSystemSkill(DOCUMENT_SKILL_ID, '【已加载技能 document-reader】');
         sendEvent({ requestId, sessionId, messageId, type: 'tool_start', toolCall: {
           id: `${requestId}_document-reader`, name: 'skill', arguments: { name: 'document-reader' }, status: 'running',
         } });
@@ -1344,16 +1403,15 @@ export class AiService {
         // Keep the domain skill on short follow-ups such as “确认部署”.
         if (businessTypeConversation) cliSkillNames.add('neo-entity-management');
         for (const skillName of cliSkillNames) {
-          const instruction = getProtectedSkillInstruction(skillName);
-          if (!instruction) throw new Error(`Neo CLI 技能缺失: ${skillName}`);
-          systemParts.push(`【已加载技能 ${skillName}】\n${instruction}`);
+          const loaded = loadAutomaticSkill(skillName, `【已加载技能 ${skillName}】`);
+          if (!loaded) continue;
           sendEvent({ requestId, sessionId, messageId, type: 'tool_start', toolCall: {
             id: `${requestId}_${skillName}`, name: 'skill', arguments: { name: skillName }, status: 'running',
           } });
           sendEvent({ requestId, sessionId, messageId, type: 'tool_update', toolCall: {
             id: `${requestId}_${skillName}`, name: 'skill', arguments: { name: skillName }, status: 'success',
             resultSummary: `已加载 ${skillName}，优先通过 neo CLI 获取元数据`,
-            resultData: { name: skillName, instruction }, durationMs: 0,
+            resultData: { name: skillName }, durationMs: 0,
           } });
         }
       }
@@ -1436,22 +1494,7 @@ declare const tools: {
       }
 
       if (!isMinimalMode) {
-        systemParts.push(`<available_skills>
-${diagramSkillAvailable ? '- diagram-design: 架构图、流程图、时序图、ER 图等设计与 SVG 交付；绘图前调用 skill({ name: "diagram-design" })，再按 resource 读取类型参考。' : ''}
-${config.skills?.find(skill => skill.id === PAGE_CODE_SKILL_ID)?.enabled === false ? '' : '- neo-page-code-management: 销售易页面代码 ZIP 下载、修改、上传和回读；需核实浏览器能力及接口，不得声称未执行的操作。'}
-- document-reader: Excel、Word、PDF、PPT、XMind 和文本阅读；通过 read_document 按工作表、页码、幻灯片、思维导图画布与行号读取，核对来源、公式缓存及扫描件限制。
-- salesyi-process-implementation-perspective: 销售易自动流程与审批流代码级配置、四层架构设计、变量与节点验证规范（当用户涉及销售易流程配置或审批流时，调用 skill({ name: "salesyi-process-implementation-perspective" }) 加载）。
-- salesy-print-template-engineer-perspective: 销售易打印模板（Word/Excel）代码配置、占位符语法、明细列表循环与全景模板规范（当涉及打印模板时调用）。
-- fxiaoke-crm-cli: 纷享销客 OpenAPI v2 接口与 CLI 数据操作规范，支持对象元数据探测、SQL数据查询与大批量分页对账。
-- salesforce-cli: Salesforce CLI (sf v2) 与元数据操作规范，支持 SOQL 查询、元数据部署与拉取 retrieve。
-- neo-backend-dev: 销售易/NeoCRM 后端 Java PaaS 开发、触发器 Trigger、REST API 与自定义代码包。
-- neo-entity-management: 销售易实体模型元数据管理、自定义实体、字段创建与选项集维护。
-- neo-frontend-dev: 销售易前端自定义组件开发 (React 16 + TypeScript)。
-- neo-cli-usage: NeoCRM CLI 1.0.8 项目配置、共享登录与命令用法。
-- neo-nex-dev: NEX 标准页面扩展；通过 neo list nex 查询、neo retrieve nex 拉取源码。
-${getRestrictedSkillDiscovery(config.skills || [])}
-</available_skills>
-若当前任务属于上述专业领域，你可以在采取行动前调用 skill({ name: "..." }) 工具获取该领域的专业实战指导规范。`);
+        systemParts.push(agentSkillRegistry.renderCatalog(config.skills || [], { authorized: licenseService.getLicenseStatus().isAuthorized }));
 
       systemParts.push(`【项目工作区物理安全沙箱与设备访问边界红线 (最高安全约束 - 只能操作项目内内容，严禁检索整台设备)】
 - 【当前绑定项目工作区绝对路径】：${projectPath || '未绑定工作区'}
@@ -1491,61 +1534,26 @@ ${getRestrictedSkillDiscovery(config.skills || [])}
 
       // 若处于审批流角色，注入最新官方 neo-approval-flow-designer 核心规范
       if (isApprovalPreset) {
-        const approvalSkill = getProtectedSkillInstruction("skill-neo-approval-flow-designer");
-        if (approvalSkill) {
-          systemParts.push(`【全局首要植入规范：销售易新版审批流设计助手 (neo-approval-flow-designer)】\n${approvalSkill}`);
-        }
+        loadAutomaticSkill('skill-neo-approval-flow-designer', '【全局首要植入规范：销售易新版审批流设计助手 (neo-approval-flow-designer)】');
       } else if (isAutoflowPreset) {
-        const perspectiveSkill = getProtectedSkillInstruction("skill-process-implementation-perspective");
-        if (perspectiveSkill) {
-          systemParts.push(`【全局首要植入规范：销售易自动流程实施工程认知与实操视角】\n${perspectiveSkill}`);
-        }
+        loadAutomaticSkill('skill-process-implementation-perspective', '【全局首要植入规范：销售易自动流程实施工程认知与实操视角】');
       } else if (isNexPreset) {
-        const nexSkill = getProtectedSkillInstruction("skill-neo-nex-dev");
-        if (nexSkill) {
-          systemParts.push(`【全局首要植入规范：销售易 NEX 1.0/2.0 标准页面扩展开发规范 (neo-nex-dev)】\n${nexSkill}`);
-        }
+        loadAutomaticSkill('skill-neo-nex-dev', '【全局首要植入规范：销售易 NEX 1.0/2.0 标准页面扩展开发规范 (neo-nex-dev)】');
       }
 
       if (presetPrompt) {
-        if (presetPrompt.includes("[PROTECTED_PRESET::autoflow-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-autoflow-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else if (presetPrompt.includes("[PROTECTED_PRESET::approval-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-approval-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else if (presetPrompt.includes("[PROTECTED_PRESET::print-template-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-print-template-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else if (presetPrompt.includes("[PROTECTED_PRESET::nex-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-nex-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else if (presetPrompt.includes("[PROTECTED_PRESET::neobi-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-neobi-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else if (presetPrompt.includes("[PROTECTED_PRESET::fxiaoke-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-fxiaoke-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else if (presetPrompt.includes("[PROTECTED_PRESET::salesforce-architect]")) {
-          const decodedPreset = getProtectedSkillInstruction("preset-salesforce-architect");
-          if (decodedPreset) {
-            systemParts.push(decodedPreset);
-          }
-        } else {
-          systemParts.push(presetPrompt);
-        }
+        const presets = [
+          ['autoflow-architect', 'skill-autoflow-architect'],
+          ['approval-architect', 'skill-neo-approval-flow-designer'],
+          ['print-template-architect', 'skill-print-template-engineer-perspective'],
+          ['nex-architect', 'skill-neo-nex-dev'],
+          ['neobi-architect', 'skill-neobi-architect'],
+          ['fxiaoke-architect', 'skill-fxiaoke-crm-cli'],
+          ['salesforce-architect', 'skill-salesforce-cli'],
+        ];
+        const preset = presets.find(([id]) => presetPrompt.includes(`[PROTECTED_PRESET::${id}]`));
+        if (preset) loadAutomaticSkill(preset[1], `【已加载角色规范 ${preset[0]}】`);
+        else systemParts.push(presetPrompt);
       }
 
       if (config.settings.injectTenantContext && currentSession.isLoggedIn && currentSession.environment) {
@@ -1554,8 +1562,7 @@ ${getRestrictedSkillDiscovery(config.skills || [])}
         const token = currentSession.tokenData;
 
         if (pType === 'salesforce') {
-          const sfSkill = getProtectedSkillInstruction("skill-salesforce-cli");
-          if (sfSkill) systemParts.push(sfSkill);
+          loadAutomaticSkill('skill-salesforce-cli', '【Salesforce CLI 技能】');
 
           systemParts.push(`【当前已连接的 CRM 平台与账号环境 - Salesforce】
 - 目标平台: Salesforce (Force.com / Core CRM / 阿里中国版 & 全球版)
@@ -1573,8 +1580,7 @@ ${getRestrictedSkillDiscovery(config.skills || [])}
   3. 当需要拉取代码、元数据或 Apex 类时，必须自动调用 pull_crm_project_code 工具或使用本地已就绪的 sf CLI 执行同步，严禁推诿给用户去手动登录！
   4. 当需要查询数据记录时，必须自动调用 execute_sql_query 工具执行 SOQL 查询！`);
         } else if (pType === 'fxiaoke') {
-          const fxSkill = getProtectedSkillInstruction("skill-fxiaoke-crm-cli");
-          if (fxSkill) systemParts.push(fxSkill);
+          loadAutomaticSkill('skill-fxiaoke-crm-cli', '【纷享销客 CLI 技能】');
 
           systemParts.push(`【当前已连接的 CRM 平台与账号环境 - 纷享销客 (FXIAOKE)】
 - 目标平台: 纷享销客 (FXIAOKE CRM / OpenAPI v2)
@@ -1620,12 +1626,9 @@ systemParts.push(`【自定义工作台页面创建规则】
       // 注入已挂载的 Skill 技能指令 (仅允许用户个人专属技能动态挂载；系统内置技能受内核安全保护，禁止在普通对话中随意挂载)
       if (activeSkillIds && activeSkillIds.length > 0) {
         for (const sid of activeSkillIds) {
-          // 仅激活用户个人自定义技能，内置系统技能禁止动态外挂
-          const personal = (config.skills || []).find(
-            (item) => item.id === sid && item.category === "personal" && item.enabled
-          );
-          if (personal && personal.systemInstruction?.trim()) {
-            systemParts.push(`【已激活个人技能: ${personal.name}】\n${personal.systemInstruction.trim()}`);
+          const personal = agentSkillRegistry.resolve(config.skills || [], sid);
+          if (personal?.category === 'personal' && personal.enabled) {
+            loadSystemSkill(sid, `【已激活个人技能: ${personal.name}】`);
           }
         }
       }
@@ -1635,24 +1638,9 @@ systemParts.push(`【自定义工作台页面创建规则】
       // cannot be bypassed or exposed to the renderer.
       const mentionedSkillIds = [...new Set([...messages].reverse().find(message => message.role === 'user')?.skillIds || [])];
       for (const sid of mentionedSkillIds) {
-        const selected = (config.skills || []).find(item => item.id === sid && item.enabled);
-        if (!selected || !restrictedFeatureService.canUseSkill(sid)) throw new Error('引用的技能不存在、已停用或当前不可用，请重新选择技能。');
-        if (requiresRoleLicense(sid.replace(/^skill-/, '')) && !licenseService.getLicenseStatus().isAuthorized)
-          throw new Error(`技能 ${selected.name} 需要先完成设备授权。`);
-        if (selected.category === 'personal') {
-          if (!selected.systemInstruction?.trim()) throw new Error(`技能 ${selected.name} 没有可加载的内容，请先在技能设置中完善。`);
-          if (!activeSkillIds?.includes(sid))
-            systemParts.push(`【本次引用的个人技能: ${selected.name}】\n${selected.systemInstruction.trim()}`);
-          continue;
-        }
-        const documentInstruction = getDocumentReadingSkill(sid);
-        const loaded = documentInstruction ? { instruction: documentInstruction } :
-          (await this.executeUnifiedTool('skill', { name: sid }, [], currentSession.environment, currentSession.tokenData, projectPath, currentSession.projectId, sessionAllowedFiles, controller.signal)).data;
-        if (typeof loaded?.instruction !== 'string' || !loaded.instruction.trim()) throw new Error(`技能 ${selected.name} 无法加载，请检查技能设置。`);
-        if (!systemParts.some(part => part.includes(loaded.instruction))) {
-          const resourceNames = Array.isArray(loaded.resources) ? loaded.resources.map((resource: any) => resource.resource).filter((name: unknown) => typeof name === 'string') : [];
-          systemParts.push(`【本次引用技能: ${selected.name}】\n${loaded.instruction}${resourceNames.length ? `\n可通过 skill 工具按需读取的资源：${resourceNames.join('、')}` : ''}`);
-        }
+        const selected = agentSkillRegistry.resolve(config.skills || [], sid);
+        if (!selected) throw new Error('引用的技能不存在、已停用或当前不可用，请重新选择技能。');
+        loadSystemSkill(sid, `【本次引用${selected.category === 'personal' ? '的个人' : ''}技能: ${selected.name}】`);
         sendEvent({ requestId, sessionId, messageId, type: 'tool_start', toolCall: {
           id: `${requestId}_explicit_${sid}`, name: 'skill', arguments: { name: sid }, status: 'running',
         } });
@@ -1813,11 +1801,6 @@ ${mcpInfoText}
       const systemPromptText = systemParts.join('\n\n');
       const systemMessage = systemPromptText ? { role: 'system', content: systemPromptText } : null;
 
-      const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
-      const apiEndpoint = cleanBaseUrl.endsWith('/v1') || cleanBaseUrl.includes('/v1/')
-        ? `${cleanBaseUrl}/chat/completions`
-        : `${cleanBaseUrl}/v1/chat/completions`;
-
       if (textMask && latestUserMessage?.attachments?.some(file => file.contentKind === 'image')) {
         throw new Error('文本遮罩不能识别图片中的敏感信息。请移除图片或关闭文本遮罩后重试。');
       }
@@ -1926,8 +1909,7 @@ ${mcpInfoText}
         !summaryOnly &&
         (enableTools !== false) &&
         config.settings.enableCrmTools &&
-        (modelObj?.tools ?? !isPureReasoner) &&
-        provider.protocol !== 'anthropic-messages';
+        (modelObj?.tools ?? !isPureReasoner);
 
       let effectiveActiveToolsSpec = activeToolsSpec;
       if (isPtcMode) {
@@ -1935,6 +1917,14 @@ ${mcpInfoText}
       }
 
       const contextBudget = getModelContextBudget(provider, modelId, config.settings.maxTokens);
+      this.loadLearnedContextCaps();
+      const contextCapKey = this.getContextCapKey(provider, modelId);
+      const learnedInputCap = this.learnedContextInputCaps.get(contextCapKey);
+      if (learnedInputCap) {
+        contextBudget.inputTokens = Math.min(contextBudget.inputTokens, learnedInputCap);
+        contextBudget.triggerTokens = Math.min(contextBudget.triggerTokens, Math.floor(contextBudget.inputTokens * 0.75));
+        contextBudget.targetTokens = Math.min(contextBudget.targetTokens, Math.floor(contextBudget.inputTokens * 0.55));
+      }
       const contextTools = canUseTools ? effectiveActiveToolsSpec : [];
       const compactForBudget = async (inputBudgetTokens = contextBudget.inputTokens) => {
         if (!sessionId || textMask) return;
@@ -1965,36 +1955,7 @@ ${mcpInfoText}
         await compactForBudget();
       }
 
-      // 判断是否走 Google Gemini 原生协议
-      if (provider.protocol === 'google-gemini' && !cleanBaseUrl.endsWith('/openai')) {
-        await this.runGeminiNativeStream({
-          requestId,
-          sessionId,
-          messageId,
-          provider,
-          modelId,
-          systemPromptText,
-          recentMessages,
-          enableTools: !textMask && !summaryOnly && (enableTools !== false) && (config.settings.enableCrmTools || activeCustomMcp.length > 0),
-          activeToolsSpec,
-          activeCustomMcp,
-          settings: config.settings,
-          currentSession,
-          controller,
-          sendEvent,
-          projectPath,
-          sessionAllowedFiles,
-          mode: sessionMode,
-          compactionSummary: currentCompactionSummary,
-          contextBudget,
-          visionImages,
-          recordUsage,
-          textMask,
-        });
-        return;
-      }
-
-      // 5. 执行 DeepSeek Harness 官方原版自主智能体推进循环 (DSH Autonomous Agent Loop)
+      // 5. 统一模型协议的自主智能体推进循环
       // 彻底废除 3 轮 / 8 轮的死板硬编码限制！完全对齐 DSH：只要大模型在发出 tool_calls，就自主无限循环执行到底，直到模型自主认为任务完成 (toolCalls.length === 0)！
       let stepCount = 0;
       const maxSafetySteps = 60; // 仅作为防止极端程序死循环的安全熔断上限
@@ -2004,12 +1965,13 @@ ${mcpInfoText}
       let consecutiveDuplicates = 0;
       let diagramRepairAttempts = 0;
       let autoContinuations = 0;
-      let requestStreamUsage = provider.id !== 'workbuddy';
       let contextPruneNotified = false;
+      let contextRecoveries = 0;
+      const maxContextRecoveries = 3;
       const calledToolSignatures = new Set<string>();
       const executedToolsLog: Array<{ name: string; args: any; summary: string; data: any }> = [];
 
-      while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
+      agentLoop: while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
         throwIfAborted();
         stepCount++;
         const isSafetyFuseTurn = stepCount >= maxSafetySteps; // 仅在达到60步安全熔断时强制收敛
@@ -2025,21 +1987,15 @@ ${mcpInfoText}
           stream: true,
         };
 
-        // Compatible gateways may omit usage unless explicitly requested. WorkBuddy's
-        // proprietary upstream is handled separately and falls back to an estimate.
-        if (requestStreamUsage) requestBody.stream_options = { include_usage: true };
-
         if (canUseTools && !isSafetyFuseTurn) {
           requestBody.tools = effectiveActiveToolsSpec;
           requestBody.tool_choice = 'auto';
         }
 
-        const endpoint = apiEndpoint;
-
-        let response: Response | null = null;
+        let stepResult: Awaited<ReturnType<typeof runModelStep>> | undefined;
         let lastErrorMsg = '';
         let lastFailureStatus: number | undefined;
-        let contextRecovery = false;
+        let contextRecovery = contextRecoveries > 0;
         const maxRetries = 2;
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -2050,7 +2006,9 @@ ${mcpInfoText}
             const reason = contextRecovery ? '上游报告上下文超限，正在按模型容量整理并重试'
               : `上游${lastFailureStatus ? `返回 HTTP ${lastFailureStatus}` : '连接失败'}，正在重试`;
             sendEvent({ requestId, sessionId, messageId, type: 'content_delta',
-              delta: `\n> 连接提示：${reason}（${attempt}/${maxRetries}）。\n\n` });
+              delta: contextRecovery
+                ? `\n> 连接提示：${reason}（上下文整理 ${contextRecoveries}/${maxContextRecoveries}）。\n\n`
+                : `\n> 连接提示：${reason}（${attempt}/${maxRetries}）。\n\n` });
             await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 2000 : 4000));
             throwIfAborted();
           }
@@ -2064,274 +2022,184 @@ ${mcpInfoText}
           assertContextFits(requestBody.messages, requestBody.tools || [], contextBudget);
 
           try {
-            if (provider.id === 'workbuddy' && this.workbuddyService) {
-              const wbAcc = this.workbuddyService.getAccount();
-              if (!wbAcc || !wbAcc.accessToken) {
-                throw new Error('WorkBuddy 尚未扫码授权，请在【系统设置 -> 模型供应商 -> WorkBuddy】中点击扫码登录后使用。');
+            const canonical = modelMessagesFromWire(requestBody.messages);
+            const contentMarkupFilter = new DeepSeekToolMarkupFilter();
+            let visibleContent = '';
+            let visibleReasoning = '';
+            let isInThinkTag = false;
+            const emitContent = (piece: string) => {
+              const visible = contentMarkupFilter.push(piece);
+              if (visible) {
+                visibleContent += visible;
+                sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
               }
-              const streamNode = await this.workbuddyService.dispatchChat(requestBody, { signal: controller.signal });
-              response = {
-                ok: true,
-                status: 200,
-                body: Readable.toWeb(streamNode),
-              } as any;
-              break;
-            }
-
-            const resp = await fetch(endpoint, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
+            };
+            const routeText = (piece: string) => {
+              if (piece.includes('<think>')) {
+                isInThinkTag = true;
+                const [before, after = ''] = piece.split('<think>', 2);
+                if (before) emitContent(before);
+                if (after) {
+                  visibleReasoning += after;
+                  sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: after });
+                }
+                return;
+              }
+              if (isInThinkTag) {
+                if (piece.includes('</think>')) {
+                  isInThinkTag = false;
+                  const [before, after = ''] = piece.split('</think>', 2);
+                  if (before) {
+                    visibleReasoning += before;
+                    sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: before });
+                  }
+                  if (after) emitContent(after);
+                } else {
+                  visibleReasoning += piece;
+                  sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: piece });
+                }
+                return;
+              }
+              emitContent(piece);
+            };
+            const streamed = await runModelStep({
+              gateway: this.gateway,
+              request: {
+                provider, modelId, system: canonical.system, messages: canonical.messages,
+                maxOutputTokens: contextBudget.maxOutputTokens,
+                temperature: config.settings.temperature ?? 0.3,
+                tools: requestBody.tools ? modelToolsFromWire(requestBody.tools) : undefined,
+                signal: controller.signal,
               },
-              body: JSON.stringify(requestBody),
-              signal: controller.signal,
+              workbuddy: this.workbuddyService,
+              onText: routeText,
+              onReasoning: piece => {
+                visibleReasoning += piece;
+                sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: piece });
+              },
             });
-
-            if (resp.ok) {
-              response = resp;
-              break;
+            const tail = contentMarkupFilter.finish();
+            if (tail) {
+              visibleContent += tail;
+              sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: tail });
             }
-
-            const errText = await resp.text();
-            lastFailureStatus = resp.status;
-            lastErrorMsg = this.cleanHttpError(resp.status, errText);
-            contextRecovery = isContextLimitError(resp.status, errText);
-            if (requestBody.stream_options && [400, 422].includes(resp.status) && /stream_options|include_usage/i.test(errText) && /unsupported|not support|unknown|invalid|unexpected|unrecognized|not permitted|not allowed|不支持|未知|无效/i.test(errText)) {
-              delete requestBody.stream_options;
-              requestStreamUsage = false;
-              attempt--; // The rejected request produced no stream and cannot have run a tool.
-              continue;
+            stepResult = { ...streamed, content: visibleContent, reasoning: visibleReasoning };
+            if (contentMarkupFilter.hadMarkup) (stepResult as any).hadToolMarkup = true;
+            break;
+          } catch (fetchErr: any) {
+            if (fetchErr.name === 'AbortError' || controller.signal.aborted || fetchErr.nonRetryable) throw fetchErr;
+            const partial = partialModelStep(fetchErr);
+            if (config.settings.autoContinueTruncated && partial?.content && !partial.hadToolInput && autoContinuations < 2
+              && fetchErr instanceof ModelGatewayError && fetchErr.kind === 'incomplete-stream') {
+              autoContinuations++;
+              const filter = new DeepSeekToolMarkupFilter();
+              const safePartial = filter.push(partial.content) + filter.finish();
+              if (safePartial) conversationHistory.push({ role: 'assistant', content: safePartial });
+              conversationHistory.push({ role: 'user', content: '刚才回复因网络中断，请从断点继续，不要重复已完成内容或重新执行工具。' });
+              sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: `\n\n> 网络中断，正在继续（${autoContinuations}/2）。\n\n` });
+              await new Promise(resolve => setTimeout(resolve, autoContinuations * 1500));
+              throwIfAborted();
+              continue agentLoop;
             }
+            // Once output or tool input has arrived, replaying this step can duplicate
+            // visible text or produce another mutation. Only an explicit text continuation above is safe.
+            if (partial && (partial.content || partial.reasoning || partial.hadToolInput)) throw fetchErr;
+            lastErrorMsg = fetchErr.message;
+            lastFailureStatus = fetchErr instanceof ModelGatewayError ? fetchErr.status : undefined;
+            contextRecovery = fetchErr instanceof ModelGatewayError && fetchErr.kind === 'context-overflow';
             if (contextRecovery && attempt < maxRetries) {
-              const reported = reportedContextWindow(errText);
+              if (contextRecoveries >= maxContextRecoveries) {
+                throw Object.assign(new Error(`上游连续 ${maxContextRecoveries} 次报告上下文超限，已停止重复重试。请在模型设置中核对网关实际上下文容量，或缩短历史/更换更大上下文模型。`), { nonRetryable: true });
+              }
+              const failedInputTokens = estimateContextTokens({ messages: requestBody.messages, tools: requestBody.tools || [] });
+              contextRecoveries++;
+              const reported = fetchErr instanceof ModelGatewayError ? fetchErr.contextWindow : undefined;
+              let learnedInputCap = contextBudget.inputTokens;
               if (reported && reported < contextBudget.contextWindow) {
                 const corrected = { ...provider, models: [{ ...modelObj, id: modelId, name: modelObj?.name || modelId, contextWindow: reported }] };
                 Object.assign(contextBudget, getModelContextBudget(corrected, modelId, config.settings.maxTokens));
+                learnedInputCap = contextBudget.inputTokens;
+              } else {
+                // Some gateways return only a generic "prompt too long" error. Shrink
+                // the effective input allowance monotonically so each retry is smaller.
+                const fixedMessages = [...conversationHistory.filter(message => message.role === 'system'),
+                  ...conversationHistory.filter(message => message.role === 'user').slice(-1)];
+                const irreducibleTokens = estimateContextTokens({ messages: fixedMessages, tools: requestBody.tools || [] });
+                const minimumInput = Math.max(1024, Math.ceil(irreducibleTokens * 1.15));
+                const reducedInput = Math.floor(Math.min(contextBudget.inputTokens * 0.70, failedInputTokens * 0.60));
+                const boundedInput = Math.max(minimumInput, reducedInput);
+                if (boundedInput >= contextBudget.inputTokens || boundedInput >= failedInputTokens * 0.90) {
+                  throw Object.assign(new Error(`上游报告上下文超限，但当前系统提示、工具定义和本轮问题已占约 ${irreducibleTokens.toLocaleString()} tokens，无法安全压缩到更小请求。已停止重试；请缩短当前问题/附件、减少启用的工具，或在模型设置中填写网关的实际上下文容量。`), { nonRetryable: true });
+                }
+                contextBudget.inputTokens = boundedInput;
+                contextBudget.triggerTokens = Math.floor(contextBudget.inputTokens * 0.70);
+                contextBudget.targetTokens = Math.floor(contextBudget.inputTokens * 0.50);
+                learnedInputCap = contextBudget.inputTokens;
               }
               await compactForBudget(contextBudget.targetTokens);
+              const recoveredMessages = pruneToolMessages(conversationHistory, requestBody.tools || [], contextBudget, true);
+              const recoveredTokens = estimateContextTokens({ messages: recoveredMessages, tools: requestBody.tools || [] });
+              if (recoveredTokens > contextBudget.inputTokens || recoveredTokens >= failedInputTokens * 0.90) {
+                throw Object.assign(new Error(`上游报告上下文超限，但本地整理后输入估算仍为 ${recoveredTokens.toLocaleString()} tokens（原 ${failedInputTokens.toLocaleString()}）。为避免反复发送相同的大请求，已停止重试；请缩短当前请求、减少附件/工具结果，或核对模型网关的实际上下文容量。`), { nonRetryable: true });
+              }
+              conversationHistory = recoveredMessages;
+              this.rememberContextInputCap(contextCapKey, learnedInputCap);
               continue;
             }
-            if ([429, 502, 503, 504, 524].includes(resp.status) && attempt < maxRetries) continue;
-            throw Object.assign(new Error(`模型接口响应异常 (HTTP ${resp.status}): ${lastErrorMsg}${visionImages.hasImages && [400, 415, 422].includes(resp.status) && !contextRecovery ? '。本次请求包含图片，请确认所选模型及接口支持图片输入，或更换支持视觉的模型。' : ''}`), { nonRetryable: true });
-          } catch (fetchErr: any) {
-            if (fetchErr.name === 'AbortError' || controller.signal.aborted || fetchErr.nonRetryable) throw fetchErr;
-            lastErrorMsg = fetchErr.message;
-            lastFailureStatus = undefined;
-            contextRecovery = false;
+            if (lastFailureStatus && [429, 502, 503, 504, 524].includes(lastFailureStatus) && attempt < maxRetries) continue;
+            if (isTransientStreamFailure(fetchErr) && attempt < maxRetries) continue;
             if (attempt >= maxRetries) throw fetchErr;
+            throw Object.assign(fetchErr, { nonRetryable: true });
           }
         }
 
-        if (!response || !response.ok) {
+        if (!stepResult) {
           throw new Error(lastErrorMsg || '模型接口未能建立有效连接');
         }
-
-        if (!response.body) {
-          throw new Error('未获取到流式响应数据主体');
-        }
-
-        const reader = response.body.getReader();
-        const cancelReader = () => {
-          try { reader.cancel().catch(() => {}); } catch {}
-        };
-        controller.signal.addEventListener('abort', cancelReader, { once: true });
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-
-        let assistantContent = '';
-        let finishReason = '';
-        let responseUsage: any;
-        let assistantReasoning = '';
-        let isInThinkTag = false;
-        let toolCallsMap: Record<number, { id: string; name: string; arguments: string }> = {};
-        const contentMarkupFilter = new DeepSeekToolMarkupFilter();
-        let streamFailure: any;
-
-        try {
-          while (true) {
-            if (controller.signal.aborted) break;
-            const { done, value } = await reader.read();
-            if (controller.signal.aborted) break;
-
-          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = done ? '' : lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data:')) continue;
-            const dataStr = trimmed.slice(5).trim();
-            if (dataStr === '[DONE]') continue;
-
-            try {
-              const chunk = JSON.parse(dataStr);
-              if (chunk.usage) responseUsage = chunk.usage;
-              const choice = chunk.choices?.[0];
-              if (!choice) continue;
-              if (choice.finish_reason) finishReason = choice.finish_reason;
-
-              const delta = choice.delta;
-              if (!delta) continue;
-
-              // 1. 处理 DeepSeek 原生 reasoning_content
-              if (delta.reasoning_content) {
-                assistantReasoning += delta.reasoning_content;
-                sendEvent({
-                  requestId,
-                  sessionId,
-                  messageId,
-                  type: 'reasoning_delta',
-                  delta: delta.reasoning_content,
-                });
-              }
-
-              // 2. 处理常规 content（含 <think> 标签检测）
-              if (delta.content) {
-                let piece = delta.content;
-
-                if (piece.includes('<think>')) {
-                  isInThinkTag = true;
-                  const parts = piece.split('<think>');
-                  if (parts[1]) {
-                    assistantReasoning += parts[1];
-                    sendEvent({
-                      requestId,
-                      sessionId,
-                      messageId,
-                      type: 'reasoning_delta',
-                      delta: parts[1],
-                    });
-                  }
-                  continue;
-                }
-
-                if (isInThinkTag) {
-                  if (piece.includes('</think>')) {
-                    isInThinkTag = false;
-                    const parts = piece.split('</think>');
-                    if (parts[0]) {
-                      assistantReasoning += parts[0];
-                      sendEvent({
-                        requestId,
-                        sessionId,
-                        messageId,
-                        type: 'reasoning_delta',
-                        delta: parts[0],
-                      });
-                    }
-                    if (parts[1]) {
-                      const visible = contentMarkupFilter.push(parts[1]);
-                      if (visible) {
-                        assistantContent += visible;
-                        sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
-                      }
-                    }
-                  } else {
-                    assistantReasoning += piece;
-                    sendEvent({
-                      requestId,
-                      sessionId,
-                      messageId,
-                      type: 'reasoning_delta',
-                      delta: piece,
-                    });
-                  }
-                  continue;
-                }
-
-                const visible = contentMarkupFilter.push(piece);
-                if (visible) {
-                  assistantContent += visible;
-                  sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
-                }
-              }
-
-              // 3. 处理 tool_calls 增量
-              if (Array.isArray(delta.tool_calls)) {
-                for (const tc of delta.tool_calls) {
-                  const idx = tc.index ?? 0;
-                  if (!toolCallsMap[idx]) {
-                    toolCallsMap[idx] = {
-                      id: tc.id || `call_${Date.now()}_${idx}`,
-                      name: tc.function?.name || '',
-                      arguments: '',
-                    };
-                  }
-                  if (tc.function?.name) {
-                    toolCallsMap[idx].name = tc.function.name;
-                  }
-                  if (tc.id) toolCallsMap[idx].id = tc.id;
-                  if (tc.function?.arguments !== undefined) {
-                    toolCallsMap[idx].arguments = appendToolArguments(toolCallsMap[idx].arguments, tc.function.arguments);
-                  }
-                }
-              }
-            } catch {
-              // 忽略非合法 JSON 行
-            }
-          }
-          if (done) break;
-        }
-
-        } catch (error) { streamFailure = error; }
-        finally { controller.signal.removeEventListener('abort', cancelReader); }
-
-        throwIfAborted();
-        if (streamFailure) {
-          if (config.settings.autoContinueTruncated && isTransientStreamFailure(streamFailure) && !Object.keys(toolCallsMap).length && autoContinuations < 2) {
-            autoContinuations++;
-            if (assistantContent) {
-              conversationHistory.push({ role: 'assistant', content: assistantContent });
-              conversationHistory.push({ role: 'user', content: '刚才回复因网络中断，请从断点继续，不要重复已完成内容或重新执行工具。' });
-            }
-            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n\n> 网络中断，正在继续（' + autoContinuations + '/2）。\n\n' });
-            await new Promise(resolve => setTimeout(resolve, autoContinuations * 1500));
-            throwIfAborted(); continue;
-          }
-          throw streamFailure;
-        }
-
-        const filteredTail = contentMarkupFilter.finish();
-        if (filteredTail) {
-          assistantContent += filteredTail;
-          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: filteredTail });
-        }
-
-        const promptUsage = responseUsage?.prompt_tokens ?? responseUsage?.input_tokens;
-        const completionUsage = responseUsage?.completion_tokens ?? responseUsage?.output_tokens;
+        const retainedBeforeTools = conversationHistory.length;
+        const runContext = this.agentContext.getStore();
+        if (runContext) runContext.skillContext = () => [...requestBody.messages, ...conversationHistory.slice(retainedBeforeTools)];
+        let assistantContent = stepResult.content;
+        const assistantReasoning = stepResult.reasoning;
+        const finishReason = stepResult.finishReason;
+        const promptUsage = stepResult.usage?.inputTokens;
+        const completionUsage = stepResult.usage?.outputTokens;
         const hasReportedUsage = typeof promptUsage === 'number' && Number.isFinite(promptUsage) && promptUsage >= 0 && typeof completionUsage === 'number' && Number.isFinite(completionUsage) && completionUsage >= 0;
         const estimatedInput = estimateContextTokens({ messages: requestBody.messages, tools: requestBody.tools || [] });
-        const estimatedOutput = estimateContextTokens({ content: assistantContent, reasoning: assistantReasoning, toolCalls: Object.values(toolCallsMap) });
+        const estimatedOutput = estimateContextTokens({ content: assistantContent, reasoning: assistantReasoning, toolCalls: stepResult.toolCalls });
         recordUsage(hasReportedUsage ? promptUsage : estimatedInput, hasReportedUsage ? completionUsage : estimatedOutput, hasReportedUsage ? 'reported' : 'estimated');
 
-
-        const toolCallsList = Object.values(toolCallsMap);
+        const toolCallsList = stepResult.toolCalls;
+        const textProviderMetadata = stepResult.message.parts.find(part => part.type === 'text')?.providerMetadata;
+        const reasoningProviderMetadata = stepResult.message.parts.find(part => part.type === 'reasoning')?.providerMetadata;
         const hasAnswer = !!assistantContent.trim();
-        if (contentMarkupFilter.hadMarkup) {
+        const hadToolMarkup = !!(stepResult as any).hadToolMarkup;
+        if (hadToolMarkup) {
           const warning = '\n\n[已隐藏正文中的工具协议文本；该内容未作为工具执行。]';
           sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
         }
 
         // 如果本步没有发起任何工具调用，说明大模型已经执行完所有前置动作，本步输出的是最终答复！
         if (toolCallsList.length === 0) {
-          const needsContinuation = contentMarkupFilter.hadMarkup || finishReason === 'length'
-            || (!hasAnswer && !!assistantReasoning.trim() && (!finishReason || finishReason === 'stop'));
-          if (needsContinuation && config.settings.autoContinueTruncated && autoContinuations < 2 && !isSafetyFuseTurn) {
+          const emptyAnswer = !hasAnswer && !hadToolMarkup;
+          const needsContinuation = hadToolMarkup || finishReason === 'length' || emptyAnswer;
+          if (needsContinuation && (config.settings.autoContinueTruncated || emptyAnswer) && autoContinuations < 2 && !isSafetyFuseTurn) {
             autoContinuations++;
-            if (hasAnswer) conversationHistory.push({ role: 'assistant', content: assistantContent });
-            conversationHistory.push({ role: 'user', content: contentMarkupFilter.hadMarkup
+            if (hasAnswer) conversationHistory.push({ role: 'assistant', content: assistantContent,
+              providerMetadata: stepResult.message.providerMetadata, textProviderMetadata,
+              reasoning: assistantReasoning || undefined, reasoningProviderMetadata });
+            conversationHistory.push({ role: 'user', content: hadToolMarkup
               ? (canUseTools
                 ? '上一轮的正文混入了工具协议文本，这些操作没有执行。若需要工具，请通过接口提供的结构化工具调用继续，不要在正文输出工具协议，也不要重复已完成的操作。'
                 : '上一轮的正文混入了工具协议文本，这些操作没有执行。当前无法调用工具，请直接输出正文并说明未执行的事项。')
               : continuationPrompt(hasAnswer) });
-            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: `\n\n> ${contentMarkupFilter.hadMarkup ? '模型未正确发送工具调用' : finishReason === 'length' ? '输出达到上限' : '模型未输出正文'}，正在继续（${autoContinuations}/2）。\n\n` });
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: `\n\n> ${hadToolMarkup ? '模型未正确发送工具调用' : finishReason === 'length' ? '输出达到上限' : '模型未输出正文'}，正在继续（${autoContinuations}/2）。\n\n` });
             continue;
           }
-          if (contentMarkupFilter.hadMarkup) {
+          if (hadToolMarkup) {
             throw new Error('模型将工具调用输出为正文，相关操作未执行。请重试或切换模型接口。');
           }
-          if (needsContinuation && !hasAnswer && config.settings.autoContinueTruncated) {
+          if (needsContinuation && !hasAnswer) {
             throw new Error('模型未输出正文，本轮未完成。请尝试提高单次最大输出 Tokens 或切换模型。');
           }
           const issues = await checkDiagramDelivery(assistantContent, projectPath, sessionAllowedFiles);
@@ -2342,7 +2210,9 @@ ${mcpInfoText}
             sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
             if (repair) {
               diagramRepairAttempts++;
-              conversationHistory.push({ role: 'assistant', content: assistantContent });
+              conversationHistory.push({ role: 'assistant', content: assistantContent,
+                providerMetadata: stepResult.message.providerMetadata, textProviderMetadata,
+                reasoning: assistantReasoning || undefined, reasoningProviderMetadata });
               conversationHistory.push({ role: 'user', content: diagramDeliveryFeedback(issues) });
               continue;
             }
@@ -2355,6 +2225,26 @@ ${mcpInfoText}
 
         // 如果发起了工具调用：
         if (toolCallsList.length > 0) {
+          const invalidCalls: Array<{ name: string; error: string }> = [];
+          for (const call of toolCallsList) {
+            try { parseToolArguments(call.name, call.arguments || '{}'); }
+            catch (error: any) { invalidCalls.push({ name: call.name, error: error.message }); }
+          }
+          // Skill calls only load local guidance/resources and never perform external actions.
+          // Let them recover from malformed arguments even when general auto-continuation is off.
+          const canRecoverInvalidCalls = (config.settings.autoContinueTruncated && !isSafetyFuseTurn)
+            || invalidCalls.every(call => call.name === 'skill');
+          if (invalidCalls.length && canRecoverInvalidCalls && autoContinuations < 2) {
+            autoContinuations++;
+            conversationHistory.push({
+              role: 'assistant',
+              content: assistantContent.trim() || '上轮工具参数不完整，尚未执行。',
+            });
+            const names = [...new Set(invalidCalls.map(call => call.name))].join('、');
+            conversationHistory.push({ role: 'user', content: `上一轮的 ${names} 工具参数不是完整 JSON，未执行任何调用。请根据工具定义重新生成完整且简短的参数；不要复述截断内容，不要重复已经成功的操作。\n参数要求：${invalidCalls.map(call => call.error).join(' ')}` });
+            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: `\n\n> 工具参数不完整，未执行；正在重新生成完整参数（${autoContinuations}/2）。\n\n` });
+            continue;
+          }
           // 防死循环保护：检测是否连续多次以完全相同的参数调用相同工具
           const allDuplicates = toolCallsList.every((tc) => {
             // 代理状态会随后台执行变化，重复等待不是无效重试。
@@ -2381,6 +2271,10 @@ ${mcpInfoText}
           conversationHistory.push({
             role: 'assistant',
             content: assistantContent || null,
+            reasoning: assistantReasoning || undefined,
+            textProviderMetadata,
+            reasoningProviderMetadata,
+            providerMetadata: stepResult.message.providerMetadata,
             tool_calls: toolCallsList.map((tc) => ({
               id: tc.id,
               type: 'function',
@@ -2388,6 +2282,7 @@ ${mcpInfoText}
                 name: tc.name,
                 arguments: tc.arguments,
               },
+              providerMetadata: tc.providerMetadata,
             })),
           });
 
@@ -2475,6 +2370,8 @@ ${mcpInfoText}
             conversationHistory.push({
               role: 'tool',
               tool_call_id: tc.id,
+              name: tc.name,
+              is_error: isError,
               content: this.formatSafeToolResultString(toolResult, Number.MAX_SAFE_INTEGER),
             });
           }
@@ -2548,134 +2445,62 @@ ${currentCompactionSummary.summary}
           tool_calls: executedToolsLog.map((tool, index) => ({ id: `synthesis_${index}`, type: 'function',
             function: { name: tool.name, arguments: JSON.stringify(tool.args || {}) } })),
         });
-        executedToolsLog.forEach((tool, index) => cleanSynthesisHistory.push({ role: 'tool', tool_call_id: `synthesis_${index}`,
+        executedToolsLog.forEach((tool, index) => cleanSynthesisHistory.push({ role: 'tool', tool_call_id: `synthesis_${index}`, name: tool.name,
           content: this.formatSafeToolResultString(tool.data, Number.MAX_SAFE_INTEGER) }));
         cleanSynthesisHistory.push({ role: 'user', content: '请基于已获取的真实数据，直接给出当前任务的完整回答，保留关键事实与未完成事项。' });
 
-        let synthesisResponse: Response | null = null;
-        for (let attempt = 0; attempt <= 1; attempt++) {
-          if (controller.signal.aborted) break;
-          try {
-            const synthBody = {
-              model: modelId,
-              messages: pruneToolMessages(cleanSynthesisHistory, [], contextBudget),
-              temperature: config.settings.temperature ?? 0.3,
-              max_tokens: contextBudget.maxOutputTokens,
-              stream: true,
-            };
-
-            assertContextFits(synthBody.messages, [], contextBudget);
-
-            if (provider.id === 'workbuddy' && this.workbuddyService) {
-              const streamNode = await this.workbuddyService.dispatchChat(synthBody, { signal: controller.signal });
-              synthesisResponse = {
-                ok: true,
-                status: 200,
-                body: Readable.toWeb(streamNode),
-              } as any;
-              break;
-            }
-
-            const resp = await fetch(apiEndpoint, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(provider.apiKey?.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
-              },
-              body: JSON.stringify(synthBody),
-              signal: controller.signal,
-            });
-            if (resp.ok) {
-              synthesisResponse = resp;
-              break;
-            }
-          } catch {}
-          if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
-        }
-
         let synthesisStreamed = '';
         const synthesisMarkupFilter = new DeepSeekToolMarkupFilter();
-        if (synthesisResponse && synthesisResponse.ok && synthesisResponse.body) {
-          const reader = synthesisResponse.body.getReader();
-          const cancelSynthReader = () => {
-            try { reader.cancel().catch(() => {}); } catch {}
-          };
-          controller.signal.addEventListener('abort', cancelSynthReader, { once: true });
-          const decoder = new TextDecoder('utf-8');
-          let buffer = '';
-          let isInThinkTag = false;
-
+        const synthMessages = pruneToolMessages(cleanSynthesisHistory, [], contextBudget);
+        assertContextFits(synthMessages, [], contextBudget);
+        const canonicalSynthesis = modelMessagesFromWire(textMask ? textMask.maskValue(synthMessages) : synthMessages);
+        let synthesisResult: Awaited<ReturnType<typeof runModelStep>> | undefined;
+        for (let attempt = 0; attempt <= 1; attempt++) {
           try {
-            while (true) {
-              if (controller.signal.aborted) break;
-              const { done, value } = await reader.read();
-              if (done || controller.signal.aborted) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith('data:')) continue;
-              const dataStr = trimmed.slice(5).trim();
-              if (dataStr === '[DONE]') continue;
-
-              try {
-                const chunk = JSON.parse(dataStr);
-                const delta = chunk.choices?.[0]?.delta;
-                if (!delta) continue;
-
-                if (delta.reasoning_content) {
-                  sendEvent({
-                    requestId,
-                    sessionId,
-                    messageId,
-                    type: 'reasoning_delta',
-                    delta: delta.reasoning_content,
-                  });
-                }
-
-                if (delta.content) {
-                  let piece = delta.content;
-                  if (piece.includes('<think>')) {
-                    isInThinkTag = true;
-                    const parts = piece.split('<think>');
-                    if (parts[1]) {
-                      sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: parts[1] });
-                    }
-                    continue;
-                  }
-                  if (isInThinkTag) {
-                    if (piece.includes('</think>')) {
-                      isInThinkTag = false;
-                      const parts = piece.split('</think>');
-                      if (parts[0]) {
-                        sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: parts[0] });
-                      }
-                      if (parts[1]) {
-                        const visible = synthesisMarkupFilter.push(parts[1]);
-                        if (visible) {
-                          synthesisStreamed += visible;
-                          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
-                        }
-                      }
-                    } else {
-                      sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: piece });
-                    }
-                    continue;
-                  }
-                  const visible = synthesisMarkupFilter.push(piece);
-                  if (visible) {
-                    synthesisStreamed += visible;
-                    sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
-                  }
-                }
-              } catch {}
+            let isInThinkTag = false;
+            const emitVisible = (piece: string) => {
+              const visible = synthesisMarkupFilter.push(piece);
+              if (visible) {
+                synthesisStreamed += visible;
+                sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: visible });
+              }
+            };
+            synthesisResult = await runModelStep({
+              gateway: this.gateway,
+              request: {
+                provider, modelId, system: canonicalSynthesis.system, messages: canonicalSynthesis.messages,
+                maxOutputTokens: contextBudget.maxOutputTokens,
+                temperature: config.settings.temperature ?? 0.3,
+                signal: controller.signal,
+              },
+              workbuddy: this.workbuddyService,
+              onReasoning: delta => sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta }),
+              onText: piece => {
+                if (piece.includes('<think>')) {
+                  isInThinkTag = true;
+                  const [before, after = ''] = piece.split('<think>', 2);
+                  if (before) emitVisible(before);
+                  if (after) sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: after });
+                } else if (isInThinkTag && piece.includes('</think>')) {
+                  isInThinkTag = false;
+                  const [before, after = ''] = piece.split('</think>', 2);
+                  if (before) sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: before });
+                  if (after) emitVisible(after);
+                } else if (isInThinkTag) sendEvent({ requestId, sessionId, messageId, type: 'reasoning_delta', delta: piece });
+                else emitVisible(piece);
+              },
+            });
+            break;
+          } catch (error) {
+            if (controller.signal.aborted || (error as any)?.name === 'AbortError') throw error;
+            const partial = partialModelStep(error);
+            if (partial && (partial.content || partial.reasoning || partial.hadToolInput)) break;
+            if (attempt === 0 && (error instanceof ModelGatewayError && ['rate-limit', 'network', 'incomplete-stream'].includes(error.kind)
+              || isTransientStreamFailure(error))) {
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              continue;
             }
-          }
-          } finally {
-            controller.signal.removeEventListener('abort', cancelSynthReader);
+            break;
           }
         }
 
@@ -2690,6 +2515,9 @@ ${currentCompactionSummary.summary}
           const warning = '\n\n[已隐藏正文中的工具协议文本；该内容未作为工具执行。]';
           synthesisStreamed += warning;
           sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: warning });
+        }
+        if (synthesisResult?.usage?.inputTokens !== undefined && synthesisResult.usage.outputTokens !== undefined) {
+          recordUsage(synthesisResult.usage.inputTokens, synthesisResult.usage.outputTokens, 'reported');
         }
 
         const synthesisIssues = await checkDiagramDelivery(synthesisStreamed, projectPath, sessionAllowedFiles);
@@ -2750,476 +2578,6 @@ ${currentCompactionSummary.summary}
   }
 
   /**
-   * Google Gemini 原生 REST API 流式对话与工具调用引擎
-   */
-  private async runGeminiNativeStream(opts: {
-    requestId: string;
-    sessionId: string;
-    messageId: string;
-    provider: AiProviderConfig;
-    modelId: string;
-    systemPromptText: string;
-    recentMessages: AiChatMessage[];
-    enableTools: boolean;
-    activeToolsSpec?: any[];
-    activeCustomMcp?: McpServerConfig[];
-    settings: AiHarnessSettings;
-    currentSession: any;
-    controller: AbortController;
-    sendEvent: (event: AiStreamEvent) => void;
-    projectPath?: string;
-    sessionAllowedFiles?: string[];
-    mode?: AiSessionMode;
-    compactionSummary?: AiChatSession['compactionSummary'];
-    contextBudget: ModelContextBudget;
-    visionImages: VisionImageLoader;
-    recordUsage: (input: unknown, output: unknown, source: 'reported' | 'estimated') => void;
-    textMask?: TextMask;
-  }): Promise<void> {
-    const {
-      requestId,
-      sessionId,
-      messageId,
-      provider,
-      modelId,
-      systemPromptText,
-      recentMessages,
-      enableTools,
-      activeToolsSpec = [],
-      activeCustomMcp = [],
-      settings,
-      currentSession,
-      controller,
-      sendEvent,
-      projectPath,
-      sessionAllowedFiles,
-      compactionSummary,
-      contextBudget,
-      visionImages,
-      recordUsage,
-      textMask,
-    } = opts;
-
-    const cleanBaseUrl = provider.baseUrl.trim().replace(/\/+$/, '');
-    const cleanModelId = modelId.replace(/^models\//, '');
-    const apiKey = provider.apiKey.trim();
-
-    // 1. 组装 Gemini contents (role: 'user' | 'model')
-    const geminiContents: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
-    if (compactionSummary?.summary) {
-      geminiContents.push({ role: 'user', parts: [{ text: `<compacted-summary>\n${compactionSummary.summary}\n</compacted-summary>` }] },
-        { role: 'model', parts: [{ text: '已读取前序检查点，继续处理后续请求。' }] });
-    }
-
-    const latestUserMessage = recentMessages.findLast(message => message.role === 'user');
-    for (const msg of recentMessages) {
-      if (msg.role === 'user') {
-        let text = msg.content || '';
-        if (msg.attachments && msg.attachments.length > 0) {
-          const fileDescriptions = msg.attachments.map(file => formatAttachmentContext(file, msg === latestUserMessage && file.contentKind === 'image' && !!file.fullPath)).join('\n\n');
-          text = `${fileDescriptions}\n\n${text}`;
-        }
-
-        if (msg.entityRefs && msg.entityRefs.length > 0) {
-          const refDesc = msg.entityRefs
-            .map((r) => `[已挂载上下文对象: ${r.label} (${r.apiKey})]`)
-            .join(', ');
-          text = `${refDesc}\n\n${text}`;
-        }
-
-        const images = msg === latestUserMessage ? inlineImagePaths(msg.attachments).map(file => geminiImagePart(visionImages.load(file))) : [];
-        geminiContents.push({ role: 'user', parts: [{ text }, ...images] });
-      } else if (msg.role === 'assistant') {
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          // Gemini 协议严格时序：model(functionCall) -> user(functionResponse) -> model(final text answer)
-          // 绝对不能把 msg.content 塞进第一阶段的 functionCall 里，更不能在 functionResponse 后留空直接接下一个 user 消息！
-          // 否则 Gemini 认为上一次工具调用的回答尚未产出，在用户发新问题时会首先重复回答上一轮的问题！
-          const modelCallParts: any[] = [];
-          for (const tc of msg.toolCalls) {
-            modelCallParts.push({
-              functionCall: {
-                name: tc.name,
-                args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments || '{}') : (tc.arguments || {}),
-              },
-            });
-          }
-          geminiContents.push({ role: 'model', parts: modelCallParts });
-
-          const responseParts: any[] = [];
-          for (const tc of msg.toolCalls) {
-            responseParts.push({
-              functionResponse: {
-                name: tc.name,
-                response: {
-                  result: tc.resultData || tc.resultSummary || {},
-                },
-              },
-            });
-          }
-          geminiContents.push({ role: 'user', parts: responseParts });
-
-          if (msg.content && msg.content.trim()) {
-            geminiContents.push({ role: 'model', parts: [{ text: msg.content }] });
-          }
-        } else if (msg.content && msg.content.trim()) {
-          geminiContents.push({ role: 'model', parts: [{ text: msg.content }] });
-        }
-      }
-    }
-
-    // 2. 判断是否支持工具调用
-    const sessionMode: AiSessionMode = opts.mode || currentSession.mode || 'standard';
-    const isPtcMode = sessionMode === 'ptc';
-    const isMinimalMode = sessionMode === 'minimal';
-
-    const isThinkingExp = cleanModelId.toLowerCase().includes('thinking');
-    const canUseTools = !isMinimalMode && enableTools && !isThinkingExp;
-
-    // 转换全量激活工具为 Gemini functionDeclarations (带 JSON Schema 安全清理)
-    const selectedToolsSpec = isPtcMode
-      ? DSH_PTC_TOOL_SPEC
-      : (activeToolsSpec && activeToolsSpec.length > 0 ? activeToolsSpec : CRM_HARNESS_TOOLS_SPEC);
-
-    const effectiveTools = currentSession.environment && (currentSession.environment.productType || 'neocrm') === 'neocrm'
-      ? filterNeoCliTools(selectedToolsSpec)
-      : selectedToolsSpec;
-    const geminiFunctionDeclarations = effectiveTools.map((spec) => {
-      const fn = spec.function;
-      const cleanedParams = cleanGeminiSchema(fn.parameters);
-      const hasProps = cleanedParams?.properties && Object.keys(cleanedParams.properties).length > 0;
-      return {
-        name: fn.name,
-        description: fn.description,
-        ...(hasProps ? { parameters: cleanedParams } : {}),
-      };
-    });
-
-    let autoContinuations = 0;
-    let stepCount = 0;
-    const maxSafetySteps = 60; // DSH 标准无限制迭代，60步安全熔断底线
-    let hasMoreIterations = true;
-    let waitingForUser = false;
-
-    let diagramRepairAttempts = 0;
-    let contextPruneNotified = false;
-    while (hasMoreIterations && stepCount < maxSafetySteps && !controller.signal.aborted) {
-      stepCount++;
-      const isFinalSummaryTurn = stepCount >= maxSafetySteps;
-
-      const requestBody: any = {
-        contents: geminiContents,
-        generationConfig: {
-          temperature: settings.temperature ?? 0.3,
-          maxOutputTokens: contextBudget.maxOutputTokens,
-        },
-      };
-
-      if (systemPromptText) {
-        requestBody.systemInstruction = {
-          parts: [{ text: systemPromptText }],
-        };
-      }
-
-      if (canUseTools && !isFinalSummaryTurn) {
-        requestBody.tools = [{ functionDeclarations: geminiFunctionDeclarations }];
-      }
-      requestBody.contents = pruneGeminiContents(geminiContents, requestBody.systemInstruction, requestBody.tools || [], contextBudget);
-      if (!contextPruneNotified && estimateContextTokens(requestBody.contents) < estimateContextTokens(geminiContents)) {
-        contextPruneNotified = true;
-        sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n> 上下文接近上限，已精简已完成的工具参数和结果，保留调用关系与必要路径。\n\n' });
-      }
-      assertContextFits({ contents: requestBody.contents, systemInstruction: requestBody.systemInstruction }, requestBody.tools || [], contextBudget);
-
-      const endpoint = `${cleanBaseUrl}/models/${cleanModelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-
-      let response: Response | undefined;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-          body: JSON.stringify(textMask ? textMask.maskValue(requestBody) : requestBody),
-          signal: controller.signal,
-        });
-        if (response.ok) break;
-        const errText = await response.text();
-        const parsedError = this.cleanHttpError(response.status, errText);
-        if (attempt === 0 && isContextLimitError(response.status, errText)) {
-          const before = estimateContextTokens({ contents: requestBody.contents, system: requestBody.systemInstruction, tools: requestBody.tools || [] });
-          const reported = reportedContextWindow(errText);
-          if (reported && reported < contextBudget.contextWindow) {
-            const model = provider.models.find(item => item.id === modelId);
-            const corrected = { ...provider, models: [{ ...model, id: modelId, name: model?.name || modelId, contextWindow: reported }] };
-            Object.assign(contextBudget, getModelContextBudget(corrected, modelId, settings.maxTokens));
-            requestBody.generationConfig.maxOutputTokens = contextBudget.maxOutputTokens;
-          }
-          const reduced = pruneGeminiContents(geminiContents, requestBody.systemInstruction, requestBody.tools || [], contextBudget, true);
-          const after = estimateContextTokens({ contents: reduced, system: requestBody.systemInstruction, tools: requestBody.tools || [] });
-          if (after < before) {
-            assertContextFits({ contents: reduced, systemInstruction: requestBody.systemInstruction }, requestBody.tools || [], contextBudget);
-            requestBody.contents = reduced;
-            sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n> 上下文接近上限，正在整理已完成的工具记录后重试。\n\n' });
-            continue;
-          }
-        }
-        throw new Error(`Gemini 接口响应异常 (HTTP ${response.status}): ${parsedError}${visionImages.hasImages && [400, 415, 422].includes(response.status) && !isContextLimitError(response.status, errText) ? '。本次请求包含图片，请确认所选模型及接口支持图片输入。' : ''}`);
-      }
-
-      if (!response?.body) {
-        throw new Error('未获取到 Gemini 流式响应主体');
-      }
-
-      const reader = response.body.getReader();
-      const cancelGeminiReader = () => {
-        try { reader.cancel().catch(() => {}); } catch {}
-      };
-      controller.signal.addEventListener('abort', cancelGeminiReader, { once: true });
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
-      let finishReason = '';
-      let responseUsage: any;
-      const modelTurnParts: any[] = [];
-      let modelReasoning = '';
-      const pendingFunctionCalls: Array<{ id: string; name: string; args: any }> = [];
-      let streamFailure: any;
-
-      try {
-      while (true) {
-        const { done, value } = await reader.read();
-        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = done ? '' : lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data:')) continue;
-          const dataStr = trimmed.slice(5).trim();
-          if (!dataStr || dataStr === '[DONE]') continue;
-
-          try {
-            const chunk = JSON.parse(dataStr);
-            if (chunk.usageMetadata) responseUsage = chunk.usageMetadata;
-            if (chunk.candidates?.[0]?.finishReason) finishReason = chunk.candidates[0].finishReason;
-            const parts = chunk.candidates?.[0]?.content?.parts;
-            if (!Array.isArray(parts)) continue;
-
-            for (const part of parts) {
-              // 1. Gemini 2.5 / Thinking 原生思考块 (part.thought === true)
-              if (part.thought && part.text) {
-                modelReasoning += part.text;
-                sendEvent({
-                  requestId,
-                  sessionId,
-                  messageId,
-                  type: 'reasoning_delta',
-                  delta: part.text,
-                });
-                continue;
-              }
-
-              // 2. 常规文本输出
-              if (typeof part.text === 'string' && part.text.length > 0) {
-                modelTurnParts.push({ text: part.text });
-                sendEvent({
-                  requestId,
-                  sessionId,
-                  messageId,
-                  type: 'content_delta',
-                  delta: part.text,
-                });
-              }
-
-              // 3. Gemini Function Call
-              if (part.functionCall && part.functionCall.name) {
-                let args = part.functionCall.args === undefined ? {} : part.functionCall.args;
-                try { args = parseToolArguments(part.functionCall.name, args); } catch { /* report invalid arguments below without executing */ }
-                modelTurnParts.push({ functionCall: { ...part.functionCall, args } });
-                pendingFunctionCalls.push({
-                  id: `gemini_tc_${Date.now()}_${pendingFunctionCalls.length}`,
-                  name: part.functionCall.name,
-                  args,
-                });
-              }
-            }
-          } catch {
-            // 忽略单行解析异常
-          }
-        }
-        if (done) break;
-      }
-
-      } catch (error) { streamFailure = error; }
-      finally { controller.signal.removeEventListener('abort', cancelGeminiReader); }
-
-      if (controller.signal.aborted) {
-        throw Object.assign(new Error('对话已停止'), { name: 'AbortError' });
-      }
-
-      if (!streamFailure) {
-        const promptUsage = responseUsage?.promptTokenCount;
-        const completionUsage = typeof responseUsage?.candidatesTokenCount === 'number' ? responseUsage.candidatesTokenCount + (responseUsage.thoughtsTokenCount || 0) : undefined;
-        const reported = typeof promptUsage === 'number' && Number.isFinite(promptUsage) && promptUsage >= 0 && typeof completionUsage === 'number' && Number.isFinite(completionUsage) && completionUsage >= 0;
-        const estimatedInput = estimateContextTokens({ contents: requestBody.contents, systemInstruction: requestBody.systemInstruction, tools: requestBody.tools || [] });
-        const estimatedOutput = estimateContextTokens({ parts: modelTurnParts, reasoning: modelReasoning });
-        recordUsage(reported ? promptUsage : estimatedInput, reported ? completionUsage : estimatedOutput, reported ? 'reported' : 'estimated');
-      }
-      if (streamFailure) {
-        if (settings.autoContinueTruncated && isTransientStreamFailure(streamFailure) && !pendingFunctionCalls.length && autoContinuations < 2) {
-          autoContinuations++;
-          if (modelTurnParts.length) {
-            geminiContents.push({ role: 'model', parts: modelTurnParts });
-            geminiContents.push({ role: 'user', parts: [{ text: '刚才回复因网络中断，请从断点继续，不要重复已完成内容或重新执行工具。' }] });
-          }
-          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: '\n\n> 网络中断，正在继续（' + autoContinuations + '/2）。\n\n' });
-          await new Promise(resolve => setTimeout(resolve, autoContinuations * 1500));
-          if (controller.signal.aborted) break;
-          continue;
-        }
-        throw streamFailure;
-      }
-      if (pendingFunctionCalls.length > 0) {
-        geminiContents.push({
-          role: 'model',
-          parts: modelTurnParts,
-        });
-
-        const functionResponseParts: any[] = [];
-        const toolImages: any[] = [];
-
-        for (const fc of pendingFunctionCalls) {
-          const toolRecord: AiToolCallRecord = {
-            id: fc.id,
-            name: fc.name,
-            arguments: fc.args,
-            status: 'running',
-          };
-
-          sendEvent({
-            requestId,
-            sessionId,
-            messageId,
-            type: 'tool_start',
-            toolCall: toolRecord,
-          });
-
-          const toolStartTime = Date.now();
-          let toolResult: any = null;
-          let resultSummary = '';
-          let isError = false;
-
-          try {
-            if (textMask) throw new Error('文本遮罩模式不允许调用工具');
-            if (fc.name === 'browser_control' && (!canUseTools || !effectiveTools.some((tool: any) => tool.function?.name === 'browser_control'))) throw new Error('当前模式未启用浏览器控制');
-            fc.args = parseToolArguments(fc.name, fc.args);
-            const res = await this.executeUnifiedTool(
-              fc.name,
-              fc.args,
-              activeCustomMcp,
-              currentSession.environment,
-              currentSession.tokenData,
-              projectPath,
-              currentSession.projectId,
-              sessionAllowedFiles,
-              controller.signal
-            );
-            toolResult = res.data;
-            resultSummary = res.summary;
-            if (fc.name === 'read_image') {
-              toolImages.push(geminiImagePart(visionImages.load(res.data.path)));
-              toolResult = { ...res.data, imageIncluded: true };
-              resultSummary = `图片已发送模型: ${path.basename(res.data.path)}`;
-            }
-            if (fc.name === 'browser_control' && fc.args.action === 'screenshot') {
-              toolImages.push(geminiImagePart({ mimeType: res.data.mimeType, data: res.data.imageData }));
-              toolResult = { imageIncluded: true, mimeType: res.data.mimeType };
-              resultSummary = '浏览器截图已发送模型';
-            }
-          } catch (toolErr: any) {
-            if (controller.signal.aborted || toolErr?.name === 'AbortError') throw toolErr;
-            isError = true;
-            toolResult = { error: toolErr.message };
-            resultSummary = `调用失败: ${toolErr.message}`;
-          }
-
-          toolRecord.status = isError ? 'error' : 'success';
-          toolRecord.resultSummary = resultSummary;
-          toolRecord.resultData = toolResult;
-          toolRecord.durationMs = Date.now() - toolStartTime;
-
-          sendEvent({
-            requestId,
-            sessionId,
-            messageId,
-            type: 'tool_update',
-            toolCall: toolRecord,
-          });
-
-          functionResponseParts.push({
-            functionResponse: {
-              name: fc.name,
-              response: {
-                result: toolResult,
-              },
-            },
-          });
-        }
-
-        // DSH 交互确认与方案评审挂起守护
-        const hasInteractivePause = pendingFunctionCalls.some((fc) => fc.name === 'ask_user_question' || fc.name === 'exit_plan_mode');
-        if (hasInteractivePause) {
-          waitingForUser = true;
-          console.log('[DSH Gemini Loop] 捕获到交互提问/方案评审工具调用，自主循环挂起等待用户完成确认');
-          hasMoreIterations = false;
-          break;
-        }
-
-        geminiContents.push({
-          role: 'user',
-          parts: [...functionResponseParts, ...toolImages],
-        });
-
-        hasMoreIterations = true;
-      } else {
-        const content = modelTurnParts.filter(part => typeof part.text === 'string').map(part => part.text).join('');
-        const hasAnswer = !!content.trim();
-        const needsContinuation = finishReason === 'MAX_TOKENS'
-          || (!hasAnswer && !!modelReasoning.trim() && (!finishReason || finishReason === 'STOP'));
-        if (needsContinuation && settings.autoContinueTruncated && autoContinuations < 2 && !isFinalSummaryTurn) {
-          autoContinuations++;
-          if (hasAnswer) geminiContents.push({ role: 'model', parts: modelTurnParts });
-          geminiContents.push({ role: 'user', parts: [{ text: continuationPrompt(hasAnswer) }] });
-          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: `\n\n> ${finishReason === 'MAX_TOKENS' ? '输出达到上限' : '模型未输出正文'}，正在继续（${autoContinuations}/2）。\n\n` });
-          continue;
-        }
-        if (needsContinuation && !hasAnswer && settings.autoContinueTruncated) {
-          throw new Error('模型未输出正文，本轮未完成。请尝试提高单次最大输出 Tokens 或切换模型。');
-        }
-        const issues = await checkDiagramDelivery(content, projectPath, sessionAllowedFiles);
-        if (controller.signal.aborted) break;
-        if (issues.length) {
-          const repair = canUseTools && !isFinalSummaryTurn && sessionMode !== 'plan' && diagramRepairAttempts < 2;
-          sendEvent({ requestId, sessionId, messageId, type: 'content_delta', delta: diagramDeliveryWarning(issues, repair) });
-          if (repair) {
-            diagramRepairAttempts++;
-            geminiContents.push({ role: 'model', parts: modelTurnParts });
-            geminiContents.push({ role: 'user', parts: [{ text: diagramDeliveryFeedback(issues) }] });
-            continue;
-          }
-        }
-        hasMoreIterations = false;
-      }
-    }
-
-    sendEvent({
-      requestId,
-      sessionId,
-      messageId,
-      type: 'done',
-      completionStatus: controller.signal.aborted ? 'cancelled' : waitingForUser ? 'waiting' : 'completed',
-    });
-  }
-
-  /**
    * 同步外部 MCP 服务的可用工具列表 (tools/list)
    */
   public async syncMcpTools(serverId: string): Promise<{
@@ -3263,7 +2621,8 @@ ${currentCompactionSummary.summary}
     projectPath?: string,
     projectId?: string,
     sessionAllowedFiles?: string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    preserveSkillBody = false
   ): Promise<{ data: any; summary: string }> {
     if (signal?.aborted) {
       const error = new Error('对话已停止');
@@ -3354,7 +2713,7 @@ ${currentCompactionSummary.summary}
     // 1. 判断是否为销售易本地 Harness 工具
     const isCrmTool = CRM_HARNESS_TOOLS_SPEC.some((s) => s.function.name === name);
     if (isCrmTool) {
-      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles, signal, projectId);
+      return await this.executeCrmTool(name, args, env, tokenData, projectPath, sessionAllowedFiles, signal, projectId, preserveSkillBody);
     }
 
     // 2. 匹配外部 MCP 服务
@@ -3527,7 +2886,8 @@ ${currentCompactionSummary.summary}
     projectPath?: string,
     sessionAllowedFiles?: string[],
     signal?: AbortSignal,
-    projectId?: string
+    projectId?: string,
+    preserveSkillBody = false
   ): Promise<{ data: any; summary: string }> {
     // ================= DeepSeek Harness 官方 PTC 模式程序执行器 =================
     if (env && (env.productType || 'neocrm') === 'neocrm') assertNeoConnectorToolAccess(name, args);
@@ -3538,7 +2898,7 @@ ${currentCompactionSummary.summary}
           const builtinId = BUILTIN_AI_SKILLS.find(skill => skill.name === params?.name)?.id;
           if (typeof params?.name === 'string' && isProtectedBuiltinSkill(builtinId || params.name)) usedProtectedSkill = true;
           const result = await this.executeUnifiedTool('skill', params || {}, [], env, tokenData,
-            projectPath, projectId, sessionAllowedFiles, signal);
+            projectPath, projectId, sessionAllowedFiles, signal, true);
           return result.data;
         },
         web_search: async (params: any) => this.dshToolService.webSearch(params),
@@ -3700,7 +3060,7 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "write") {
-      const res = this.dshToolService.writeFile(args, projectPath);
+      const res = await this.dshToolService.writeFile(args, projectPath);
       return {
         data: res,
         summary: `写入文件 [${path.basename(res.path)}]: ${res.bytesWritten} 字节, ${res.linesCount} 行`,
@@ -3708,7 +3068,7 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "edit") {
-      const res = this.dshToolService.editFile(args, projectPath);
+      const res = await this.dshToolService.editFile(args, projectPath);
       return {
         data: res,
         summary: `编辑文件 [${path.basename(res.path)}]: 替换 ${res.replacedOccurrences} 处文本`,
@@ -3828,47 +3188,10 @@ ${currentCompactionSummary.summary}
     }
 
     if (name === "skill") {
-      const skillName = args?.name;
-      if (typeof skillName !== 'string' || !skillName) throw new Error('缺少技能名称');
-      const builtin = BUILTIN_AI_SKILLS.find(skill => skill.id === skillName || skill.name === skillName);
-      const resolvedName = builtin?.id || skillName;
-      if (isPageCodeSkill(resolvedName)) {
-        if (this.getAiConfig().skills?.find(skill => skill.id === PAGE_CODE_SKILL_ID)?.enabled === false) throw new Error('页面代码管理技能已停用，请在技能设置中启用');
-        return { data: readPageCodeSkill(resolvedName, args)!, summary: args.resource ? '已读取页面代码管理参考资料' : '已加载页面代码管理技能' };
-      }
-      if (isDiagramDesignSkill(resolvedName)) {
-        if (this.getAiConfig().skills?.find(skill => skill.id === DIAGRAM_SKILL_ID)?.enabled === false) throw new Error('Diagram Design 技能已停用，请在技能设置中启用');
-        const packaged = readDiagramDesignSkill(resolvedName, args)!;
-        return { data: packaged, summary: args.resource ? '已读取 Diagram Design 图表参考资料' : '已加载 Diagram Design 图表设计技能及资源目录' };
-      }
-      if (!restrictedFeatureService.canUseSkill(resolvedName)) throw new Error(`未找到名为 "${skillName}" 的技能规范`);
-      const packaged = readRestrictedSkillPackage(resolvedName, args);
-      if (packaged) return { data: packaged, summary: args.script ? '已完成内置技能离线构造或校验'
-        : args.resource ? '已按需读取内置技能参考资料' : `已加载内置技能 [${skillName}] 及资源目录` };
-      if (args.resource !== undefined || args.script !== undefined) throw new Error('该技能没有可读取的配套资源');
-      let instruction = getProtectedSkillInstruction(resolvedName);
-      let desc = '';
-      if (!instruction) {
-        const config = this.getAiConfig();
-        const found = (config.skills || []).find((s) => s.id === skillName || s.name === skillName);
-        if (found) {
-          if (!restrictedFeatureService.canUseSkill(found.id)) throw new Error(`未找到名为 "${skillName}" 的技能规范`);
-          instruction = isProtectedBuiltinSkill(found.id) ? getProtectedSkillInstruction(found.id)
-            : found.systemInstruction || getProtectedSkillInstruction(found.id);
-          desc = found.description;
-        }
-      }
-      if (!instruction) {
-        throw new Error(`未找到名为 "${skillName}" 的技能规范`);
-      }
-      return {
-        data: {
-          name: skillName,
-          description: desc,
-          instruction,
-        },
-        summary: `成功按需加载技能 [${skillName}] 的专业执行规范`,
-      };
+      const loaded = agentSkillRegistry.load(this.getAiConfig().skills || [], args, { authorized: licenseService.getLicenseStatus().isAuthorized });
+      // PTC code may inspect/transform the returned body; only deduplicate model-facing receipts.
+      const result = preserveSkillBody ? loaded : skillResultForContext(loaded, this.agentContext.getStore()?.skillContext?.() || []);
+      return { data: result.data, summary: result.summary };
     }
 
     if (name === "workspace_changes") {

@@ -8,7 +8,7 @@ import { SessionDashboard } from './components/SessionDashboard';
 import { ConnectorDetailView } from './components/ConnectorDetailView';
 import { MetadataManager } from './components/MetadataManager';
 import { DataManager } from './components/DataManager';
-import { AiHarnessStudio } from './components/ai/AiHarnessStudio';
+import { OpenCodeWorkspace } from './components/ai/OpenCodeWorkspace';
 const MailClientView = lazy(() => import('./components/mail/MailClientView').then(module => ({ default: module.MailClientView })));
 const MeetingAssistantView = lazy(() => import('./components/meeting/MeetingAssistantView').then(module => ({ default: module.MeetingAssistantView })));
 import { WorkspacePageView } from './components/workspace/WorkspacePageView';
@@ -180,7 +180,7 @@ export const App: React.FC = () => {
         if (window.neoApi?.aiGetSessions) {
           const sList = await window.neoApi.aiGetSessions();
           if (Array.isArray(sList)) {
-            loadedSessions = sList.filter((s) => s.messages && s.messages.length > 0);
+            loadedSessions = sList.filter((s) => (s.messageCount ?? s.messages?.length ?? 0) > 0);
             setSessions(loadedSessions);
           }
         }
@@ -249,7 +249,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    window.neoApi?.aiGetSessions?.().then((items) => { if (active) setSessions(items.filter((item) => item.messages?.length > 0)); }).catch(() => {});
+    window.neoApi?.aiGetSessions?.().then((items) => { if (active) setSessions(items.filter((item) => (item.messageCount ?? item.messages?.length ?? 0) > 0)); }).catch(() => {});
     window.neoApi?.aiGetConfig?.().then((config) => { if (active && config.skills) setSkills(config.skills); }).catch(() => {});
     window.neoApi?.workflowGetLicenseStatus?.().then((next) => { if (active) setWorkflowLicenseStatus(next); }).catch(() => {});
     if (!privateFeaturesVisible) {
@@ -574,7 +574,8 @@ export const App: React.FC = () => {
         <span>{activeTab === 'ai' ? (projects.find(project => project.id === activeProjectId)?.name || '代码工作区') : ({ meeting: '会议助手', mail: '邮件', dashboard: 'CRM 连接器', metadata: '对象与字段', data: '数据中心', workspace: '工作台' }[activeTab])}</span>
       </header>
       <div className="suite-body">
-      <AppActivityRail activeTab={activeTab} onSelectTab={handleTabChange} onOpenSettings={() => handleOpenSettings('models')} />
+      <AppActivityRail activeTab={activeTab} onSelectTab={handleTabChange} onOpenSettings={() => handleOpenSettings('models')}
+        sidebarCollapsed={sidebarCollapsed} onToggleSidebar={() => setSidebarCollapsed(false)} />
       <div className={activeTab === 'ai' ? 'suite-sidebar-slot' : 'hidden'}>
       {/* 全局 Codex 经典左侧项目树与功能导航栏 (彻底替代原顶部横条) */}
       <AppSidebar
@@ -786,8 +787,7 @@ export const App: React.FC = () => {
 
         {/* Tab 4: AI 对话平台 (Codex 极简三栏全能工作台 · 保持常驻挂载以支持后台流式持续生成与零断点切回) */}
         <div className={`flex-1 h-full w-full min-h-0 flex flex-col ${activeTab === 'ai' ? 'flex' : 'hidden'}`}>
-          <AiHarnessStudio
-            crmSession={session}
+          <OpenCodeWorkspace
             activeSessionId={activeSessionId}
             onSelectSession={(id) => {
               selectionChangedDuringLoad.current = true;
@@ -800,14 +800,8 @@ export const App: React.FC = () => {
             selectedPresetId={selectedPresetId}
             onSelectPreset={setSelectedPresetId}
             workflowLicenseStatus={workflowLicenseStatus}
-            onOpenLicenseModal={() => setIsLicenseModalOpen(true)}
             activeProject={projects.find((p) => p.id === activeProjectId) || projects[0]}
-            onNavigateToSettings={(tab) => handleOpenSettings((tab as SettingsSubTab) || 'models')}
-            onNavigateToMetadata={() => setActiveTab('metadata')}
-            onNavigateToData={() => setActiveTab('data')}
-            platform={platform}
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+            onEditProject={(project) => { setEditingProject(project); setIsCreateProjectOpen(true); }}
             showToast={showToast}
           />
         </div>

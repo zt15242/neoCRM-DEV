@@ -7,6 +7,7 @@ import { freeWebSearch } from './freeWebSearch';
 import { getNeoCliEnvironment } from './neoCliRuntime';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { documentService, isOfficeDocument, isBinaryDocument, type DocumentReadOptions, type DocumentReadResult } from './documentService';
+import { canonicalWorkspacePath, workspaceMutationService, type TextSnapshot } from './workspaceMutationService';
 
 export interface DshTodoItem {
   content: string;
@@ -37,10 +38,32 @@ interface DshJobProcess {
 
 export class DshToolService {
   private static sessionContext = new AsyncLocalStorage<string>();
+  private static fileRevisions = new AsyncLocalStorage<Map<string, string>>();
   private static goals = new Map<string, DshGoalItem | null>();
   private static todos = new Map<string, DshTodoItem[]>();
   static runInSession<T>(sessionId: string, run: () => T): T {
-    return this.sessionContext.run(sessionId, run);
+    const revisions = new Map<string, string>();
+    return this.sessionContext.run(sessionId, () => this.fileRevisions.run(revisions, () => {
+      try {
+        const result = run();
+        if (result !== null && (typeof result === 'object' || typeof result === 'function')
+          && 'then' in result && typeof result.then === 'function') {
+          return Promise.resolve(result).finally(() => revisions.clear()) as T;
+        }
+        revisions.clear();
+        return result;
+      } catch (error) { revisions.clear(); throw error; }
+    }));
+  }
+  private rememberFile(snapshot: TextSnapshot) {
+    DshToolService.fileRevisions.getStore()?.set(snapshot.path, snapshot.revision);
+  }
+  private async mutationOptions(filename: string, projectRoot?: string) {
+    const revisions = DshToolService.fileRevisions.getStore();
+    const target = await canonicalWorkspacePath(filename);
+    const expectedRevision = revisions?.get(target);
+    if (revisions && !expectedRevision && fs.existsSync(target)) throw new Error('修改现有文件前请先用 read 或 str_replace_editor.view 读取文件；发生冲突后需要重新读取并合并');
+    return { expectedRevision, createOnly: !!revisions && !expectedRevision, projectRoot: this.resolveWorkspaceDir(projectRoot) };
   }
   private static get currentGoal() { return this.goals.get(this.sessionContext.getStore() || 'default') || null; }
   private static set currentGoal(value: DshGoalItem | null) { this.goals.set(this.sessionContext.getStore() || 'default', value); }
@@ -140,11 +163,13 @@ export class DshToolService {
       );
     }
 
-    // 4. 防软链接逃逸校验 (Symlink Jail Check)
-    if (fs.existsSync(resolved)) {
+    // Check the nearest existing parent too: a new file may sit under an external symlink.
+    let ancestor = resolved;
+    while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+    if (fs.existsSync(ancestor)) {
       try {
-        const real = fs.realpathSync(resolved);
-        const realRel = path.relative(root, real);
+        const real = fs.realpathSync(ancestor);
+        const realRel = path.relative(fs.realpathSync(root), real);
         if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
           throw new Error(
             `【安全沙箱拦截】软链接越界穿透被拒绝！目标链接实际指向了项目外部路径: "${real}"`
@@ -391,6 +416,7 @@ export class DshToolService {
     totalLines: number;
     offset: number;
     limit: number;
+    revision: string;
   } | DocumentReadResult> {
     if (!params.file_path) {
       throw new Error('readFile 参数缺少 file_path');
@@ -402,8 +428,9 @@ export class DshToolService {
     }
 
     if (isOfficeDocument(resolvedPath)) return documentService.read({ ...params, file_path: resolvedPath });
-    const raw = fs.readFileSync(resolvedPath, 'utf-8');
-    const allLines = raw.split('\n');
+    const snapshot = await workspaceMutationService.read(resolvedPath);
+    this.rememberFile(snapshot);
+    const allLines = snapshot.content.split(/\r?\n/);
     const totalLines = allLines.length;
 
     const offset = Math.max(1, params.offset || 1);
@@ -420,6 +447,7 @@ export class DshToolService {
       totalLines,
       offset,
       limit,
+      revision: snapshot.revision,
     };
   }
 
@@ -434,37 +462,34 @@ export class DshToolService {
     if (isBinaryDocument(filename)) throw new Error('Office/PDF 不能用文本替换工具修改，请使用文档专用工具生成或编辑');
   }
 
-  public writeFile(
+  public async writeFile(
     params: { file_path: string; content: string },
     projectRoot?: string
-  ): {
+  ): Promise<{
     path: string;
     bytesWritten: number;
     linesCount: number;
-  } {
+    revision: string;
+  }> {
     if (!params.file_path) {
       throw new Error('writeFile 参数缺少 file_path');
     }
     const resolvedPath = this.assertPathWithinProject(params.file_path, projectRoot);
 
-    const dir = path.dirname(resolvedPath);
     this.assertTextDocument(resolvedPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    fs.writeFileSync(resolvedPath, params.content, 'utf-8');
-    const stats = fs.statSync(resolvedPath);
+    const saved = await workspaceMutationService.write(resolvedPath, params.content, await this.mutationOptions(resolvedPath, projectRoot));
+    this.rememberFile(saved);
 
     return {
       path: resolvedPath,
-      bytesWritten: stats.size,
+      bytesWritten: saved.bytes,
       linesCount: params.content.split('\n').length,
+      revision: saved.revision,
     };
   }
 
   // ================= 4. edit 文件字面量替换工具 =================
-  public editFile(
+  public async editFile(
     params: {
       file_path: string;
       old_string: string;
@@ -472,7 +497,7 @@ export class DshToolService {
       replace_all?: boolean;
     },
     projectRoot?: string
-  ): { path: string; replacedOccurrences: number } {
+  ): Promise<{ path: string; replacedOccurrences: number; revision: string }> {
     if (!params.file_path) {
       throw new Error('editFile 参数缺少 file_path');
     }
@@ -483,30 +508,28 @@ export class DshToolService {
       throw new Error(`目标文件不存在: ${resolvedPath}`);
     }
 
-    const content = fs.readFileSync(resolvedPath, 'utf-8');
-    if (!content.includes(params.old_string)) {
-      throw new Error(`在文件 ${resolvedPath} 中未找到指定的待替换文本: "${params.old_string.slice(0, 50)}..."`);
-    }
-
-    let updated = '';
     let count = 0;
-    if (params.replace_all) {
-      count = content.split(params.old_string).length - 1;
-      updated = content.replaceAll(params.old_string, params.new_string);
-    } else {
-      count = 1;
-      updated = content.replace(params.old_string, params.new_string);
-    }
-
-    fs.writeFileSync(resolvedPath, updated, 'utf-8');
+    if (!params.old_string) throw new Error('edit 的 old_string 不能为空');
+    if (params.old_string === params.new_string) throw new Error('edit 的新旧内容相同，没有可应用的修改');
+    const saved = await workspaceMutationService.mutate(resolvedPath, current => {
+      const oldText = params.old_string.replace(/\r?\n/g, current.lineEnding);
+      const newText = params.new_string.replace(/\r?\n/g, current.lineEnding);
+      count = current.content.split(oldText).length - 1;
+      if (!count) throw new Error(`在文件 ${resolvedPath} 中未找到指定的待替换文本: "${params.old_string.slice(0, 50)}..."`);
+      if (!params.replace_all && count > 1) throw new Error(`待替换文本在文件中出现 ${count} 次，请增加上下文使其唯一，或明确设置 replace_all`);
+      return params.replace_all ? current.content.split(oldText).join(newText)
+        : current.content.replace(oldText, () => newText);
+    }, await this.mutationOptions(resolvedPath, projectRoot));
+    this.rememberFile(saved);
     return {
       path: resolvedPath,
-      replacedOccurrences: count,
+      replacedOccurrences: params.replace_all ? count : 1,
+      revision: saved.revision,
     };
   }
 
   // ================= 5. str_replace_editor 工具 =================
-  public strReplaceEditor(
+  public async strReplaceEditor(
     params: {
       command: 'view' | 'create' | 'str_replace' | 'insert';
       path: string;
@@ -517,7 +540,7 @@ export class DshToolService {
       view_range?: [number, number];
     },
     projectRoot?: string
-  ): any {
+  ): Promise<any> {
     if (!params.path) {
       throw new Error('strReplaceEditor 参数缺少 path');
     }
@@ -529,10 +552,9 @@ export class DshToolService {
       this.assertTextDocument(resolvedPath);
     }
     if (params.command === 'create') {
-      const dir = path.dirname(resolvedPath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(resolvedPath, params.file_text || '', 'utf-8');
-      return { path: resolvedPath, message: 'File created successfully' };
+      const saved = await workspaceMutationService.write(resolvedPath, params.file_text || '', await this.mutationOptions(resolvedPath, projectRoot));
+      this.rememberFile(saved);
+      return { path: resolvedPath, revision: saved.revision, message: 'File created successfully' };
     }
 
     if (!fs.existsSync(resolvedPath)) {
@@ -545,8 +567,9 @@ export class DshToolService {
         const entries = fs.readdirSync(resolvedPath).slice(0, 100);
         return { path: resolvedPath, isDirectory: true, entries };
       }
-      const raw = fs.readFileSync(resolvedPath, 'utf-8');
-      const lines = raw.split('\n');
+      const snapshot = await workspaceMutationService.read(resolvedPath);
+      this.rememberFile(snapshot);
+      const lines = snapshot.content.split(/\r?\n/);
       let slice = lines;
       let startIdx = 1;
       if (params.view_range && Array.isArray(params.view_range)) {
@@ -558,27 +581,35 @@ export class DshToolService {
         path: resolvedPath,
         content: slice.map((l, i) => `${startIdx + i} | ${l}`).join('\n'),
         totalLines: lines.length,
+        revision: snapshot.revision,
       };
     }
 
     if (params.command === 'str_replace') {
       if (!params.old_str) throw new Error('str_replace command requires old_str');
-      const content = fs.readFileSync(resolvedPath, 'utf-8');
-      if (!content.includes(params.old_str)) {
-        throw new Error(`old_str not found in ${resolvedPath}`);
-      }
-      const updated = content.replace(params.old_str, params.new_str || '');
-      fs.writeFileSync(resolvedPath, updated, 'utf-8');
-      return { path: resolvedPath, message: 'Replaced text successfully' };
+      const saved = await workspaceMutationService.mutate(resolvedPath, current => {
+        const oldText = params.old_str!.replace(/\r?\n/g, current.lineEnding);
+        const newText = (params.new_str || '').replace(/\r?\n/g, current.lineEnding);
+        const count = current.content.split(oldText).length - 1;
+        if (!count) throw new Error(`old_str not found in ${resolvedPath}`);
+        if (count > 1) throw new Error(`old_str 在文件中出现 ${count} 次，请增加上下文使其唯一`);
+        return current.content.replace(oldText, () => newText);
+      }, await this.mutationOptions(resolvedPath, projectRoot));
+      this.rememberFile(saved);
+      return { path: resolvedPath, revision: saved.revision, message: 'Replaced text successfully' };
     }
 
     if (params.command === 'insert') {
-      const content = fs.readFileSync(resolvedPath, 'utf-8');
-      const lines = content.split('\n');
-      const lineIdx = params.insert_line ?? lines.length;
-      lines.splice(lineIdx, 0, params.new_str || '');
-      fs.writeFileSync(resolvedPath, lines.join('\n'), 'utf-8');
-      return { path: resolvedPath, message: `Inserted text after line ${lineIdx}` };
+      const lineIdx = params.insert_line;
+      const saved = await workspaceMutationService.mutate(resolvedPath, current => {
+        const lines = current.content.split(/\r?\n/);
+        const index = lineIdx ?? lines.length;
+        if (!Number.isInteger(index) || index < 0 || index > lines.length) throw new Error(`insert_line 必须在 0-${lines.length} 范围内`);
+        lines.splice(index, 0, (params.new_str || '').replace(/\r?\n/g, current.lineEnding));
+        return lines.join(current.lineEnding);
+      }, await this.mutationOptions(resolvedPath, projectRoot));
+      this.rememberFile(saved);
+      return { path: resolvedPath, revision: saved.revision, message: `Inserted text after line ${lineIdx ?? 'end'}` };
     }
 
     throw new Error(`未知编辑器命令: ${params.command}`);

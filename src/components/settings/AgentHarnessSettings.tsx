@@ -249,7 +249,7 @@ export const AgentHarnessSettings: React.FC<AgentHarnessSettingsProps> = ({
       </div>
 
       <label className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-4">
-        <span><strong className="text-slate-800">中断后自动继续</strong><span className="block text-slate-500 mt-1">输出达到上限或流式网络中断时最多继续两次；已开始的工具调用不会自动重试。</span></span>
+        <span><strong className="text-slate-800">中断后自动继续</strong><span className="block text-slate-500 mt-1">输出达到上限、流式网络中断或工具参数不完整时最多继续两次；参数无效且尚未执行的调用可重新生成，已执行的工具不会自动重跑。</span></span>
         <input type="checkbox" checked={!!form.autoContinueTruncated} onChange={e => setForm({ ...form, autoContinueTruncated: e.target.checked })} />
       </label>
       <label className="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between gap-4">

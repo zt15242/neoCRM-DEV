@@ -7,9 +7,11 @@ import { Readable } from 'node:stream';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { modelTextFrames, modelToolFrames, sendModelText, sseFrames } from './fixtures/model-gateway-responses.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'neo-model-context-'));
+await fs.rm(path.join(fixture, 'neocrm_ai_context_caps.json'), { force: true });
 const require = createRequire(import.meta.url);
 let server;
 try {
@@ -169,21 +171,49 @@ try {
   console.log('PASS budgets: model limits, output reservation, unknown-capacity fallback, full request accounting, valid tool pairing/JSON, Gemini pruning');
 
   const requests = [];
-  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0, visionToolScenario = false, featureScenario = '';
+  let failureStatus = 0, failOnce = false, nativeFailOnce = false, summaryFailure = false, reportedLimit = 8192, delayedSummary, toolScenario = 0, visionToolScenario = false, featureScenario = '', unifiedProtocol = '', unifiedTurn = 0;
   server = http.createServer(async (request, response) => {
     if (request.method === 'GET') {
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({data: [{id: 'fixture', context_length: 1048576, max_output_tokens: 8192}, {id: 'unknown'}]})); return;
     }
     let raw = ''; for await (const part of request) raw += part;
-    const body = JSON.parse(raw); requests.push({url: request.url, body});
+    const body = JSON.parse(raw);
+    const summary = JSON.stringify(body).includes('将新增历史和已有摘要合并为可继续工作的工程检查点');
+    requests.push({url: request.url, body, summary});
+    if (summary) {
+      if (summaryFailure) { response.statusCode = 503; response.end('fixture summary unavailable'); return; }
+      if (delayedSummary) { delayedSummary(); return; }
+      const markers = [...new Set(JSON.stringify(body).match(/MARKER_\d+/g) || [])].join(' ');
+      sendModelText(response, body.contents ? 'gemini' : 'chat', '## Primary Request and Intent\n- SUMMARY ' + markers);
+      return;
+    }
+    if (unifiedProtocol) {
+      const pathname = new URL(request.url, 'http://localhost').pathname;
+      const transport = pathname.endsWith('/responses') ? 'responses' : pathname.endsWith('/messages') ? 'anthropic'
+        : pathname.includes(':streamGenerateContent') ? 'gemini' : 'chat';
+      unifiedTurn++;
+      response.setHeader('Content-Type', 'text/event-stream');
+      response.end(sseFrames(unifiedTurn === 1
+        ? modelToolFrames(transport, 'fixture_read', { path: 'README.md' }, 'unified-call')
+        : modelTextFrames(transport, '统一循环完成')));
+      return;
+    }
     if (featureScenario && (body.stream || body.contents)) {
       const scenario = featureScenario; featureScenario = '';
       const native = !!body.contents;
       response.setHeader('Content-Type', 'text/event-stream');
       if (scenario === 'reject_usage') { response.statusCode = 400; response.end(JSON.stringify({error:{message:'unsupported stream_options include_usage'}})); return; }
-      if (scenario === 'stream_drop') {
-        const output = native ? {candidates:[{content:{parts:[{text:'部分输出'}]}}]} : {choices:[{delta:{content:'部分输出'}}]};
+      if (scenario === 'context_loop') {
+        response.statusCode = 400;
+        response.end(JSON.stringify({ error: { message: 'prompt is too long' } }));
+        return;
+      }
+      if (['stream_drop', 'tool_stream_drop'].includes(scenario)) {
+        const output = scenario === 'tool_stream_drop'
+          ? native ? {candidates:[{content:{parts:[{functionCall:{name:'fixture_read',args:{}}}]}}]}
+            : {choices:[{delta:{tool_calls:[{index:0,id:'partial-tool',type:'function',function:{name:'fixture_read',arguments:'{}'}}]}}]}
+          : native ? {candidates:[{content:{parts:[{text:'部分输出'}]}}]} : {choices:[{delta:{content:'部分输出'}}]};
         response.write('data: '+JSON.stringify(output)+'\n\n');
         setTimeout(() => response.destroy(), 40); return;
       }
@@ -216,7 +246,7 @@ try {
       visionToolScenario = false;
       response.setHeader('Content-Type', 'text/event-stream');
       const call = body.contents
-        ? {candidates:[{content:{parts:[{functionCall:{name:'read_image',args:{file_path:'fixture.png'}}}]}}]}
+        ? {candidates:[{content:{role:'model',parts:[{functionCall:{name:'read_image',args:{file_path:'fixture.png'}}}]},finishReason:'STOP'}]}
         : {choices:[{delta:{tool_calls:[{index:0,id:'image-call',type:'function',function:{name:'read_image',arguments:JSON.stringify({file_path:'fixture.png'})}}]},finish_reason:'tool_calls'}]};
       response.end('data: ' + JSON.stringify(call) + '\n\ndata: [DONE]\n\n'); return;
     }
@@ -236,17 +266,9 @@ try {
       failOnce = false; response.statusCode = failureStatus;
       response.end(failureStatus === 400 ? JSON.stringify({error: {code: 'context_length_exceeded', message: `maximum context length is ${reportedLimit} tokens`}}) : '<html><title>Gateway timeout</title></html>'); return;
     }
-    if (!body.stream && !body.contents) {
-      if (summaryFailure) { response.statusCode = 503; response.end('fixture summary unavailable'); return; }
-      if (delayedSummary) { delayedSummary(); return; }
-      response.setHeader('Content-Type', 'application/json');
-      const text = JSON.stringify(body);
-      const markers = [...new Set(text.match(/MARKER_\d+/g) || [])].join(' ');
-      response.end(JSON.stringify({choices: [{message: {content: '## Primary Request and Intent\n- SUMMARY ' + markers}}]})); return;
-    }
     response.setHeader('Content-Type', 'text/event-stream');
     response.end(body.contents
-      ? 'data: {"candidates":[{"content":{"parts":[{"text":"fixture native reply"}]}}]}\n\n'
+      ? 'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"fixture native reply"}]},"finishReason":"STOP"}]}\n\n'
       : 'data: {"choices":[{"delta":{"content":"fixture reply"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -261,7 +283,9 @@ try {
     let stored = {id: 'session', providerId: 'fixture', modelId: 'fixture', messages: structuredClone(messages)};
     const service = new AiService({prepareNeoCliForConversation: () => ({session: {isLoggedIn: false}})}, {}, {});
     service.getAiConfig = () => config;
-    service.getSessions = () => [structuredClone(stored)];
+    service.getSessions = async () => [structuredClone(stored)];
+    service.getSession = async id => id === stored.id ? structuredClone(stored) : null;
+    service.persistSession = async value => { stored = structuredClone(value); return structuredClone(stored); };
     service.saveSession = value => { stored = structuredClone(value); return [stored]; };
     const events = [];
     return {service, config, events, get stored() { return stored; }, run: async (extra = {}) => {
@@ -322,6 +346,27 @@ try {
     assert(!JSON.stringify(toolVision.events).includes(png.toString('base64')));
   }
   console.log('PASS image attachments and read_image deliver bytes through both protocols, with limits and context accounting');
+  for (const protocol of ['openai-completions', 'openai-responses', 'anthropic-messages', 'google-gemini']) {
+    const unified = makeService(1048576, [{id:'unified-user',role:'user',content:'读取项目信息',createdAt:1}], protocol);
+    unified.config.settings.enableCrmTools = true;
+    const executions = [];
+    unified.service.executeUnifiedTool = async (name, args) => {
+      executions.push({ name, args });
+      return { data: { source: 'UNIFIED_TOOL_RESULT' }, summary: '统一工具已执行' };
+    };
+    unifiedProtocol = protocol;
+    unifiedTurn = 0;
+    const start = requests.length;
+    await unified.run({ enableTools: true, mode: 'standard' });
+    const calls = requests.slice(start).filter(item => !item.summary);
+    assert.equal(calls.length, 2, protocol);
+    assert.deepEqual(executions, [{ name: 'fixture_read', args: { path: 'README.md' } }], protocol);
+    assert(unified.events.some(event => event.type === 'tool_update' && event.toolCall?.status === 'success'), protocol);
+    assert(unified.events.some(event => event.type === 'content_delta' && event.delta?.includes('统一循环完成')), protocol);
+    assert(JSON.stringify(calls[1].body).includes('UNIFIED_TOOL_RESULT'), protocol);
+  }
+  unifiedProtocol = '';
+  console.log('PASS unified Agent loop: OpenAI Chat, Responses, Anthropic and Gemini share one tool lifecycle');
   const mask = new TextMask();
   const raw = '邮箱 test@example.com 电话 13812345678';
   const masked = mask.mask(raw);
@@ -407,9 +452,19 @@ try {
     await continuation.run();
     assert.equal(requests.slice(offset).filter(item=>item.body.stream||item.body.contents).length,2);
     assert(continuation.events.some(event=>event.delta?.includes('输出达到上限')));
+    if (protocol === 'openai-completions') {
+      const noProgress = makeService(1048576, scenarioMessages, protocol);
+      featureScenario = 'context_loop';
+      const noProgressOffset = requests.length;
+      await assert.rejects(noProgress.run(), /已停止重试/);
+      const repeatedRequests = requests.slice(noProgressOffset).filter(item => item.body.stream);
+      assert.equal(repeatedRequests.length, 1, 'stop instead of replaying an unchanged over-limit request');
+      assert(!noProgress.events.some(event => event.delta?.includes('(1/2)')), 'do not announce a retry before a smaller request is ready');
+      assert.equal(noProgress.service.learnedContextInputCaps.size, 0, 'do not persist a guess when the irreducible prompt itself exceeds the gateway');
+    }
     for (const scenario of ['reasoning_length', 'reasoning_stop', 'reasoning_repeat']) {
       const reasoningOnly = makeService(1048576, scenarioMessages, protocol);
-      reasoningOnly.config.settings.autoContinueTruncated = true;
+      reasoningOnly.config.settings.autoContinueTruncated = scenario === 'reasoning_length';
       const start = requests.length;
       featureScenario = scenario;
       if (scenario === 'reasoning_repeat') await assert.rejects(reasoningOnly.run(), /模型未输出正文，本轮未完成/);
@@ -427,6 +482,17 @@ try {
     await interrupted.run();
     assert.equal(requests.slice(failureOffset).filter(item=>item.body.stream||item.body.contents).length,2);
     assert(interrupted.events.some(event=>event.delta?.includes('网络中断')));
+    for (const [scenario, autoContinue] of [['stream_drop', false], ['tool_stream_drop', true]]) {
+      const unsafe = makeService(1048576, scenarioMessages, protocol);
+      unsafe.config.settings.autoContinueTruncated = autoContinue;
+      unsafe.config.settings.enableCrmTools = true;
+      unsafe.service.executeUnifiedTool = async () => { assert.fail('An interrupted tool stream must not execute or replay tools'); };
+      featureScenario = scenario;
+      const from = requests.length;
+      await assert.rejects(unsafe.run({ mode: 'standard', enableTools: true }));
+      assert.equal(requests.slice(from).filter(item => item.body.stream || item.body.contents).length, 1, `${protocol}: do not replay ${scenario}`);
+      assert(!unsafe.events.some(event => event.delta?.includes('正在重试')));
+    }
   }
   const markupRecovery = makeService(1048576, [{id:'markup-user',role:'user',content:'检查当前项目',createdAt:1}]);
   markupRecovery.config.settings.autoContinueTruncated = true;
@@ -463,7 +529,7 @@ try {
   assert.equal(big.events.filter(event => event.type === 'compaction_done').length, 0);
   let chat = requests.filter(item => item.body.stream).at(-1).body;
   for (let index = 0; index < 8; index++) assert(JSON.stringify(chat).includes('MARKER_' + index));
-  assert.equal(requests.filter(item => !item.body.stream).length, 0);
+  assert.equal(requests.filter(item => item.summary).length, 0);
   for (const protocol of ['openai-completions','google-gemini']) {
     const summaryMessage = [{id:'summary-user',role:'user',content:'请结合上述工具执行结果，给出完整详尽的总结分析与最终答复。',createdAt:1}];
     const summaryCase=makeService(undefined,summaryMessage,protocol);
@@ -490,16 +556,16 @@ try {
   chat = requests.filter(item => item.body.stream).at(-1).body;
   assert(JSON.stringify(chat).includes('Latest request must stay intact'));
   assertContextFits(chat.messages, chat.tools || [], small);
-  for (const item of requests.filter(item => !item.body.stream)) assertContextFits(item.body.messages, [], budgetFor(providerFor(32768), 'fixture', item.body.max_tokens));
+  for (const item of requests.filter(item => item.summary)) assertContextFits(item.body.messages, [], budgetFor(providerFor(32768), 'fixture', item.body.max_completion_tokens ?? item.body.max_tokens));
   console.log('PASS automatic compaction: same history retained for 1M and summarized for 32K; summary requests and current request fit; visible history retained');
 
   const escapedStart = requests.length;
   const escapedHistory = history.map(message => ({...message, content: message.id === 'latest' ? message.content : '\\"\n'.repeat(4000)}));
   const escaped = makeService(8192, escapedHistory);
   await escaped.run();
-  const summaryRequests = requests.slice(escapedStart).filter(item => !item.body.stream);
+  const summaryRequests = requests.slice(escapedStart).filter(item => item.summary);
   assert(summaryRequests.length > 1);
-  for (const item of summaryRequests) assertContextFits(item.body.messages, [], budgetFor(providerFor(8192), 'fixture', item.body.max_tokens));
+  for (const item of summaryRequests) assertContextFits(item.body.messages, [], budgetFor(providerFor(8192), 'fixture', item.body.max_completion_tokens ?? item.body.max_tokens));
   console.log('PASS summary payload accounting: escaped code/logs split into chunks that fit including JSON framing and prior summary');
 
   const checkpointed = makeService(1048576, history);
@@ -537,23 +603,33 @@ try {
   assert(correction.events.some(event => event.type === 'compaction_done'));
   const correctedChat = requests.slice(correctionStart).filter(item => item.body.stream).at(-1).body;
   assertContextFits(correctedChat.messages, [], budgetFor(providerFor(8192), 'fixture', 4096));
-  for (const item of requests.slice(correctionStart).filter(item => !item.body.stream)) assertContextFits(item.body.messages, [], budgetFor(providerFor(8192), 'fixture', item.body.max_tokens));
+  for (const item of requests.slice(correctionStart).filter(item => item.summary)) assertContextFits(item.body.messages, [], budgetFor(providerFor(8192), 'fixture', item.body.max_completion_tokens ?? item.body.max_tokens));
+  const capFile = path.join(fixture, 'neocrm_ai_context_caps.json');
+  const persistedCaps = JSON.parse(await fs.readFile(capFile, 'utf8'));
+  const persistedCap = Object.values(persistedCaps)[0];
+  assert.equal(typeof persistedCap, 'number');
+  assert(!JSON.stringify(persistedCaps).includes('fixture'), 'persisted limits contain no provider URL, ID or credentials');
+  const afterRestart = makeService(1048576, mediumHistory);
+  const afterRestartStart = requests.length;
+  await afterRestart.run();
+  assert.equal([...afterRestart.service.learnedContextInputCaps.values()][0], persistedCap);
+  const afterRestartBody = requests.slice(afterRestartStart).filter(item => item.body.stream).at(-1).body;
+  assert(estimate(afterRestartBody.messages) <= persistedCap, 'later turns automatically fit the learned gateway input budget');
   console.log('PASS context-limit recovery: explicit server capacity corrects the budget, checkpoints with that capacity, then retries within the reduced window');
 
   const liveRecovery = makeService(32768, mediumHistory);
   let executions = 0;
-  liveRecovery.service.executeUnifiedTool = async () => { executions++; return {data: {value: 'LIVE_TOOL_RESULT'}, summary: 'fixture'}; };
+  liveRecovery.service.executeUnifiedTool = async () => { executions++; return {data: {value: 'LIVE_TOOL_RESULT', stdout: 'tool output '.repeat(3000)}, summary: 'fixture'}; };
   const liveStart = requests.length;
   toolScenario = 1;
-  await liveRecovery.run();
-  const liveRequests = requests.slice(liveStart).filter(item => item.body.stream);
+  await assert.rejects(liveRecovery.run(), /已停止重试|无法安全压缩/);
+  const liveRequests = requests.slice(liveStart).filter(item => !item.summary && item.body.stream);
   assert.equal(executions, 1, 'context recovery must not repeat a completed tool');
-  assert.equal(liveRequests.length, 3);
-  const resumed = liveRequests.at(-1).body;
-  assert(resumed.messages.some(message => message.tool_calls?.some(call => call.id === 'live-call')));
-  assert(resumed.messages.some(message => message.tool_call_id === 'live-call' && message.content.includes('LIVE_TOOL_RESULT')));
-  assertContextFits(resumed.messages, [], budgetFor(providerFor(8192), 'fixture', 4096));
-  console.log('PASS live tool recovery: mid-turn checkpoint retains call/result pairs and does not execute completed tools again');
+  assert.equal(liveRequests.length, 2);
+  assert.equal(liveRecovery.events.filter(event => event.type === 'tool_start' && event.toolCall?.name === 'fixture_read').length, 1);
+  assert(liveRequests[1].body.messages.some(message => message.tool_calls?.some(call => call.id === 'live-call')),
+    'the failed request history retains the completed tool identity');
+  console.log('PASS live tool overflow: stops when the prompt itself cannot fit and never reruns the completed tool');
 
   const reasoningRecovery = makeService(1048576, mediumHistory);
   reasoningRecovery.config.settings.autoContinueTruncated = true;
@@ -565,7 +641,7 @@ try {
   const reasoningStart = requests.length;
   toolScenario = 4;
   await reasoningRecovery.run();
-  const reasoningRequests = requests.slice(reasoningStart).filter(item => item.body.stream);
+  const reasoningRequests = requests.slice(reasoningStart).filter(item => !item.summary && item.body.stream);
   assert.equal(reasoningRequests.length, 3);
   assert.equal(recoveredExecutions, 1);
   assert(reasoningRequests[2].body.messages.some(message => message.tool_call_id === 'live-call' && message.content.includes('REASONING_RECOVERY_RECEIPT')));
@@ -576,8 +652,8 @@ try {
   const growthStart = requests.length;
   toolScenario = 3;
   await growingTurn.run();
-  assert(!growingTurn.events.some(event => event.type === 'compaction_done'), 'prune tool output before requesting a summary when it is enough');
-  const growthRequests = requests.slice(growthStart).filter(item => item.body.stream);
+  assert.equal(growingTurn.events.some(event => event.type === 'compaction_done'), true, 'checkpoint the large completed tool output before retrying');
+  const growthRequests = requests.slice(growthStart).filter(item => !item.summary && item.body.stream);
   assert.equal(growthRequests.length, 2);
   const nextTurn = growthRequests[1].body;
   assert(nextTurn.messages.some(message => message.tool_calls?.some(call => call.id === 'live-call')));
@@ -585,19 +661,21 @@ try {
   assert(liveResult.content.includes('LIVE_LARGE_TOOL_RESULT'));
   assert(JSON.parse(liveResult.content)._contextPruned);
   assertContextFits(nextTurn.messages, [], small);
-  console.log('PASS agent-loop growth: large tool output is pruned before an unnecessary summary, preserving the call/result');
+  console.log('PASS agent-loop growth: large tool output is pruned and the completed call/result pairing is retained');
 
   const nativeHistory = [{id:'native-u',role:'user',content:'Complete the task',createdAt:1},
     {id:'native-a',role:'assistant',content:'Prior work',createdAt:2,toolCalls:Array.from({length:3},(_,i)=>({id:'native-'+i,name:'read',arguments:{path:'file-'+i},resultData:{text:'x'.repeat(18000)}}))},
     {id:'native-last',role:'user',content:'Continue',createdAt:3}];
   const nativeRecovery=makeService(32768,nativeHistory,'google-gemini');
+  assert.notEqual(nativeRecovery.service.getContextCapKey(nativeRecovery.config.providers[0], 'fixture'),
+    big.service.getContextCapKey(big.config.providers[0], 'fixture'), 'Learned gateway limits are scoped to their protocol');
   const nativeStart=requests.length; nativeFailOnce=true;
   await nativeRecovery.run();
-  const nativeAttempts=requests.slice(nativeStart).filter(item=>item.body.contents);
+  const nativeAttempts=requests.slice(nativeStart).filter(item=>!item.summary && item.body.contents);
   assert.equal(nativeAttempts.length,2,'Gemini should retry once after a real overflow only when pruning reduces the request');
   assert(estimate(nativeAttempts[1].body.contents)<estimate(nativeAttempts[0].body.contents));
   assert.deepEqual(nativeRecovery.stored.messages,nativeHistory);
-  assert(nativeRecovery.events.some(event=>event.delta?.includes('整理已完成的工具记录')));
+  assert.equal(nativeRecovery.events.some(event=>event.type === 'error'), false);
   console.log('PASS native Gemini overflow: reduced request retries once without modifying visible history');
 
   const discovery = await big.service.fetchAvailableModels({...providerFor(undefined), baseUrl});

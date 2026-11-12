@@ -46,8 +46,8 @@ export function getModelContextBudget(provider: AiProviderConfig, modelId: strin
     positiveTokenLimit(model?.maxOutputTokens) || Infinity, Math.floor(contextWindow / 2)));
   const safety = Math.max(1, Math.min(8192, Math.ceil(contextWindow * 0.05)));
   const inputTokens = Math.max(1, contextWindow - maxOutputTokens - safety);
-  return { contextWindow, maxOutputTokens, inputTokens, triggerTokens: Math.floor(inputTokens * 0.85),
-    targetTokens: Math.floor(inputTokens * 0.65), capacityKnown: !!known };
+  return { contextWindow, maxOutputTokens, inputTokens, triggerTokens: Math.floor(inputTokens * 0.82),
+    targetTokens: Math.floor(inputTokens * 0.60), capacityKnown: !!known };
 }
 
 // An estimate, not a tokenizer: conservatively count non-ASCII characters and JSON framing.

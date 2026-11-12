@@ -66,7 +66,7 @@ export const ModelContextSettings = React.memo(function ModelContextSettings({ p
   };
   return <div className="model-settings__context rounded-2xl border border-slate-200 bg-white p-4 space-y-3 text-xs shadow-2xs">
     <div className="font-semibold text-sm text-slate-800">模型上下文容量</div>
-    <p className="text-slate-500">已知官方模型自动提供参考容量，也可根据当前供应商或网关实际限制手动修改。未知容量使用 32,768 tokens 保守预算；请求用量为估算值。</p>
+    <p className="text-slate-500">容量应以当前供应商或网关的实际限制为准，官方参考值可能高于网关可用值。未知容量按 32,768 tokens 保守预算；若上游报告超限，会逐步收紧预算并记住该模型网关的较低限制。请求用量为估算值。</p>
     {reference ? <div className="flex flex-wrap items-center gap-2 text-slate-500">
       <span>官方参考：{reference.contextWindow.toLocaleString()} 上下文 / {reference.maxOutputTokens.toLocaleString()} 最大输出</span>
       <button type="button" className="text-sky-700 hover:underline" onClick={() => { setContext(String(reference.contextWindow)); setOutput(String(reference.maxOutputTokens)); setAttempted(false); }}>采用参考值</button>

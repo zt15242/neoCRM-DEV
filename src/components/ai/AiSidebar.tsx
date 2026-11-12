@@ -87,7 +87,7 @@ export const AiSidebar: React.FC<AiSidebarProps> = ({
     setEditingId(null);
   };
 
-  const validSessions = sessions.filter((s) => isRoleVisible(s.presetId) && s.messages && s.messages.length > 0);
+  const validSessions = sessions.filter((s) => isRoleVisible(s.presetId) && (s.messageCount ?? s.messages?.length ?? 0) > 0);
 
   const filteredSessions = validSessions.filter((s) => {
     if (!keyword.trim()) return true;

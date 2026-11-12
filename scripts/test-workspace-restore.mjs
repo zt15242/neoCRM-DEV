@@ -27,7 +27,7 @@ try {
     import {DEFAULT_AI_SETTINGS, BUILTIN_AI_PROVIDERS} from './shared/constants';
     const noop=()=>()=>{}; const projects=${JSON.stringify(projects)}, sessions=${JSON.stringify(sessions)};
     window.neoApi={getPlatform:async()=> 'darwin',getAppVersion:async()=> '1.8.42',getEnvironments:async()=>[],getCurrentSession:async()=>({isLoggedIn:false}),getAccountHistory:async()=>[],checkForUpdates:async()=>({hasUpdate:false}),
-      aiGetSessions:async()=>sessions,projectGetProjects:async()=>projects,workflowGetLicenseStatus:async()=>({isAuthorized:false}),
+      aiGetSessions:async()=>sessions.map(s=>({...s,messageCount:s.messages.length,messages:[],messagesLoaded:false})),aiGetSession:async id=>({...sessions.find(s=>s.id===id),messagesLoaded:true}),projectGetProjects:async()=>projects,workflowGetLicenseStatus:async()=>({isAuthorized:false}),
       aiGetConfig:async()=>({settings:{...DEFAULT_AI_SETTINGS,defaultStartupTab:'ai'},providers:BUILTIN_AI_PROVIDERS.map(p=>({...p,apiKey:'fixture'})),skills:[],mcpServers:[]}),
       projectReadDirectory:async()=>({entries:[]}),projectListFiles:async()=>[],projectGetRecentArtifacts:async()=>[],jobsList:async()=>({jobs:[]}),
       onSessionUpdated:noop,onAiStreamEvent:noop,onAgentSessionUpdated:noop,onNeoCliProjectOpened:noop,onRestrictedAccessChanged:noop,onRestrictedAccessPrompt:noop,restrictedAccessStatus:async()=>({visible:false})};
@@ -43,16 +43,15 @@ try {
       const wait=async code=>{for(let n=0;n<250;n++){if(await run(code))return;await new Promise(r=>setTimeout(r,25))}throw Error('timeout: '+code)};
       try {await win.loadFile(${JSON.stringify(path.join(fixture,'index.html'))});
         await run('localStorage.setItem('+JSON.stringify(key)+',JSON.stringify({projectId:"p2",sessionId:"s2"}))'); await win.webContents.reload();
-        await wait('document.querySelector(".suite-titlebar")?.innerText.includes("项目二") && document.body.innerText.includes("第二项")');
+        await wait('document.querySelector("iframe")?.src.includes("/session/s2")');
         assert.deepEqual(await run('JSON.parse(localStorage.getItem('+JSON.stringify(key)+'))'),{projectId:'p2',sessionId:'s2'});
         await run('document.querySelector("[title^=本地路径][title*=p1]").dispatchEvent(new MouseEvent("dblclick",{bubbles:true}))');
         await wait('JSON.parse(localStorage.getItem('+JSON.stringify(key)+')).projectId==="p1" && JSON.parse(localStorage.getItem('+JSON.stringify(key)+')).sessionId==="s1"');
         await win.webContents.reload();
-        await wait('document.querySelector(".suite-titlebar")?.innerText.includes("项目一") && document.body.innerText.includes("第一项")');
+        await wait('document.querySelector("iframe")?.src.includes("/session/s1")');
         await run('document.querySelector(".app-sidebar__navigation button").click()');
         await wait('JSON.parse(localStorage.getItem('+JSON.stringify(key)+')).sessionId===null');
-        await win.webContents.reload(); await wait('document.querySelector(".suite-titlebar")?.innerText.includes("项目一") && JSON.parse(localStorage.getItem('+JSON.stringify(key)+')).sessionId===null');
-        await new Promise(r=>setTimeout(r,300)); assert(!await run('document.querySelector(".ai-chat-column")?.innerText.includes("第一项")'));
+        await win.webContents.reload(); await wait('JSON.parse(localStorage.getItem('+JSON.stringify(key)+')).sessionId===null && document.querySelector("iframe")?.src.includes("/session/")');
         console.log('PASS reload restores project and conversation, preserves a new-chat draft, and checks invalid or inaccessible selections');
         win.destroy();app.exit(0);
       }catch(e){console.error(e);app.exit(1)}

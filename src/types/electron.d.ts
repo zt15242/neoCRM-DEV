@@ -167,6 +167,8 @@ declare global {
       aiTestProvider: (provider: AiProviderConfig) => Promise<{ success: boolean; message: string; responseTimeMs?: number }>;
       aiFetchModels: (provider: AiProviderConfig) => Promise<{ success: boolean; models: AiModelItem[]; error?: string }>;
       aiGetSessions: () => Promise<AiChatSession[]>;
+      aiGetSession: (id: string) => Promise<AiChatSession | null>;
+      aiGetSessionMessages: (id: string, before?: number, limit?: number) => Promise<import('../../electron/services/agent/sessionRepositoryTypes').MessagePage | null>;
       aiSaveSession: (session: AiChatSession) => Promise<AiChatSession[]>;
       aiPersistSession: (session: AiChatSession, returnRecord?: boolean) => Promise<AiChatSession | null>;
       aiDeleteSession: (sessionId: string) => Promise<AiChatSession[]>;
@@ -191,6 +193,7 @@ declare global {
       aiSelectAndParseFile: () => Promise<AiFileAttachment | null>;
       aiParseFileBuffer: (fileName: string, buffer: ArrayBuffer) => Promise<AiFileAttachment>;
       aiSaveMcpServer: (server: McpServerConfig) => Promise<McpServerConfig[]>;
+      aiSetMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>;
       aiDeleteMcpServer: (id: string) => Promise<McpServerConfig[]>;
       aiSyncMcpTools: (serverId: string) => Promise<{ success: boolean; server?: McpServerConfig; tools?: McpToolItem[]; error?: string }>;
       aiSaveSkill: (skill: AiSkillItem) => Promise<AiSkillItem[]>;

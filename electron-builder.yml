@@ -6,6 +6,8 @@ directories:
   output: release
   buildResources: build
 extraResources:
+  - from: resources/licenses
+    to: licenses
   - from: browser-extension
     to: browser-extension
 files:
@@ -25,6 +27,8 @@ publish:
   repo: neoCRM-DEV
 mac:
   extraResources:
+    - from: resources/neo-cli/darwin-${arch}/node_modules
+      to: neo-cli/node_modules
     - from: resources/ffmpeg/darwin-${arch}
       to: bin/ffmpeg
       filter: [ffmpeg, ffmpeg.LICENSE, ffmpeg.README, SOURCE.json]
@@ -48,6 +52,8 @@ mac:
   category: public.app-category.developer-tools
 win:
   extraResources:
+    - from: resources/neo-cli/win32-${arch}/node_modules
+      to: neo-cli/node_modules
     - from: resources/ffmpeg/win32-${arch}
       to: bin/ffmpeg
       filter: [ffmpeg.exe, ffmpeg.LICENSE, ffmpeg.README, SOURCE.json]

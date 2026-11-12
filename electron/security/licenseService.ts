@@ -660,7 +660,7 @@ export class LicenseService {
       vault.lockUntil = 0;
       this.saveVault(vault);
       const status = this.getLicenseStatus();
-      return { success: status.isAuthorized, message: status.isAuthorized ? '验证通过' : status.message, status };
+      return { success: status.isAuthorized, message: status.isAuthorized ? '验证通过' : (status.message || '验证失败'), status };
     }
 
     if (vault.consumedRandomIds.includes(randomId)) {

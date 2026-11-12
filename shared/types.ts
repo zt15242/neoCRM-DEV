@@ -299,6 +299,7 @@ export interface AiFileAttachment {
   previewTruncated?: boolean;
   parseWarnings?: string[];
   contentKind?: 'text' | 'image' | 'binary' | 'directory';
+  openCodeFile?: { uri: string; mention?: { start: number; end: number; text: string }; description?: string };
 }
 
 export interface McpToolItem {
@@ -387,6 +388,7 @@ export interface AiChatMessage {
   modelId?: string;
   createdAt: number;
   error?: string;
+  durationSource?: 'monotonic';
   usage?: { source?: 'reported' | 'estimated' | 'mixed'; promptTokens?: number; completionTokens?: number; totalTokens?: number; estimatedCostUsd?: number; estimatedCost?: number; costCurrency?: 'USD' | 'CNY' };
   durationMs?: number;
 }
@@ -413,8 +415,13 @@ export interface AiChatSession {
   providerId: string;
   modelId: string;
   messages: AiChatMessage[];
+  /** False for metadata or partial pages; only a fully loaded history may replace messages. */
+  messagesLoaded?: boolean;
+  messageCount?: number;
   entityRefs?: AiContextEntityRef[];
   activeSkillIds?: string[]; // 当前会话挂载的技能 ID
+  fork?: { sessionId: string; boundary?: { type: 'before' | 'through'; messageID: string } };
+  revert?: { messageID: string };
   compactionSummary?: AiCompactedSummary; // 上下文压缩摘要
   mode?: AiSessionMode; // 运行模式: 'standard' (DSH标准模式) | 'ptc' (PTC代码执行模式) | 'minimal' (极简模式) | 'plan' (方案规划模式)
   createdAt: number;

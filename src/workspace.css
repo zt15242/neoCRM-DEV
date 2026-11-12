@@ -20,10 +20,10 @@ html[data-theme='codex-dark'] .desktop-suite, html[data-theme='catppuccin-mocha'
 .ai-code-layout { position:relative; }
 .ai-chat-column { order:1; }
 .ai-code-layout.has-workbench .ai-chat-column { flex:1; min-width:280px; }
-.workspace-panel { width:min(var(--workbench-width,64%),calc(100% - 280px)); min-width:min(520px,calc(100% - 280px)); min-height:0; flex-shrink:0; display:flex; flex-direction:column; position:relative; order:0; border-right:1px solid var(--theme-border); background:var(--theme-bg-layer-1); }
+.workspace-panel { width:min(var(--workbench-width,44%),calc(100% - 280px)); min-width:min(420px,calc(100% - 280px)); min-height:0; flex-shrink:0; display:flex; flex-direction:column; position:relative; order:2; border-left:1px solid var(--theme-border); background:var(--theme-bg-layer-1); }
 .workspace-panel.is-maximized { width:min(74%,calc(100% - 280px)); }
 .workspace-panel.is-hidden { display:none!important; }
-.workspace-resize { position:absolute; right:-3px; top:0; bottom:0; width:6px; z-index:40; cursor:col-resize; touch-action:none; }
+.workspace-resize { position:absolute; left:-3px; top:0; bottom:0; width:6px; z-index:40; cursor:col-resize; touch-action:none; }
 .workspace-resize:hover, .workspace-resize:focus-visible { background:color-mix(in srgb,var(--theme-accent) 35%,transparent); }
 .workspace-panel-tabs { gap:6px; height:44px; }
 .workspace-panel-tab-scroll { overflow-x:auto; scrollbar-width:thin; height:100%; }
@@ -86,7 +86,7 @@ html[data-theme='codex-dark'] .desktop-suite, html[data-theme='catppuccin-mocha'
 @media (max-width:1100px) {
   .suite-project-sidebar.app-sidebar { width:208px; }
   .ai-code-layout.has-workbench { flex-direction:column; }
-  .ai-code-layout.has-workbench .workspace-panel { width:100%; min-width:0; flex:1; min-height:260px; border-right:0; }
+  .ai-code-layout.has-workbench .workspace-panel { order:0; width:100%; min-width:0; flex:1; min-height:260px; border-left:0; border-bottom:1px solid var(--theme-border); }
   .ai-code-layout.has-workbench .ai-chat-column { flex:0 0 42%; min-height:220px; border-top:1px solid var(--theme-border); }
   .workspace-resize { display:none; }
   .workspace-welcome.ai-welcome { padding:20px; }

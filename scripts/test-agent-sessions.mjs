@@ -5,11 +5,14 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { buildSessionWorker } from './fixtures/build-session-worker.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'neo-agent-sessions-')));
 const originalFetch = globalThis.fetch;
+let historyService;
 try {
+  await buildSessionWorker(fixture);
   const userData = path.join(fixture, 'user-data'); fs.mkdirSync(userData);
   const bundle = path.join(fixture, 'subject.cjs');
   await build({ stdin: { resolveDir: root, loader: 'ts', contents: `
@@ -99,7 +102,7 @@ try {
   assert.equal(tasks.get(created[0].sessionId).params.messages.at(-1).content, 'continue task');
   const aborter = new AbortController();
   const waiting = manager.execute('wait_agents', { sessionIds: [created[0].sessionId] }, { ...ctx, signal: aborter.signal });
-  aborter.abort(); await assert.rejects(() => waiting, /对话已停止/);
+  aborter.abort(); await assert.rejects(() => waiting, error => error.name === 'AbortError');
   manager.stopOwnedBy(parent.id);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(records.get(created[0].sessionId).agentRun.status, 'cancelled');
@@ -135,6 +138,34 @@ try {
   assert.equal(empty.agents[0].status, 'failed');
   console.log('PASS evidence states: questions reach the parent, empty responses fail, deleted conversations cannot be resurrected by late output');
   console.log('PASS scheduler: real concurrent jobs, queue cap, inheritance, results, continuation, cancellation, ownership and recursion limits');
+  let releaseStart, enteredStart;
+  const entered = new Promise(resolve => { enteredStart = resolve; });
+  const deferredSave = new Promise(resolve => { releaseStart = resolve; });
+  const slowRecords = new Map([[parent.id, structuredClone(parent)]]);
+  let unexpectedRuns = 0;
+  const slowManager = new AgentSessionService({
+    getSessions: () => [...slowRecords.values()],
+    saveSession: async record => {
+      if (record.agentRun?.status === 'running') { enteredStart(); await deferredSave; }
+      slowRecords.set(record.id, structuredClone(record));
+    },
+    run: async () => { unexpectedRuns++; }, abort: () => {}, notify: () => {},
+  });
+  await slowManager.execute('spawn_agent', { title: 'Slow save', task: 'Must not start after cancellation' }, context());
+  await entered;
+  slowManager.stopAll(); releaseStart(); await slowManager.drain();
+  assert.equal(unexpectedRuns, 0, 'Cancellation while startup persistence is awaiting must prevent the model request');
+  assert.equal([...slowRecords.values()].find(record => record.agentRun)?.agentRun.status, 'cancelled');
+  const preparing = new AiService({}, {}, {});
+  let finishRead;
+  preparing.getSession = () => new Promise(resolve => { finishRead = resolve; });
+  preparing.runWithAgentContext = () => { assert.fail('Cancelled history preparation must not call the model'); };
+  const preparingEvents = [];
+  const preparingTurn = preparing.startChatStream({ ...context().params, requestId: 'preparing' }, event => preparingEvents.push(event));
+  assert.equal(preparing.abortChatStream('preparing'), true);
+  finishRead(null); await preparingTurn;
+  assert.equal(preparingEvents.at(-1).completionStatus, 'cancelled');
+  console.log('PASS async storage cancellation: history reads and queued startup saves never launch a model after stop');
   const dsh = new DshToolService();
   await Promise.all(['first', 'second'].map(id => DshToolService.runInSession(id, async () => {
     dsh.createGoal({ objective: id });
@@ -151,13 +182,14 @@ try {
   // Exercise the real AI stream loop and PTC dispatcher with local model responses.
   const sessionStore = { prepareNeoCliForConversation: () => ({ session: { isLoggedIn: false } }), getCurrentSession: () => ({ isLoggedIn: false }) };
   const ai = new AiService(sessionStore, {}, {});
+  historyService = ai;
   const provider = { id: 'fixture', name: 'Fixture', baseUrl: 'http://localhost:9999/v1', apiKey: '', protocol: 'openai',
     models: [{ id: 'fixture-model', name: 'Fixture', tools: true, contextWindow: 128000, maxOutputTokens: 4096 }] };
   ai.getAiConfig = () => ({ providers: [provider], settings: { ...DEFAULT_AI_SETTINGS, maxTokens: 4096 }, skills: [], mcpServers: [] });
   const notifications = [];
   ai.onAgentSessionChanged(session => notifications.push(session));
   let calls = 0;
-  const sse = delta => new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
+  const sse = delta => new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
   const toolResponse = (name, args) => sse({ tool_calls: [{ index: 0, id: `call_${++calls}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
@@ -198,14 +230,14 @@ try {
       messages: [{ id: 'u', role: 'user', content: `coordinate-${mode}`, createdAt: 1,
         attachments: [{ id: 'source-attachment', name: 'source.txt', fullPath: path.join(fixture, 'source.txt'),
           mimeType: 'text/plain', size: 15, parsedContent: 'source evidence' }] }] };
-    ai.saveSession(main);
+    await ai.saveSession(main);
     const events = [];
     await ai.startChatStream({ requestId: `req_${mode}`, sessionId: main.id, messageId: 'answer', providerId: 'fixture',
       modelId: 'fixture-model', messages: main.messages, enableTools: true, projectPath: fixture, mode }, event => events.push(event));
     assert.ok(!events.some(item => item.type === 'error'), JSON.stringify(events.filter(item => item.type === 'error')));
     assert.deepEqual(events.filter(item => item.type === 'done').map(item => item.completionStatus), ['completed']);
     assert.match(events.filter(item => item.type === 'content_delta').map(item => item.delta).join(''), /aggregated verified worker result/);
-    const agents = ai.getSessions().filter(item => item.agentRun?.createdBySessionId === main.id);
+    const agents = (await ai.getSessions()).filter(item => item.agentRun?.createdBySessionId === main.id);
     assert.equal(agents.length, 1);
     assert.equal(agents[0].agentRun.status, 'completed');
     assert.ok(agents[0].messages.at(-1).toolCalls.some(tool => tool.name === 'read'));
@@ -214,17 +246,17 @@ try {
     assert.equal(agents[0].messages.at(-1).content, 'verified worker result');
     console.log(`PASS real ${mode} model loop: spawn → project file tool → persist → wait → parent summary`);
   }
-  const child = ai.getSessions().find(item => item.agentRun);
+  const child = (await ai.getSessions()).find(item => item.agentRun);
   const childEvents = [];
   const continuation = { ...child, messages: [...child.messages, { id: 'followup', role: 'user', content: 'continue', createdAt: Date.now() }] };
-  ai.saveSession(continuation);
+  await ai.saveSession(continuation);
   await ai.startChatStream({ requestId: 'manual-continue', sessionId: child.id, messageId: 'followup-answer', providerId: 'fixture', modelId: 'fixture-model',
     messages: continuation.messages, projectPath: fixture }, event => childEvents.push(event));
   while (ai.agentSessions.isActive(child.id)) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(ai.getSessions().find(item => item.id === child.id).agentRun.status, 'completed');
+  assert.equal((await ai.getSessions()).find(item => item.id === child.id).agentRun.status, 'completed');
   assert.ok(notifications.some(item => item.id === child.id && item.agentRun.status === 'running'));
   const cancellingParent = { ...parent, id: 'sess_cancel' };
-  ai.saveSession(cancellingParent);
+  await ai.saveSession(cancellingParent);
   const parentController = new AbortController();
   ai.activeControllers.set('req_cancel', parentController);
   ai.activeControllers.set(cancellingParent.id, parentController);
@@ -237,37 +269,40 @@ try {
     providerId: 'fixture', modelId: 'fixture-model', messages: parent.messages, projectPath: fixture, enableTools: true },
     connectorIdentity: '[null,null,null,null,null]', signal: parentController.signal };
   const startedAgent = await ai.agentContext.run(cancelContext, () => ai.executeUnifiedTool('spawn_agent', { title: 'Slow worker', task: 'hold' }, []));
-  const runningChild = ai.getSessions().find(item => item.id === startedAgent.data.sessionId);
+  const runningChild = (await ai.getSessions()).find(item => item.id === startedAgent.data.sessionId);
   assert.equal(runningChild.agentRun.status, 'running');
-  ai.saveSession({ ...runningChild, messages: [], agentRun: { ...runningChild.agentRun, status: 'completed' } });
-  assert.equal(ai.getSessions().find(item => item.id === runningChild.id).agentRun.status, 'running');
-  assert.ok(ai.getSessions().find(item => item.id === runningChild.id).messages.length > 0);
+  await ai.saveSession({ ...runningChild, messages: [], agentRun: { ...runningChild.agentRun, status: 'completed' } });
+  assert.equal((await ai.getSessions()).find(item => item.id === runningChild.id).agentRun.status, 'running');
+  assert.ok((await ai.getSessions()).find(item => item.id === runningChild.id).messages.length > 0);
   assert.equal(ai.abortChatStream('req_cancel'), true);
   while (ai.agentSessions.isActive(runningChild.id)) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(ai.getSessions().find(item => item.id === runningChild.id).agentRun.status, 'cancelled');
+  assert.equal((await ai.getSessions()).find(item => item.id === runningChild.id).agentRun.status, 'cancelled');
   const cancelledEvents = [];
   const cancelledRun = ai.startChatStream({ ...cancelContext.params, requestId: 'cancel-notice' }, event => cancelledEvents.push(event));
   while (!ai.activeControllers.has('cancel-notice')) await new Promise(resolve => setTimeout(resolve, 5));
   ai.abortForegroundChatStreams();
   await cancelledRun;
   assert.deepEqual(cancelledEvents.filter(event => event.type === 'done').map(event => event.completionStatus), ['cancelled']);
-  const otherSession = ai.getSessions().find(item => item.id === 'sess_standard');
-  ai.deleteSession(cancellingParent.id);
-  assert.equal(ai.getSessions().some(item => item.id === runningChild.id), false);
-  assert.ok(ai.getSessions().some(item => item.id === otherSession.id));
+  const otherSession = (await ai.getSessions()).find(item => item.id === 'sess_standard');
+  await ai.deleteSession(cancellingParent.id);
+  assert.equal((await ai.getSessions()).some(item => item.id === runningChild.id), false);
+  assert.ok((await ai.getSessions()).some(item => item.id === otherSession.id));
   const mismatched = { ...child, id: 'sess_wrong_connector' };
-  ai.saveSession(mismatched, true);
+  await ai.saveSession(mismatched, true);
   ai.agentSessions.startFromUi(mismatched, { ...cancelContext.params, sessionId: mismatched.id, expectedConnector: 'different-tenant' });
   while (ai.agentSessions.isActive(mismatched.id)) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(ai.getSessions().find(item => item.id === mismatched.id).agentRun.status, 'failed');
-  assert.match(ai.getSessions().find(item => item.id === mismatched.id).agentRun.error, /连接器账号或租户已切换/);
+  assert.equal((await ai.getSessions()).find(item => item.id === mismatched.id).agentRun.status, 'failed');
+  assert.match((await ai.getSessions()).find(item => item.id === mismatched.id).agentRun.error, /连接器账号或租户已切换/);
   console.log('PASS real cancellation and persistence: root stop cancels owned agents, stale saves cannot erase live state, deletion is scoped, switched connectors fail before model/tool execution');
   provider.protocol = 'google-gemini'; provider.apiKey = 'fixture-key';
-  const geminiResponse = parts => new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts } }] })}\n\n`);
+  const geminiResponse = parts => new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }] })}\n\n`);
   globalThis.fetch = async (_url, options) => {
     const body = JSON.parse(options.body);
     const text = body.contents.flatMap(item => item.parts).find(item => item.text)?.text;
-    const responses = body.contents.flatMap(item => item.parts).filter(item => item.functionResponse).map(item => item.functionResponse.response.result);
+    const responses = body.contents.flatMap(item => item.parts).filter(item => item.functionResponse).map(item => {
+      const response = item.functionResponse.response;
+      return response.result ?? (typeof response.content === 'string' ? JSON.parse(response.content) : response.content);
+    });
     if (text === 'coordinate-gemini') {
       assert.ok(body.tools[0].functionDeclarations.some(item => item.name === 'spawn_agent'));
       if (!responses.length) return geminiResponse([{ functionCall: { name: 'spawn_agent', args: { title: 'Gemini worker', task: 'gemini-worker' } } }]);
@@ -280,7 +315,7 @@ try {
     return geminiResponse([{ text: 'Gemini verified result' }]);
   };
   const gemini = { ...parent, id: 'sess_gemini', messages: [{ id: 'g', role: 'user', content: 'coordinate-gemini', createdAt: 1 }] };
-  ai.saveSession(gemini);
+  await ai.saveSession(gemini);
   const geminiEvents = [];
   await ai.startChatStream({ sessionId: gemini.id, requestId: 'gemini-run', messageId: 'gemini-answer', providerId: 'fixture', modelId: 'fixture-model',
     messages: gemini.messages, enableTools: true, projectPath: fixture }, event => geminiEvents.push(event));
@@ -288,29 +323,19 @@ try {
   assert.deepEqual(geminiEvents.filter(event => event.type === 'done').map(event => event.completionStatus), ['completed']);
   assert.match(geminiEvents.filter(event => event.type === 'content_delta').map(event => event.delta).join(''), /Gemini aggregated result/);
   console.log('PASS Gemini native stream: function declarations, async agent execution and result aggregation');
-  const interrupted = { ...ai.getSessions().find(item => item.id === child.id), agentRun: { ...child.agentRun, status: 'running' } };
-  ai.saveSession(interrupted, true);
+  const interrupted = { ...(await ai.getSessions()).find(item => item.id === child.id), agentRun: { ...child.agentRun, status: 'running' } };
+  await ai.saveSession(interrupted, true);
+  await ai.closeHistory();
   const restarted = new AiService(sessionStore, {}, {});
-  assert.equal(restarted.getSessions().find(item => item.id === child.id).agentRun.status, 'interrupted');
+  historyService = restarted;
+  assert.equal((await restarted.getSessions()).find(item => item.id === child.id).agentRun.status, 'interrupted');
   assert.ok(!restarted.abortChatStream('unknown-request'));
   const historyFile = path.join(userData, 'neocrm_ai_sessions.json');
-  const intactHistory = fs.readFileSync(historyFile, 'utf8');
-  const rename = fs.renameSync;
-  fs.renameSync = (source, destination) => {
-    if (destination === historyFile) throw Object.assign(new Error('fixture: history file is locked'), { code: 'EPERM' });
-    return rename(source, destination);
-  };
-  try {
-    assert.throws(() => restarted.saveSession(parent), /history file is locked/);
-    assert.equal(fs.readFileSync(historyFile, 'utf8'), intactHistory);
-    assert.equal(fs.existsSync(`${historyFile}.${process.pid}.tmp`), false);
-  } finally { fs.renameSync = rename; }
-  fs.writeFileSync(historyFile, '{corrupted');
-  try {
-    assert.throws(() => restarted.saveSession(parent), SyntaxError);
-    assert.equal(fs.readFileSync(historyFile, 'utf8'), '{corrupted');
-  } finally { fs.writeFileSync(historyFile, intactHistory); }
-  console.log('PASS session persistence: locked or invalid history cannot be silently overwritten');
+  fs.writeFileSync(historyFile, '{legacy file is no longer authoritative');
+  await restarted.saveSession(parent);
+  assert.ok((await restarted.getSessions()).some(session => session.id === parent.id));
+  assert.equal(fs.readFileSync(historyFile, 'utf8'), '{legacy file is no longer authoritative');
+  console.log('PASS session persistence: SQLite remains authoritative after migration and never overwrites the old JSON');
   console.log('PASS manual continuation uses managed snapshots; restart marks unfinished agents interrupted instead of claiming completion');
 
   provider.protocol = 'openai';
@@ -364,6 +389,7 @@ try {
   }
   console.log(`PASS concurrent turns: peak ${peakRequests}, FIFO, overflow and cancellation; 30,000 text events batched into ${results.reduce((sum, events) => sum + events.filter(event => event.type === 'content_delta').length, 0)}`);
 } finally {
+  await historyService?.shutdown();
   globalThis.fetch = originalFetch;
   fs.rmSync(fixture, { recursive: true, force: true });
 }

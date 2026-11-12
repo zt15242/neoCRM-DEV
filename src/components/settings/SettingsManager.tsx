@@ -178,7 +178,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setLoadError('');
     const loadConfig = async () => {
       try {
-        const cfg = await window.neoApi.aiGetConfig();
+        const getConfig = window.neoApi?.aiGetConfig;
+        if (typeof getConfig !== 'function') {
+          throw new Error('桌面通信桥未加载，请完全退出 NeoCRM 后重新打开');
+        }
+        const cfg = await getConfig();
         if (!active) return;
         setProviders(cfg.providers);
         setSettings(cfg.settings);

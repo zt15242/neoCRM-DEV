@@ -14,7 +14,7 @@ export function readWorkspaceSelection(storage: Pick<Storage, 'getItem'>): Works
 
 export function resolveWorkspaceSelection(saved: WorkspaceSelection | null, projects: WorkspaceProject[], sessions: AiChatSession[], isVisible: (id?: string) => boolean): WorkspaceSelection {
   const projectId = projects.some(project => project.id === saved?.projectId) ? saved!.projectId : projects[0]?.id || null;
-  const eligible = sessions.filter(session => session.projectId === projectId && session.messages?.length && isVisible(session.presetId));
+  const eligible = sessions.filter(session => session.projectId === projectId && (session.messageCount ?? session.messages?.length ?? 0) > 0 && isVisible(session.presetId));
   if (saved && saved.projectId === projectId) {
     return { projectId, sessionId: saved.sessionId && eligible.some(session => session.id === saved.sessionId) ? saved.sessionId : null };
   }

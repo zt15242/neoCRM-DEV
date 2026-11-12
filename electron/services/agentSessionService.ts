@@ -28,9 +28,11 @@ export interface AgentRunContext {
 }
 
 interface Host {
-  getSessions: () => AiChatSession[];
-  saveSession: (session: AiChatSession) => void;
-  run: (params: ChatRunParams, emit: (event: AiStreamEvent) => void) => Promise<void>;
+  getSessions?: () => AiChatSession[];
+  getSession?: (id: string) => Promise<AiChatSession | null>;
+  listOwned?: (owner: string) => Promise<AiChatSession[]>;
+  saveSession: (session: AiChatSession) => void | Promise<void>;
+  run: (params: ChatRunParams, emit: (event: AiStreamEvent) => void, snapshot?: AiChatSession) => Promise<void>;
   abort: (sessionId: string) => void;
   notify: (session: AiChatSession) => void;
 }
@@ -40,6 +42,9 @@ interface Job {
   timer?: ReturnType<typeof setTimeout>;
   cancelled: boolean;
   waiting: boolean;
+  flushQueue?: Promise<void>;
+  runPromise?: Promise<void>;
+  progressSave?: Promise<void>;
 }
 export const isAgentRunning = (session: AiChatSession) =>
   session.agentRun?.status === 'running' || session.agentRun?.status === 'queued';
@@ -49,6 +54,7 @@ export class AgentSessionService {
   private queue: Job[] = [];
   private running = 0;
   private listeners = new Set<() => void>();
+  private pendingFlushes = new Set<Promise<void>>();
 
   constructor(private host: Host) {}
 
@@ -59,20 +65,22 @@ export class AgentSessionService {
     if (!context.params.sessionId) throw new Error('当前请求没有有效会话');
   }
 
-  private owned(context: AgentRunContext, id: string) {
+  private async owned(context: AgentRunContext, id: string) {
     this.checkContext(context);
-    const session = this.host.getSessions().find(item => item.id === id);
+    const session = await this.getSession(id);
+    this.checkContext(context);
     if (!session?.agentRun || session.agentRun.createdBySessionId !== context.params.sessionId) {
       throw new Error('只能管理当前会话创建的代理');
     }
     return session;
   }
 
-  private reserveDispatch(context: AgentRunContext) {
+  private async reserveDispatch(context: AgentRunContext) {
     this.checkContext(context);
-    if (context.managed || this.host.getSessions().find(item => item.id === context.params.sessionId)?.agentRun) {
+    if (context.managed || (await this.getSession(context.params.sessionId))?.agentRun) {
       throw new Error('子代理和自主会话不能继续派生或调度代理，请由主会话统一派发');
     }
+    this.checkContext(context);
     if ((context.dispatchCount || 0) >= 8) throw new Error('本轮代理派发已达 8 次上限，请先汇总现有结果');
     if (this.jobs.size >= 24) throw new Error('后台任务队列已满，请等待已有任务完成');
     context.dispatchCount = (context.dispatchCount || 0) + 1;
@@ -99,9 +107,9 @@ export class AgentSessionService {
     if (name === 'create_session' || name === 'spawn_agent') {
       const title = this.text(args?.title, '标题', 100);
       const task = this.text(args?.task, '任务', 30000);
-      const parent = this.host.getSessions().find(item => item.id === context.params.sessionId);
+      const parent = await this.getSession(context.params.sessionId);
       if (!parent) throw new Error('当前主会话不存在，请先保存会话');
-      this.reserveDispatch(context);
+      await this.reserveDispatch(context);
       const now = Date.now();
       const attachments = [...new Map(context.params.messages.filter(message => message.role === 'user').flatMap(message => message.attachments || [])
         .filter(file => file.fullPath).map(file => [file.fullPath, { ...file,
@@ -118,29 +126,30 @@ export class AgentSessionService {
           createdBySessionId: parent.id, parentSessionId: name === 'spawn_agent' ? parent.id : undefined,
           status: 'queued', requestId: '', messageId: '' },
       };
-      this.enqueue(session, { ...context.params, sessionId: session.id, messages: session.messages,
+      await this.enqueue(session, { ...context.params, sessionId: session.id, messages: session.messages,
         projectId: session.projectId,
         mode: session.mode, activeSkillIds: session.activeSkillIds, compactionSummary: undefined,
         expectedConnector: context.connectorIdentity });
       return this.snapshot(session);
     }
     if (name === 'list_agents') {
-      return { agents: this.host.getSessions().filter(item => item.agentRun?.createdBySessionId === context.params.sessionId)
-        .map(item => this.snapshot(item)) };
+      const sessions = this.host.listOwned ? await this.host.listOwned(context.params.sessionId)
+        : this.host.getSessions!().filter(item => item.agentRun?.createdBySessionId === context.params.sessionId);
+      return { agents: sessions.map(item => this.snapshot(item)) };
     }
     if (name === 'wait_agents') {
       if (!Array.isArray(args?.sessionIds) || args.sessionIds.length < 1 || args.sessionIds.length > 8 ||
           args.sessionIds.some((id: unknown) => typeof id !== 'string')) throw new Error('sessionIds 必须包含 1 到 8 个代理 ID');
       const ids: string[] = [...new Set<string>(args.sessionIds)];
-      const read = () => ids.map(id => this.owned(context, id));
+      const read = () => Promise.all(ids.map(id => this.owned(context, id)));
       const timeout = args.timeoutMs === undefined ? 30000 : Number(args.timeoutMs);
       if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30000) throw new Error('timeoutMs 必须在 0 到 30000 之间');
-      const done = () => read().every(item => !isAgentRunning(item));
+      const done = async () => (await read()).every(item => !isAgentRunning(item));
       let timedOut = false;
-      if (!done() && timeout > 0) {
+      if (!await done() && timeout > 0) {
         await new Promise<void>((resolve, reject) => {
           const cleanup = () => { clearTimeout(timer); this.listeners.delete(update); context.signal?.removeEventListener('abort', abort); };
-          const update = () => { try { if (done()) { cleanup(); resolve(); } } catch (error) { cleanup(); reject(error); } };
+          const update = () => { void done().then(finished => { if (finished) { cleanup(); resolve(); } }, error => { cleanup(); reject(error); }); };
           const abort = () => { cleanup(); reject(Object.assign(new Error('对话已停止'), { name: 'AbortError' })); };
           const timer = setTimeout(() => { timedOut = true; cleanup(); resolve(); }, timeout);
           this.listeners.add(update);
@@ -148,19 +157,21 @@ export class AgentSessionService {
           if (context.signal?.aborted) abort(); else update();
         });
       }
-      return { allFinished: done(), timedOut, agents: read().map(item => this.snapshot(item)) };
+      return { allFinished: await done(), timedOut, agents: (await read()).map(item => this.snapshot(item)) };
     }
-    const session = this.owned(context, args?.sessionId);
+    const session = await this.owned(context, args?.sessionId);
     if (name === 'stop_agent') {
+      const job = this.jobs.get(session.id);
       this.stop(session.id);
-      return this.snapshot(this.host.getSessions().find(item => item.id === session.id) || session);
+      await job?.flushQueue;
+      return this.snapshot(await this.getSession(session.id) || session);
     }
     if (name === 'send_agent_message') {
       const message = this.text(args?.message, '消息', 30000);
       if (this.isActive(session.id)) throw new Error('代理仍在运行，请先等待或停止，待请求结束后再继续');
-      this.reserveDispatch(context);
+      await this.reserveDispatch(context);
       session.messages.push({ id: `msg_u_${randomUUID()}`, role: 'user', content: message, createdAt: Date.now() });
-      this.enqueue(session, { ...context.params, sessionId: session.id, messages: session.messages,
+      await this.enqueue(session, { ...context.params, sessionId: session.id, messages: session.messages,
         projectId: session.projectId,
         providerId: session.providerId, modelId: session.modelId, mode: session.mode,
         activeSkillIds: session.activeSkillIds, compactionSummary: session.compactionSummary,
@@ -170,12 +181,12 @@ export class AgentSessionService {
     throw new Error(`未知代理工具：${name}`);
   }
 
-  startFromUi(session: AiChatSession, params: ChatRunParams) {
+  async startFromUi(session: AiChatSession, params: ChatRunParams) {
     if (this.isActive(session.id)) throw new Error('该代理仍在运行');
-    this.enqueue(session, params);
+    await this.enqueue(session, { ...params, messages: session.messages, compactionSummary: session.compactionSummary });
   }
 
-  private enqueue(session: AiChatSession, input: ChatRunParams) {
+  private async enqueue(session: AiChatSession, input: ChatRunParams) {
     if (this.jobs.size >= 24) throw new Error('后台任务队列已满，请等待已有任务完成');
     const requestId = `req_agent_${randomUUID()}`;
     const messageId = input.messageId && session.messages.some(item => item.id === input.messageId)
@@ -188,7 +199,7 @@ export class AgentSessionService {
     const job: Job = { session, params: { ...input, requestId, messageId, messages }, cancelled: false, waiting: false };
     this.jobs.set(session.id, job);
     this.queue.push(job);
-    try { this.flush(job, true); }
+    try { await this.flush(job, true); }
     catch (error) {
       this.jobs.delete(session.id);
       this.queue = this.queue.filter(item => item !== job);
@@ -197,17 +208,34 @@ export class AgentSessionService {
     queueMicrotask(() => this.pump());
   }
 
-  private flush(job: Job, creating = false) {
+  private getSession(id: string): Promise<AiChatSession | null> {
+    return this.host.getSession ? this.host.getSession(id) : Promise.resolve(this.host.getSessions!().find(item => item.id === id) || null);
+  }
+
+  sessionForRequest(id: string) {
+    return [...this.jobs.values()].find(job => job.session.id === id || job.params.requestId === id)?.session.id;
+  }
+
+  private flush(job: Job, creating = false): Promise<void> {
     clearTimeout(job.timer);
     job.timer = undefined;
-    const latest = this.host.getSessions().find(item => item.id === job.session.id);
-    if (!latest && !creating) return; // 删除会话后，迟到的增量不能把它重新写回来。
-    job.session = { ...(latest || job.session), messages: job.session.messages,
-      compactionSummary: job.session.compactionSummary, agentRun: job.session.agentRun,
-      updatedAt: Math.max(Date.now(), (latest?.updatedAt || 0) + 1) };
-    this.host.saveSession(job.session);
-    this.host.notify(structuredClone(job.session));
-    for (const listener of [...this.listeners]) listener();
+    // Capture at the call boundary: an asynchronous save must not swallow later deltas.
+    const snapshot = structuredClone(job.session);
+    const pending = (job.flushQueue || Promise.resolve()).catch(() => {}).then(async () => {
+      const latest = await this.getSession(snapshot.id);
+      if (!latest && !creating) return;
+      const saved = { ...(latest || snapshot), messages: snapshot.messages,
+        compactionSummary: snapshot.compactionSummary, agentRun: snapshot.agentRun,
+        updatedAt: Math.max(Date.now(), (latest?.updatedAt || 0) + 1) };
+      await this.host.saveSession(saved);
+      job.session.updatedAt = saved.updatedAt;
+      this.host.notify(saved);
+      for (const listener of [...this.listeners]) listener();
+    });
+    job.flushQueue = pending;
+    this.pendingFlushes.add(pending);
+    void pending.finally(() => this.pendingFlushes.delete(pending)).catch(() => {});
+    return pending;
   }
 
   private onEvent(job: Job, event: AiStreamEvent) {
@@ -225,8 +253,10 @@ export class AgentSessionService {
     if (event.usage) message.usage = event.usage;
     if (event.durationMs) message.durationMs = event.durationMs;
     if (!job.timer) job.timer = setTimeout(() => {
-      try { this.flush(job); }
-      catch (error) { console.warn('[Agent] 保存代理进度失败:', error); }
+      job.timer = undefined;
+      if (job.progressSave) return;
+      job.progressSave = this.flush(job).catch(error => console.warn('[Agent] 保存代理进度失败:', error))
+        .finally(() => { job.progressSave = undefined; });
     }, 1200);
   }
 
@@ -237,23 +267,35 @@ export class AgentSessionService {
       this.running++;
       job.session.agentRun!.status = 'running';
       job.session.agentRun!.startedAt = Date.now();
-      try { this.flush(job); }
-      catch (error) {
-        this.running--;
-        this.jobs.delete(job.session.id);
-        job.session.agentRun!.status = 'failed';
-        job.session.agentRun!.error = '无法保存会话，代理未启动';
-        this.host.notify(structuredClone(job.session));
-        console.warn('[Agent] 启动代理失败:', error);
-        continue;
-      }
-      void this.run(job).catch(error => console.warn('[Agent] 保存代理结果失败:', error));
+      job.runPromise = this.startJob(job);
+
     }
+  }
+
+  private async startJob(job: Job) {
+    try { await this.flush(job); }
+    catch (error) {
+      this.running--;
+      this.jobs.delete(job.session.id);
+      job.session.agentRun!.status = 'failed';
+      job.session.agentRun!.error = '无法保存会话，代理未启动';
+      this.host.notify(structuredClone(job.session));
+      console.warn('[Agent] 启动代理失败:', error);
+      this.pump();
+      return;
+    }
+    if (job.cancelled) {
+      this.jobs.delete(job.session.id);
+      this.running--;
+      try { await this.flush(job); } finally { this.pump(); }
+      return;
+    }
+    await this.run(job).catch(error => console.warn('[Agent] 保存代理结果失败:', error));
   }
 
   private async run(job: Job) {
     try {
-      await this.host.run(job.params, event => this.onEvent(job, event));
+      await this.host.run(job.params, event => this.onEvent(job, event), job.session);
     } catch (error: any) {
       if (!job.cancelled) {
         job.session.agentRun!.error = error?.message || String(error);
@@ -271,7 +313,7 @@ export class AgentSessionService {
       state.finishedAt = Date.now();
       this.jobs.delete(job.session.id);
       this.running--;
-      try { this.flush(job); } finally { this.pump(); }
+      try { await this.flush(job); } finally { this.pump(); }
     }
   }
 
@@ -289,7 +331,7 @@ export class AgentSessionService {
       this.queue = this.queue.filter(item => item !== job);
       this.jobs.delete(id);
     } else this.host.abort(id);
-    this.flush(job);
+    void this.flush(job).catch(error => console.warn('[Agent] 保存停止状态失败:', error));
     return true;
   }
 
@@ -300,4 +342,9 @@ export class AgentSessionService {
   }
 
   stopAll() { for (const id of [...this.jobs.keys()]) this.stop(id); }
+
+  async drain() {
+    await Promise.allSettled([...this.jobs.values()].map(job => job.runPromise));
+    await Promise.allSettled([...this.pendingFlushes]);
+  }
 }

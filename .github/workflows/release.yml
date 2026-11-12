@@ -32,6 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -43,6 +44,17 @@ jobs:
 
       - name: Install Dependencies
         run: npm install
+
+      - name: Verify bundled NeoCRM CLI
+        run: |
+          npm run prepare:neo-cli
+          npm run test:neo-cli
+
+      - name: Verify Agent model gateway contracts
+        run: npm run test:agent-model
+
+      - name: Verify Electron SQLite storage and migration
+        run: npm run test:agent-storage
 
       # macOS 构建
       - name: Build macOS Application (.dmg & .zip)
@@ -59,6 +71,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify packaged Agent gateway (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          node scripts/verify-built-model-gateway.mjs release/win-unpacked/resources/app.asar
+          node scripts/verify-built-session-store.mjs release/win-unpacked/resources/app.asar
+          node scripts/verify-preload-bridge.mjs release/win-unpacked/resources/app.asar
+          node scripts/verify-agent-runtime-isolation.mjs release/win-unpacked/resources/app.asar
+
+      - name: Verify packaged Agent gateway (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          artifact_count=0
+          while IFS= read -r -d '' artifact; do
+            node scripts/verify-built-model-gateway.mjs "$artifact"
+            node scripts/verify-built-session-store.mjs "$artifact"
+            node scripts/verify-preload-bridge.mjs "$artifact"
+            node scripts/verify-agent-runtime-isolation.mjs "$artifact"
+            artifact_count=$((artifact_count + 1))
+          done < <(find release -path '*/Contents/Resources/app.asar' -print0)
+          if [ "$artifact_count" -eq 0 ]; then
+            echo "Packaged Agent ASAR is missing"
+            exit 1
+          fi
 
       - name: Verify packaged Windows widget build runtime
         if: matrix.os == 'windows-latest'

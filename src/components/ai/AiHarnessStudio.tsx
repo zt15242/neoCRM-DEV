@@ -19,7 +19,7 @@ import {
 import { AI_AGENT_PRESETS, BUILTIN_AI_PROVIDERS, DEFAULT_AI_SETTINGS, BUILTIN_AI_SKILLS } from '../../../shared/constants';
 import { AiMessageItem } from './AiMessageItem';
 import { AiInputComposer } from './AiInputComposer';
-import { mergeSavedChatSessions, AGENT_STATUS_LABELS } from './chatSessionState';
+import { mergeSavedChatSessions, releaseInactiveSessionBodies, AGENT_STATUS_LABELS } from './chatSessionState';
 import { MessageTurnNavigator } from './MessageTurnNavigator';
 import { ContextEntityModal } from './ContextEntityModal';
 import { ConfirmCreateSchemaModal } from './ConfirmCreateSchemaModal';
@@ -148,7 +148,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
 }) => {
   const { visible: privateFeaturesVisible, isRoleVisible, isSkillVisible } = useRestrictedFeatures();
   const visiblePresets = AI_AGENT_PRESETS.filter((preset) => isRoleVisible(preset.id));
-  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(true);
+  const [isTerminalOpen, setIsTerminalOpen] = useState<boolean>(false);
   const [activePanelTab, setActivePanelTab] = useState<"files" | "changes" | "jobs" | "artifacts" | "terminal" | "tools" | "browser">("files");
 
   // DSH 模式切换 (Standard / PTC / Minimal / Plan)
@@ -163,7 +163,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       updatedAt: Date.now(),
     };
     const savedList = await window.neoApi.aiSaveSession(updated);
-    setSessions(savedList.filter((s) => s.messages && s.messages.length > 0));
+    setSessions(savedList.filter((s) => (s.messageCount ?? s.messages?.length ?? 0) > 0));
   };
   const [moreMenuOpen, setMoreMenuOpen] = useState<boolean>(false);
   const [pendingComposerAttachment, setPendingComposerAttachment] = useState<AiFileAttachment | null>(null);
@@ -189,7 +189,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   }, [propSessions]);
 
   const setSessions = (updater: AiChatSession[] | ((prev: AiChatSession[]) => AiChatSession[])) => {
-    const next = typeof updater === 'function' ? updater(sessionsRef.current) : updater;
+    const updated = typeof updater === 'function' ? updater(sessionsRef.current) : updater;
+    const retained = { ...activeStreamsRef.current, ...Object.fromEntries([...startingStreamsRef.current].map(id => [id, true])) };
+    const next = releaseInactiveSessionBodies(updated, activeSessionIdRef.current, retained);
     sessionsRef.current = next;
     setSessionsState(next);
     propOnSessionsChange?.(next);
@@ -233,7 +235,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     window.neoApi?.aiGetConfig?.().then((config) => { if (active && config.skills) setSkills(config.skills); }).catch(() => {});
     if (propSessions === undefined) {
       window.neoApi?.aiGetSessions?.().then((items) => {
-        if (active) setSessions(items.filter((item) => item.messages?.length > 0));
+        if (active) setSessions(items.filter((item) => (item.messageCount ?? item.messages?.length ?? 0) > 0));
       }).catch(() => {});
     }
     if (!privateFeaturesVisible) {
@@ -324,9 +326,6 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       if (!session.agentRun || !isRoleVisible(session.presetId)) return;
       const existing = sessionsRef.current.find(item => item.id === session.id);
       if (existing && existing.updatedAt > session.updatedAt) return;
-      setSessions(previous => {
-        return existing ? previous.map(item => item.id === session.id ? session : item) : [session, ...previous];
-      });
       const state = session.agentRun;
       const next = { ...activeStreamsRef.current };
       if (state.status === 'running' || state.status === 'queued') {
@@ -334,6 +333,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       } else delete next[session.id];
       activeStreamsRef.current = next;
       setActiveStreams(next);
+      setSessions(previous => existing ? previous.map(item => item.id === session.id ? session : item) : [session, ...previous]);
     };
     const unsubscribe = window.neoApi?.onAgentSessionUpdated?.(receive);
     // 重新加载界面后也恢复后台运行标记；先订阅再读取，避免漏掉新任务。
@@ -402,7 +402,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       }
       if (propSessions === undefined && window.neoApi?.aiGetSessions) {
         const list = await window.neoApi.aiGetSessions();
-        const validList = list.filter((s) => s.messages && s.messages.length > 0);
+        const validList = list.filter((s) => (s.messageCount ?? s.messages?.length ?? 0) > 0);
         setSessions(previous => mergeSavedChatSessions(validList, previous, activeStreamsRef.current, ''));
         if (propActiveSessionId === undefined && validList.length > 0 && !activeSessionId) {
           const first = validList[0];
@@ -434,6 +434,27 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   }, []);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId && isRoleVisible(s.presetId)) || null;
+  const [sessionLoadError, setSessionLoadError] = useState('');
+  const [historyRetry, setHistoryRetry] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setSessionLoadError('');
+    if (activeSession?.messagesLoaded === false && window.neoApi?.aiGetSession) {
+      const id = activeSession.id;
+      window.neoApi.aiGetSession(id).then(loaded => {
+        if (cancelled || activeSessionIdRef.current !== id) return;
+        if (!loaded) throw new Error('会话已删除或当前不可用');
+        setSessions(current => current.map(item => item.id === id && item.messagesLoaded === false
+          ? { ...loaded, ...(item.updatedAt > loaded.updatedAt ? item : {}), messages: loaded.messages, messagesLoaded: true, messageCount: loaded.messages.length }
+          : item));
+      }).catch((error: Error) => { if (!cancelled) setSessionLoadError(error.message || '读取会话失败，请重试'); });
+    }
+    return () => { cancelled = true; };
+  }, [activeSessionId, activeSession?.messagesLoaded, historyRetry]);
+
+  useEffect(() => {
+    setSessions(current => current);
+  }, [activeSessionId]);
 
   useEffect(() => {
     const selected = sessionsRef.current.find(item => item.id === activeSessionId);
@@ -648,7 +669,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
   // 删除会话
   const handleDeleteSession = async (sessionId: string) => {
     const list = await window.neoApi.aiDeleteSession(sessionId);
-    setSessions(list.filter((s) => s.messages && s.messages.length > 0));
+    setSessions(list.filter((s) => (s.messageCount ?? s.messages?.length ?? 0) > 0));
     if (activeSessionId === sessionId) {
       setActiveSessionId(list[0]?.id || null);
     }
@@ -660,7 +681,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     if (!target) return;
     const updated = { ...target, title, updatedAt: Date.now() };
     const list = await window.neoApi.aiSaveSession(updated);
-    setSessions(list.filter((s) => s.messages && s.messages.length > 0));
+    setSessions(list.filter((s) => (s.messageCount ?? s.messages?.length ?? 0) > 0));
   };
 
   // 清空所有会话
@@ -706,6 +727,10 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     mentionedSkillIds?: string[]
   ) => {
     if (await consumeAccessCommand(text)) return;
+    if (activeSessionId && sessionsRef.current.find(item => item.id === activeSessionId)?.messagesLoaded === false) {
+      showToast('info', sessionLoadError || '正在读取历史会话，请稍后发送。');
+      return;
+    }
     if (!isRoleVisible(selectedPresetId)) return;
     const sendKey = activeSessionId || 'draft';
     if (startingStreamsRef.current.has(sendKey) || (activeSessionId && activeStreamsRef.current[activeSessionId])) {
@@ -814,6 +839,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       showToast('error', `保存对话失败: ${e?.message || '未知错误'}`);
       return;
     }
+    startingStreamsRef.current.add(saved.id);
     setSessions(prev => prev.some(item => item.id === saved.id)
       ? prev.map(item => item.id === saved.id && item.updatedAt <= saved.updatedAt ? saved : item)
       : [saved, ...prev]);
@@ -829,6 +855,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
       [updatedSession.id]: { requestId, messageId: assistantMsgId },
     };
     startingStreamsRef.current.delete(sendKey);
+    startingStreamsRef.current.delete(saved.id);
     delete reasoningStartTimesRef.current[updatedSession.id];
 
     const effectiveMcpIds = mcpIds !== undefined ? mcpIds : activeMcpServerIds;
@@ -975,9 +1002,9 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
     <div className={`ai-code-layout bg-white overflow-hidden flex flex-1 h-full w-full min-h-0 min-w-0 ${isTerminalOpen ? 'has-workbench' : ''}`}>
 
 
-      {/* 中部主对话画布 (Codex 样式无缝极简画布) */}
+      {/* 中央会话画布 */}
       <div className="ai-chat-column flex-1 flex flex-col bg-white min-w-0 min-h-0 h-full overflow-hidden relative">
-        {/* 顶部 Codex 风格标题与分栏控制栏 */}
+        {/* 会话标题与工作区操作 */}
         <div className={`h-11 px-4 bg-white border-b border-slate-100 flex items-center justify-between shrink-0 select-none ${
           'window-drag'
         }`}>
@@ -993,8 +1020,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               </button>
             )}
             <Folder className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <h2 className="text-xs font-semibold text-slate-800 truncate">
-              {activeSession ? activeSession.title : currentPreset.name}
+            <span className="max-w-36 truncate text-xs text-slate-500" title={activeProject?.localPath || '代码工作区'}>
+              {activeProject?.name || '代码工作区'}
+            </span>
+            <ChevronRight className="h-3 w-3 shrink-0 text-slate-300" />
+            <h2 className="min-w-0 truncate text-xs font-semibold text-slate-800">
+              {activeSession?.title || '新会话'}
             </h2>
             {activeSession?.agentRun && <span className="text-[10px] shrink-0 text-sky-700">
               {activeSession.agentRun.kind === 'subagent' ? '子代理' : '自主会话'} · {AGENT_STATUS_LABELS[activeSession.agentRun.status]}
@@ -1091,7 +1122,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
               )}
             </div>
 
-            {/* Codex 风格右侧分栏终端切换按钮 */}
+            {/* 代码、文件与执行结果工作区 */}
             <button
               type="button"
               onClick={() => setIsTerminalOpen(!isTerminalOpen)}
@@ -1182,7 +1213,12 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
           )}
 
           {/* 空会话欢迎引导页 */}
-          {(!activeSession || activeSession.messages.length === 0) ? (
+          {activeSession?.messagesLoaded === false ? (
+            <div className="max-w-4xl mx-auto p-6 text-sm text-slate-600" role="status">
+              {sessionLoadError || '正在读取历史会话…'}
+              {sessionLoadError && <button className="ml-3 underline cursor-pointer" onClick={() => setHistoryRetry(value => value + 1)}>重试</button>}
+            </div>
+          ) : (!activeSession || activeSession.messages.length === 0) ? (
             <div className="ai-welcome workspace-welcome">
               <h1>{activeProject ? `一起构建 ${activeProject.name}` : '从一个项目开始'}</h1>
               <p>{activeProject ? '打开项目文件直接编辑，或描述你要完成的任务。' : '在左侧关联本地项目，然后打开文件或向 AI 描述任务。'}</p>
@@ -1325,7 +1361,7 @@ export const AiHarnessStudio: React.FC<AiHarnessStudioProps> = ({
         </div>
       </div>
 
-      {/* 右侧 Codex 风格项目文件树、上传/产物与交互终端分栏 */}
+      {/* 右侧项目文件、代码编辑、产物与执行结果 */}
       <CodexTerminalPanel
         isOpen={isTerminalOpen}
         onClose={() => setIsTerminalOpen(false)}

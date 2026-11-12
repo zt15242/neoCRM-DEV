@@ -788,7 +788,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'list_business_types',
-      description: '查询销售易指定对象的真实业务类型。创建、修改或部署业务类型前主动调用；业务类型不是对象开关或子表单布局。CLI 1.0.8 无此独立命令，宿主复用当前连接器授权调用 Metadata API；读取失败会报错，不会伪装成空列表。',
+      description: '查询销售易指定对象的真实业务类型。创建、修改或部署业务类型前主动调用；业务类型不是对象开关或子表单布局。宿主复用当前连接器授权调用 Metadata API；读取失败会报错，不会伪装成空列表。',
       parameters: {
         type: 'object',
         properties: { entityApiKey: { type: 'string', description: '真实对象 API Key，标准对象如 account，自定义对象含 __c' } },
@@ -800,7 +800,7 @@ export const CRM_HARNESS_TOOLS_SPEC = [
     type: 'function',
     function: {
       name: 'deploy_business_type',
-      description: '创建、更新或部署销售易对象的业务类型，自动区分 create/update/unchanged 并回读。主动用于业务类型需求，不引导用户手工去后台。传内联 apiKey/label 或当前项目 sourceFile；默认 dryRun=true 只读预演。展示目标租户和变更、取得用户对该范围写入的明确授权后，传 dryRun=false、confirm=true。复用连接器授权，CLI 1.0.8 未覆盖该写入。仅 success=true、verified=true、dryRun=false 可报告已部署；写入未知或 verificationPending 时先查询核实，禁止盲目重复写入。',
+      description: '创建、更新或部署销售易对象的业务类型，自动区分 create/update/unchanged 并回读。主动用于业务类型需求，不引导用户手工去后台。传内联 apiKey/label 或当前项目 sourceFile；默认 dryRun=true 只读预演。展示目标租户和变更、取得用户对该范围写入的明确授权后，传 dryRun=false、confirm=true。复用连接器授权。仅 success=true、verified=true、dryRun=false 可报告已部署；写入未知或 verificationPending 时先查询核实，禁止盲目重复写入。',
       parameters: {
         type: 'object',
         properties: {

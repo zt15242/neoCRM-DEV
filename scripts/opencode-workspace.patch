@@ -1,0 +1,551 @@
+diff --git a/packages/app/package.json b/packages/app/package.json
+index 43d1204cbf..f6ef6dd367 100644
+--- a/packages/app/package.json
++++ b/packages/app/package.json
+@@ -5,6 +5,7 @@
+   "type": "module",
+   "exports": {
+     ".": "./src/index.ts",
++    "./embedded": "./src/embedded.tsx",
+     "./desktop": "./src/desktop.ts",
+     "./desktop-menu": "./src/shell/commands/desktop-menu.ts",
+     "./i18n/desktop-native": "./src/runtime/i18n/desktop-native.ts",
+diff --git a/packages/app/src/embedded.tsx b/packages/app/src/embedded.tsx
+new file mode 100644
+index 0000000000..a9c9afaa03
+--- /dev/null
++++ b/packages/app/src/embedded.tsx
+@@ -0,0 +1,48 @@
++import { Route, Router, type BaseRouterProps } from "@solidjs/router"
++import { lazy, Suspense, type Component, type ParentProps } from "solid-js"
++import { AppInterface } from "./app"
++import { SessionRouteFrame } from "./session/session-frame"
++import { LayoutProvider } from "./shell/state/layout"
++import { SettingsSurfaceProvider } from "./settings/surface"
++import { PluginAttachment } from "./runtime/plugin/root"
++import { TargetServerRoute } from "./shell/routes/routes"
++
++const Session = lazy(() => import("./session/route").then((module) => ({ default: module.TargetSessionRouteContent })))
++
++function EmbeddedRouter(props: BaseRouterProps) {
++  const Root = props.root as Component<ParentProps>
++
++  return (
++    <Router root={Root}>
++      <Route component={EmbeddedLayout}>
++        <Route path="/server/:serverKey/session/:id" component={() => <EmbeddedSession />} />
++      </Route>
++    </Router>
++  )
++}
++
++function EmbeddedLayout(props: ParentProps) {
++  return (
++    <LayoutProvider>
++      <SettingsSurfaceProvider>
++        <PluginAttachment>{props.children}</PluginAttachment>
++      </SettingsSurfaceProvider>
++    </LayoutProvider>
++  )
++}
++
++function EmbeddedSession() {
++  return (
++    <SessionRouteFrame>
++      <Suspense fallback={<div class="min-h-0 flex-1" role="status" />}>
++        <TargetServerRoute>
++          <Session />
++        </TargetServerRoute>
++      </Suspense>
++    </SessionRouteFrame>
++  )
++}
++
++export function EmbeddedAppInterface(props: Parameters<typeof AppInterface>[0]) {
++  return <AppInterface {...props} router={EmbeddedRouter} />
++}
+diff --git a/packages/app/src/entry.tsx b/packages/app/src/entry.tsx
+index 969f506c1f..799ba1168c 100644
+--- a/packages/app/src/entry.tsx
++++ b/packages/app/src/entry.tsx
+@@ -4,6 +4,7 @@ import "@/runtime/polyfills"
+ import { init } from "@sentry/solid"
+ import { render } from "solid-js/web"
+ import { AppBaseProviders, AppInterface } from "@/app"
++import { EmbeddedAppInterface } from "./embedded"
+ import { loadInitialLocale } from "@/runtime/i18n/language"
+ import { PlatformProvider } from "@/runtime/platform/platform"
+ import { createWebPlatform } from "@/runtime/platform/web"
+@@ -80,6 +81,7 @@ if (root instanceof HTMLElement && root.dataset.opencodeMounted === undefined) {
+   root.dataset.opencodeMounted = ""
+   void loadInitialLocale().then((locale) => {
+     const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
++    const workspaceOnly = new URLSearchParams(location.search).get("workspace") === "1"
+     clearAuthToken()
+     const standalone = isStandalone()
+     root.dataset.standalone = String(standalone)
+@@ -101,13 +103,22 @@ if (root instanceof HTMLElement && root.dataset.opencodeMounted === undefined) {
+       () => (
+         <PlatformProvider value={web.platform}>
+           <AppBaseProviders locale={locale}>
+-            <AppInterface
+-              canonicalLocalServer={server ? ServerConnection.key(server) : undefined}
+-              servers={server ? [server] : []}
+-            >
+-              <KeyboardInsets />
+-              {standalone && <PwaRoutePersistence />}
+-            </AppInterface>
++            {workspaceOnly ? (
++              <EmbeddedAppInterface
++                canonicalLocalServer={server ? ServerConnection.key(server) : undefined}
++                servers={server ? [server] : []}
++              >
++                <KeyboardInsets />
++              </EmbeddedAppInterface>
++            ) : (
++              <AppInterface
++                canonicalLocalServer={server ? ServerConnection.key(server) : undefined}
++                servers={server ? [server] : []}
++              >
++                <KeyboardInsets />
++                {standalone && <PwaRoutePersistence />}
++              </AppInterface>
++            )}
+           </AppBaseProviders>
+         </PlatformProvider>
+       ),
+diff --git a/packages/app/src/runtime/platform/web.ts b/packages/app/src/runtime/platform/web.ts
+index 28944b0657..105a8c759c 100644
+--- a/packages/app/src/runtime/platform/web.ts
++++ b/packages/app/src/runtime/platform/web.ts
+@@ -1,11 +1,14 @@
+ import { createBrowserDraftStore } from "@/runtime/persistence/drafts"
+ import type { Platform } from "./platform"
+ 
++const workspaceOnly = new URLSearchParams(location.search).get("workspace") === "1"
++
+ export function createWebPlatform(version: string) {
+   const platform: Platform = {
+     platform: "web",
+     draftStore: createBrowserDraftStore(),
+     version,
++    fetch: workspaceOnly ? createBridgeFetch() : undefined,
+     openExternal(value) {
+       if (!URL.canParse(value)) return
+       const url = new URL(value)
+@@ -41,10 +44,102 @@ export function createWebPlatform(version: string) {
+ 
+   return {
+     platform,
+-    currentServerUrl: getCurrentServerUrl(),
++    currentServerUrl: workspaceOnly ? "http://neocrm.local" : getCurrentServerUrl(),
++  }
++}
++
++function createBridgeFetch(): typeof fetch {
++  if (window.parent === window) return globalThis.fetch.bind(globalThis)
++
++  return async (input, init) => {
++    const request = new Request(input, init)
++    const contentType = request.headers.get("content-type") || ""
++    const binaryBody = !["GET", "HEAD"].includes(request.method) && contentType.includes("application/octet-stream")
++    const body = request.method === "GET" || request.method === "HEAD" || binaryBody ? undefined : await request.text()
++    const bodyBase64 = binaryBody ? bytesToBase64(await request.arrayBuffer()) : undefined
++    const channel = new MessageChannel()
++
++    return new Promise<Response>((resolve, reject) => {
++      const port = channel.port1
++      let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
++      const cleanup = () => {
++        request.signal.removeEventListener("abort", abort)
++        port.close()
++      }
++      const abort = () => {
++        port.postMessage({ kind: "abort" })
++        cleanup()
++        reject(new DOMException("The operation was aborted", "AbortError"))
++      }
++
++      port.onmessage = (event: MessageEvent) => {
++        const message = event.data
++        if (message.kind === "response") {
++          if (!message.stream) {
++            cleanup()
++            const responseBody = message.bodyBase64 ? base64ToBytes(message.bodyBase64) : message.body ?? null
++            resolve(new Response(responseBody, { status: message.status, headers: message.headers }))
++            return
++          }
++
++          const stream = new ReadableStream<Uint8Array>({
++            start(controller) { streamController = controller },
++            cancel() { port.postMessage({ kind: "abort" }); cleanup() },
++          })
++          resolve(new Response(stream, { status: message.status, headers: message.headers }))
++          return
++        }
++
++        if (message.kind === "chunk") {
++          streamController?.enqueue(new TextEncoder().encode(message.chunk))
++          return
++        }
++
++        if (message.kind === "end") {
++          streamController?.close()
++          cleanup()
++          return
++        }
++
++        if (message.kind === "error") {
++          const error = new Error(message.message || "NeoCRM API bridge failed")
++          if (streamController) streamController.error(error)
++          else reject(error)
++          cleanup()
++        }
++      }
++      port.start()
++
++      if (request.signal.aborted) return abort()
++      request.signal.addEventListener("abort", abort, { once: true })
++      window.parent.postMessage({
++        type: "neo-opencode-rpc",
++        url: request.url,
++        method: request.method,
++        headers: [...request.headers.entries()],
++        body,
++        bodyBase64,
++      }, "*", [channel.port2])
++    })
+   }
+ }
+ 
++function bytesToBase64(bytes: ArrayBuffer) {
++  const data = new Uint8Array(bytes)
++  let binary = ""
++  for (let offset = 0; offset < data.length; offset += 0x8000) {
++    binary += String.fromCharCode(...data.subarray(offset, offset + 0x8000))
++  }
++  return btoa(binary)
++}
++
++function base64ToBytes(value: string) {
++  const binary = atob(value)
++  const bytes = new Uint8Array(binary.length)
++  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
++  return bytes
++}
++
+ function getCurrentServerUrl() {
+   if (import.meta.env.VITE_OPENCODE_SERVER_MODE === "none") return undefined
+ 
+diff --git a/packages/app/src/runtime/plugin/host-apis.tsx b/packages/app/src/runtime/plugin/host-apis.tsx
+index 60b62226f6..f8133dc94e 100644
+--- a/packages/app/src/runtime/plugin/host-apis.tsx
++++ b/packages/app/src/runtime/plugin/host-apis.tsx
+@@ -1030,6 +1030,7 @@ export function createPluginAttachment(apis: HostApis) {
+   // The tab the route shows: a session's, a draft's, or none (Home, Settings).
+   const routedTab = () => {
+     const value = route()
++    if (!value) return
+ 
+     if (value.type === "session") return findSessionTab(tabs.store, value.server, value.sessionId)
+ 
+diff --git a/packages/app/src/runtime/server/registry.tsx b/packages/app/src/runtime/server/registry.tsx
+index 4efb1078c9..f07e687fa8 100644
+--- a/packages/app/src/runtime/server/registry.tsx
++++ b/packages/app/src/runtime/server/registry.tsx
+@@ -210,7 +210,8 @@ export namespace ServerConnection {
+   export const http = (conn: Any) => {
+     if (conn.type !== "plugin") return conn.http
+ 
+-    return conn.status.type === "ready" ? conn.status.http : undefined
++    const status = conn.status
++    return status?.type === "ready" ? status.http : undefined
+   }
+ 
+   // The desktop sidecar, or a loopback http connection on the same port as the app's own server. Other loopback
+diff --git a/packages/app/src/session/header/session-header-actions.tsx b/packages/app/src/session/header/session-header-actions.tsx
+index 5305229d77..f00b8f0c75 100644
+--- a/packages/app/src/session/header/session-header-actions.tsx
++++ b/packages/app/src/session/header/session-header-actions.tsx
+@@ -16,16 +16,32 @@ export function SessionReviewToggle(props: { onToggle: () => void; glyph?: (fill
+   const { view } = useSessionLayout()
+ 
++  if (new URLSearchParams(window.location.search).get("workspace") === "1") return null
++
+   return (
+-    <SessionHeaderActions
+-      state={{
+-        reviewLabel: language.t("command.review.toggle"),
+-        reviewKeybind: command.keybindParts("review.toggle"),
+-        reviewVisible: true,
+-        reviewOpened: view().side.opened(),
+-        onReviewToggle: props.onToggle,
+-        reviewGlyph: props.glyph,
+-      }}
+-    />
++    <div class="flex items-center gap-1">
++      <Tooltip class="shrink-0" placement="bottom" value={language.t("command.open")}>
++        <IconButton
++          type="button"
++          variant="ghost-muted"
++          size="large"
++          class="shrink-0"
++          onMouseDown={(event) => event.preventDefault()}
++          onClick={() => void command.trigger("file.browse", "keybind")}
++          aria-label={language.t("command.open")}
++          icon={<Icon name="file-tree" />}
++        />
++      </Tooltip>
++      <SessionHeaderActions
++        state={{
++          reviewLabel: language.t("command.review.toggle"),
++          reviewKeybind: command.keybindParts("review.toggle"),
++          reviewVisible: true,
++          reviewOpened: view().side.opened(),
++          onReviewToggle: props.onToggle,
++          reviewGlyph: props.glyph,
++        }}
++      />
++    </div>
+   )
+ }
+ 
+diff --git a/packages/app/src/settings/servers/machine.test.ts b/packages/app/src/settings/servers/machine.test.ts
+index ee3474e6b8..acfabd7fcf 100644
+--- a/packages/app/src/settings/servers/machine.test.ts
++++ b/packages/app/src/settings/servers/machine.test.ts
+@@ -62,6 +62,14 @@ describe("settings server availability", () => {
+     expect(serverPagesConnection(missing)).toBeUndefined()
+   })
+ 
++  test("a plugin connection without status is treated as offline", () => {
++    const malformed = { type: "plugin", key: "ssh:build", plugin: "ssh" } as ServerConnection.Plugin
++    const availability = resolveServerAvailability({ connection: malformed })
++
++    expect(availability).toEqual({ status: "unreachable", reason: "offline", connection: malformed })
++    expect(isSettingsServerUnreachable(availability)).toBe(true)
++  })
++
+   test("search indexes exactly the servers whose pages open", () => {
+     const cases = [
+       [{ connection: http }, true],
+diff --git a/packages/app/src/settings/servers/machine.ts b/packages/app/src/settings/servers/machine.ts
+index 55cbf2b131..88a6b37801 100644
+--- a/packages/app/src/settings/servers/machine.ts
++++ b/packages/app/src/settings/servers/machine.ts
+@@ -54,8 +54,11 @@ type Stage = "stopped" | "starting" | "auth" | "failed" | "incompatible"
+ export function resolveServerAvailability(input: ServerAvailabilityInput): SettingsServerAvailability {
+   // A listed plugin server's status already shows a sign-in in progress as starting, and a ready entry without an
+   // endpoint as failed; the plugin entry speaks only for servers that are not listed yet.
+-  if (input.connection?.type === "plugin" && input.connection.status.type !== "ready")
+-    return staged(input.connection.status.type)
++  if (input.connection?.type === "plugin") {
++    const status = input.connection.status
++    if (!status) return { status: "unreachable", reason: "offline", connection: input.connection }
++    if (status.type !== "ready") return staged(status.type)
++  }
+ 
+   if (!input.connection && input.source && input.source.entry.state !== "ready") return staged(input.source.entry.state)
+ 
+diff --git a/packages/app/src/shell/routes/routes.tsx b/packages/app/src/shell/routes/routes.tsx
+index 7303f5d26e..4867c4e1aa 100644
+--- a/packages/app/src/shell/routes/routes.tsx
++++ b/packages/app/src/shell/routes/routes.tsx
+@@ -78,7 +78,7 @@ export function AppRoutes() {
+   )
+ }
+ 
+-function TargetServerRoute(props: ParentProps) {
++export function TargetServerRoute(props: ParentProps) {
+   const params = useParams<{ serverKey: string }>()
+   const global = useGlobal()
+ 
+diff --git a/packages/app/vite.config.ts b/packages/app/vite.config.ts
+index 87b1ce7a66..948fa7ae44 100644
+--- a/packages/app/vite.config.ts
++++ b/packages/app/vite.config.ts
+@@ -22,7 +22,10 @@ const sentry =
+       })
+     : false
+ 
++const workspaceBuild = process.env.VITE_OPENCODE_WORKSPACE === "1"
++
+ export default defineConfig({
++  base: workspaceBuild ? "./" : undefined,
+   plugins: [
+     desktopPlugin,
+     icons(channel),
+@@ -35,6 +38,7 @@ export default defineConfig({
+     port: 3000,
+   },
+   build: {
++    ...(workspaceBuild ? { rolldownOptions: { input: { workspace: "workspace.html" } } } : {}),
+     ...(process.env.VITE_OPENCODE_TEST_FIXTURES === "1"
+       ? {
+           rolldownOptions: {
+@@ -49,6 +53,6 @@ export default defineConfig({
+       : {}),
+     assetsDir: "_assets",
+     target: "esnext",
+-    sourcemap: true,
++    sourcemap: !workspaceBuild,
+   },
+ })
+diff --git a/packages/app/workspace.html b/packages/app/workspace.html
+new file mode 100644
+index 0000000000..c91b967dd3
+--- /dev/null
++++ b/packages/app/workspace.html
+@@ -0,0 +1,14 @@
++<!doctype html>
++<html lang="zh-CN" style="background:#fafafa">
++  <head>
++    <meta charset="utf-8" />
++    <base href="/workspace/" />
++    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
++    <meta name="color-scheme" content="light dark" />
++    <title>OpenCode Workspace</title>
++  </head>
++  <body class="antialiased overflow-hidden">
++    <div id="root" class="flex h-dvh flex-col overflow-hidden"></div>
++    <script src="./src/entry.tsx" type="module"></script>
++  </body>
++</html>
+diff --git a/packages/app/src/runtime/platform/web.ts b/packages/app/src/runtime/platform/web.ts
+--- a/packages/app/src/runtime/platform/web.ts
++++ b/packages/app/src/runtime/platform/web.ts
+@@ -8,6 +8,12 @@ export function createWebPlatform(version: string) {
+     draftStore: createBrowserDraftStore(),
+     version,
+     fetch: workspaceOnly ? createBridgeFetch() : undefined,
++    ...(workspaceOnly ? {
++      writeClipboardText: (text: string) => bridgeClipboardWrite(text),
++      openProjectInWorkspace: (directory: string) => window.parent.postMessage({ type: "neo-opencode-project-action", action: "open", directory }, "*"),
++      editProjectInWorkspace: (directory: string) => window.parent.postMessage({ type: "neo-opencode-project-action", action: "edit", directory }, "*"),
++      revealPath: (directory: string) => bridgeRevealPath(directory),
++    } : {}),
+     openExternal(value) {
+@@ -42,6 +48,47 @@ export function createWebPlatform(version: string) {
+   }
+ }
+ 
++function bridgeClipboardWrite(text: string) {
++  return new Promise<void>((resolve, reject) => {
++    const channel = new MessageChannel()
++    const timer = setTimeout(() => {
++      channel.port1.close()
++      reject(new Error("NeoCRM 剪贴板桥接超时"))
++    }, 2000)
++    channel.port1.onmessage = (event) => {
++      clearTimeout(timer)
++      channel.port1.close()
++      event.data?.copied ? resolve() : reject(new Error("NeoCRM 无法写入系统剪贴板"))
++    }
++    try {
++      window.parent.postMessage({ type: "neo-opencode-clipboard-write", text }, "*", [channel.port2])
++    } catch (error) {
++      clearTimeout(timer)
++      channel.port1.close()
++      reject(error)
++    }
++  })
++}
++
++function bridgeRevealPath(directory: string) {
++  return new Promise<boolean>((resolve, reject) => {
++    const channel = new MessageChannel()
++    const timer = setTimeout(() => {
++      channel.port1.close()
++      reject(new Error("打开项目目录请求超时"))
++    }, 2000)
++    channel.port1.onmessage = (event) => {
++      clearTimeout(timer)
++      channel.port1.close()
++      resolve(event.data?.revealed === true)
++    }
++    try {
++      window.parent.postMessage({ type: "neo-opencode-reveal-path", directory }, "*", [channel.port2])
++    } catch (error) {
++      clearTimeout(timer)
++      channel.port1.close()
++      reject(error)
++    }
++  })
++}
++
+ function createBridgeFetch(): typeof fetch {
+diff --git a/packages/app/src/runtime/platform/platform.tsx b/packages/app/src/runtime/platform/platform.tsx
+--- a/packages/app/src/runtime/platform/platform.tsx
++++ b/packages/app/src/runtime/platform/platform.tsx
+@@ -126,6 +126,12 @@ type PlatformBase = {
+   /** Write text to the native clipboard (desktop only) */
+   writeClipboardText?(text: string): Promise<void>
+ 
++  /** Open the current NeoCRM project in its file workspace. */
++  openProjectInWorkspace?(directory: string): void
++
++  /** Open NeoCRM's native project editor for the current workspace. */
++  editProjectInWorkspace?(directory: string): void
++
+   /** Export collected diagnostic logs (desktop only) */
+   exportDebugLogs?(): Promise<string>
+
+diff --git a/packages/app/src/session/session-identity-header.tsx b/packages/app/src/session/session-identity-header.tsx
+--- a/packages/app/src/session/session-identity-header.tsx
++++ b/packages/app/src/session/session-identity-header.tsx
+@@ -139,7 +139,7 @@ export function SessionLocation(props: {
+ 
+   // Revealing a path only makes sense on the machine the app runs on.
+   const canReveal = () =>
+-    platform.platform === "desktop" && !!platform.revealPath && servers.current(server.conn) && !!props.directory
++    !!platform.revealPath && servers.current(server.conn) && !!props.directory
+ 
+   const onOpenChange = (open: boolean) => {
+     setStore("open", open)
+@@ -185,6 +185,7 @@ export function SessionLocation(props: {
+     const project = props.project
+ 
+     if (!project) return
++    if (platform.openProjectInWorkspace) return platform.openProjectInWorkspace(project.worktree)
+     server.ctx.projects.touch(project.worktree)
+     layout.home.setSelection({ server: server.key, directory: project.worktree })
+     navigate("/")
+@@ -194,6 +195,7 @@ export function SessionLocation(props: {
+     const project = props.project
+ 
+     if (!project) return
++    if (platform.editProjectInWorkspace) return platform.editProjectInWorkspace(project.worktree)
+     settingsSurface.openProject({ server: ServerConnection.key(server.conn), project: project.worktree })
+   }
+ 
+diff --git a/packages/session-ui/src/components/copy.ts b/packages/session-ui/src/components/copy.ts
+index e16df0856a..ad4b0cadae 100644
+--- a/packages/session-ui/src/components/copy.ts
++++ b/packages/session-ui/src/components/copy.ts
+@@ -15,6 +15,28 @@ export async function writeClipboard(text: string): Promise<boolean> {
+   )
+ 
+   if (written) return true
++  if (window.parent !== window) {
++    const copied = await new Promise<boolean>((resolve) => {
++      const channel = new MessageChannel()
++      const timer = setTimeout(() => {
++        channel.port1.close()
++        resolve(false)
++      }, 2000)
++      channel.port1.onmessage = (event) => {
++        clearTimeout(timer)
++        channel.port1.close()
++        resolve(event.data?.copied === true)
++      }
++      try {
++        window.parent.postMessage({ type: "neo-opencode-clipboard-write", text }, "*", [channel.port2])
++      } catch {
++        clearTimeout(timer)
++        channel.port1.close()
++        resolve(false)
++      }
++    })
++    if (copied) return true
++  }
+   // The textarea sits beside the focused element so a focus trap, such as an open menu's, keeps its selection.
