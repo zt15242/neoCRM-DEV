@@ -21,7 +21,9 @@ try {
   const changed = original.replace('= 1', '= 2');
   const saved = await editor.save(root, file, changed, initial.revision);
   assert.equal(await fs.readFile(file, 'utf8'), changed);
-  assert.equal((await fs.stat(file)).mode & 0o777, 0o755);
+  const savedStat = await fs.stat(file);
+  assert.equal(savedStat.isFile(), true);
+  if (process.platform !== 'win32') assert.equal(savedStat.mode & 0o777, 0o755);
   assert.notEqual(saved.revision, initial.revision);
   console.log('PASS UTF-8/BOM/CRLF roundtrip and executable mode');
   await fs.writeFile(file, '// external edit');
