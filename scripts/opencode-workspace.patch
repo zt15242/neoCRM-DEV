@@ -489,7 +489,6 @@ diff --git a/packages/app/src/runtime/platform/platform.tsx b/packages/app/src/r
 +
    /** Export collected diagnostic logs (desktop only) */
    exportDebugLogs?(): Promise<string>
-
 diff --git a/packages/app/src/session/session-identity-header.tsx b/packages/app/src/session/session-identity-header.tsx
 --- a/packages/app/src/session/session-identity-header.tsx
 +++ b/packages/app/src/session/session-identity-header.tsx
