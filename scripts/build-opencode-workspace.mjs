@@ -8,7 +8,9 @@ const upstream = path.join(root, 'vendor', 'opencode');
 const packageFile = path.join(upstream, 'packages', 'app', 'package.json');
 const patchFile = path.join(root, 'scripts', 'opencode-workspace.patch');
 const output = path.join(root, 'public', 'opencode-ui');
-const bun = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'bun.cmd' : 'bun');
+const bun = process.platform === 'win32'
+  ? path.join(root, 'node_modules', 'bun', 'bin', 'bun.exe')
+  : path.join(root, 'node_modules', '.bin', 'bun');
 
 if (!fs.existsSync(path.join(upstream, '.git'))) {
   throw new Error('OpenCode 子模块尚未初始化；请运行 git submodule update --init vendor/opencode');
