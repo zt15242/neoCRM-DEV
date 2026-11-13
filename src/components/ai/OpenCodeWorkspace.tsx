@@ -46,6 +46,8 @@ type BridgeRequest = {
 type ClipboardBridgeRequest = { type: 'neo-opencode-clipboard-write'; text: string };
 type ProjectActionBridgeRequest = { type: 'neo-opencode-project-action'; action: 'open' | 'edit'; directory: string };
 type RevealBridgeRequest = { type: 'neo-opencode-reveal-path'; directory: string };
+type ClipboardReadImageRequest = { type: 'neo-opencode-clipboard-read-image' };
+type ClipboardReadFilesRequest = { type: 'neo-opencode-clipboard-read-files' };
 
 type BridgeEvent = {
   id: string;
@@ -543,34 +545,95 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
       const root = activeProject?.localPath;
       const attachments: AiFileAttachment[] = [];
       for (const file of files) {
-        if (!root || typeof file?.uri !== 'string') throw new Error('请先选择项目，然后重新选择要引用的文件');
-        let url: URL;
-        try { url = new URL(file.uri); } catch { throw new Error('文件引用格式无效，请重新选择'); }
-        if (url.protocol !== 'file:' || (url.hostname && url.hostname !== 'localhost')) throw new Error('当前仅支持引用项目中的本地文件或文件夹');
-        let absolute: string;
-        try { absolute = decodeURIComponent(url.pathname).replace(/^\/([A-Za-z]:)/, '$1').replaceAll('\\', '/'); }
-        catch { throw new Error('文件路径编码无效，请重新选择'); }
-        const normalizedRoot = root.replaceAll('\\', '/').replace(/\/+$/, '');
+        if (!file || typeof file?.uri !== 'string') continue;
+
+        // Case A: data: URL (e.g. pasted screenshot or image)
+        if (file.uri.startsWith('data:')) {
+          const mime = file.mime || file.uri.match(/^data:([^;,]+)/)?.[1] || 'image/png';
+          const name = file.name || `粘贴图片_${Date.now().toString(36)}.${mime.split('/')[1] || 'png'}`;
+          attachments.push({
+            id: `file_${crypto.randomUUID()}`,
+            name,
+            size: Math.round((file.uri.length * 3) / 4),
+            mimeType: mime,
+            contentKind: 'image',
+            parsedContent: `[图片附件: ${name}]`,
+            openCodeFile: { uri: file.uri, description: file.description },
+          });
+          continue;
+        }
+
+        let absolute = '';
+        if (file.uri.startsWith('file:')) {
+          try {
+            const url = new URL(file.uri);
+            absolute = decodeURIComponent(url.pathname).replace(/^\/([A-Za-z]:)/, '$1').replaceAll('\\', '/');
+          } catch {
+            continue;
+          }
+        } else if (file.uri.startsWith('/') || /^[A-Za-z]:[\\/]/.test(file.uri)) {
+          absolute = file.uri.replace(/^\/([A-Za-z]:)/, '$1').replaceAll('\\', '/');
+        } else {
+          continue;
+        }
+
+        const normalizedRoot = root ? root.replaceAll('\\', '/').replace(/\/+$/, '') : '';
         const windows = /^[A-Za-z]:\//.test(normalizedRoot);
-        const prefix = `${normalizedRoot}/`;
-        if (!(windows ? absolute.toLowerCase().startsWith(prefix.toLowerCase()) : absolute.startsWith(prefix))) throw new Error('只能引用当前项目目录内的文件或文件夹');
-        const relative = relativeWorkspacePath(absolute.slice(prefix.length));
-        if (!relative) throw new Error('请选择项目内的文件或文件夹');
-        const slash = relative.lastIndexOf('/');
-        const parent = slash < 0 ? root : workspaceFilePath(root, relative.slice(0, slash));
-        const entries = await window.neoApi?.projectReadDirectory?.({ folderPath: root, directoryPath: parent, force: true });
-        const node = entries?.nodes.find(item => item.relativePath.replaceAll('\\', '/') === relative);
-        if (!node) throw new Error(`无法找到项目引用：${relative}`);
+        const prefix = normalizedRoot ? `${normalizedRoot}/` : '';
+        const isUnderRoot = Boolean(normalizedRoot && (windows ? absolute.toLowerCase().startsWith(prefix.toLowerCase()) : absolute.startsWith(prefix)));
+
         const mention = file.mention && typeof file.mention.text === 'string' && Number.isInteger(file.mention.start) && Number.isInteger(file.mention.end)
           ? { text: file.mention.text, start: file.mention.start, end: file.mention.end } : undefined;
         const openCodeFile = { uri: file.uri, ...(mention ? { mention } : {}), ...(typeof file.description === 'string' ? { description: file.description } : {}) };
-        if (node.type === 'directory') {
-          attachments.push({ id: `file_${crypto.randomUUID()}`, name: node.name, fullPath: node.path, relativePath: relative,
-            size: 0, mimeType: 'application/x-directory', parsedContent: '', contentKind: 'directory', openCodeFile });
+
+        if (isUnderRoot && root) {
+          const relative = relativeWorkspacePath(absolute.slice(prefix.length));
+          if (!relative) continue;
+          const slash = relative.lastIndexOf('/');
+          const parent = slash < 0 ? root : workspaceFilePath(root, relative.slice(0, slash));
+          const entries = await window.neoApi?.projectReadDirectory?.({ folderPath: root, directoryPath: parent, force: true });
+          const node = entries?.nodes.find((item) => item.relativePath.replaceAll('\\', '/') === relative);
+          if (node?.type === 'directory') {
+            attachments.push({ id: `file_${crypto.randomUUID()}`, name: node.name, fullPath: node.path, relativePath: relative,
+              size: 0, mimeType: 'application/x-directory', parsedContent: '', contentKind: 'directory', openCodeFile });
+          } else {
+            const parsed = await window.neoApi?.fileParseLocalPath?.(node?.path || absolute);
+            if (parsed) {
+              attachments.push({ ...parsed, fullPath: node?.path || absolute, relativePath: relative, openCodeFile });
+            }
+          }
         } else {
-          const parsed = await window.neoApi?.fileParseLocalPath?.(node.path);
-          if (!parsed) throw new Error('文件解析接口不可用，请重启应用');
-          attachments.push({ ...parsed, fullPath: node.path, relativePath: relative, openCodeFile });
+          // File from outside current project (e.g. pasted from Desktop, Downloads, or temp)
+          const parsed = await window.neoApi?.fileParseLocalPath?.(absolute);
+          const fileName = file.name || absolute.split('/').pop() || '附件文件';
+          if (parsed) {
+            attachments.push({ ...parsed, name: parsed.name || fileName, fullPath: absolute, relativePath: fileName, openCodeFile });
+          } else {
+            attachments.push({
+              id: `file_${crypto.randomUUID()}`,
+              name: fileName,
+              fullPath: absolute,
+              size: 0,
+              mimeType: file.mime || 'application/octet-stream',
+              parsedContent: '',
+              contentKind: 'binary',
+              openCodeFile,
+            });
+          }
+        }
+      }
+
+      // Also inspect body?.metadata?.attachments (which OpenCode sends for path attachments)
+      if (Array.isArray(body?.metadata?.attachments)) {
+        for (const att of body.metadata.attachments) {
+          const attPath = typeof att?.path === 'string' ? att.path : '';
+          if (attPath && !attachments.some((a) => a.fullPath === attPath)) {
+            const parsed = await window.neoApi?.fileParseLocalPath?.(attPath);
+            const fileName = att.name || attPath.split('/').pop() || '附件文件';
+            if (parsed) {
+              attachments.push({ ...parsed, name: parsed.name || fileName, fullPath: attPath, relativePath: fileName });
+            }
+          }
         }
       }
       const config = await getConfig();
@@ -698,7 +761,7 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
     };
 
     if (path === '/api/info' && method === 'GET') {
-      jsonResponse(port, { version: '1.0.0', pid: 0, hostname: 'NeoCRM', urls: [], paths: { tmp: '' }, capabilities: {} });
+      jsonResponse(port, { version: '1.0.0', pid: 0, hostname: 'NeoCRM', urls: [], paths: { tmp: '/tmp' }, capabilities: {} });
       return;
     }
     if (path === '/api/location' && method === 'GET') {
@@ -789,8 +852,17 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
       return;
     }
     if (path === '/api/experimental/fs/write' && method === 'POST') {
+      const rawPath = url.searchParams.get('path') || '';
+      const isUpload = rawPath.includes('/uploads/') || rawPath.startsWith('uploads/') || rawPath.startsWith('/tmp');
+      if (isUpload) {
+        const fileName = rawPath.split('/').pop() || `upload_${Date.now()}`;
+        const bytes = request.bodyBase64 ? base64ToBytes(request.bodyBase64) : new Uint8Array(0);
+        const savedPath = (await window.neoApi?.fileSaveBuffer?.(fileName, bytes.buffer)) || rawPath;
+        jsonResponse(port, { location, data: { path: savedPath } });
+        return;
+      }
       const root = projectRoot();
-      const relative = relativeWorkspacePath(url.searchParams.get('path') || '');
+      const relative = relativeWorkspacePath(rawPath);
       if (!relative) throw new Error('缺少要写入的文件路径');
       const revisionKey = `${root}\0${relative}`;
       const snapshot = fileRevisions.current.get(revisionKey);
@@ -1138,7 +1210,7 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frameRef.current?.contentWindow || event.origin !== new URL(workspaceUrl).origin) return;
       const port = event.ports[0];
-      const incoming = event.data as BridgeRequest | ClipboardBridgeRequest | ProjectActionBridgeRequest | RevealBridgeRequest;
+      const incoming = event.data as BridgeRequest | ClipboardBridgeRequest | ProjectActionBridgeRequest | RevealBridgeRequest | ClipboardReadImageRequest | ClipboardReadFilesRequest;
       if (incoming?.type === 'neo-opencode-project-action') {
         const project = eventContext.current.activeProject;
         if (!project?.localPath || incoming.directory !== project.localPath) return;
@@ -1154,6 +1226,38 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
       }
       if (!port) return;
       port.start();
+      if (incoming?.type === 'neo-opencode-clipboard-read-image') {
+        const readImage = window.neoApi?.clipboardReadImage;
+        if (!readImage) {
+          port.postMessage({ dataUrl: null });
+          port.close();
+          return;
+        }
+        void readImage().then(res => {
+          port.postMessage({ dataUrl: res?.isEmpty ? null : res?.dataUrl });
+          port.close();
+        }).catch(() => {
+          port.postMessage({ dataUrl: null });
+          port.close();
+        });
+        return;
+      }
+      if (incoming?.type === 'neo-opencode-clipboard-read-files') {
+        const readPaths = window.neoApi?.clipboardReadFilePaths;
+        if (!readPaths) {
+          port.postMessage({ paths: [] });
+          port.close();
+          return;
+        }
+        void readPaths().then(paths => {
+          port.postMessage({ paths: paths || [] });
+          port.close();
+        }).catch(() => {
+          port.postMessage({ paths: [] });
+          port.close();
+        });
+        return;
+      }
       if (incoming?.type === 'neo-opencode-clipboard-write') {
         const writeClipboard = window.neoApi?.clipboardWriteText;
         if (!writeClipboard) {

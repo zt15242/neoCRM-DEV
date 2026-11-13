@@ -841,6 +841,21 @@ ipcMain.handle('ai:abortChatStream', async (_, targetId?: string) => {
 // ================= 文件解析与分析 =================
 ipcMain.handle('file:selectAndParse', async () => fileService.selectAndParseFile(win));
 ipcMain.handle('clipboard:readFilePaths', async () => getClipboardFilePaths(await clipboard.read()));
+ipcMain.handle('clipboard:readImage', async () => {
+  const img = clipboard.readImage();
+  if (!img.isEmpty()) {
+    return { dataUrl: img.toDataURL(), isEmpty: false };
+  }
+  return { isEmpty: true };
+});
+ipcMain.handle('file:saveBuffer', async (_, fileName: string, bufferData: ArrayBuffer) => {
+  const tmpDir = path.join(app.getPath('userData'), 'uploads');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const safeName = `${Date.now()}_${path.basename(fileName).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  const targetPath = path.join(tmpDir, safeName);
+  fs.writeFileSync(targetPath, Buffer.from(bufferData));
+  return targetPath;
+});
 ipcMain.handle('file:parseBuffer', async (_, fileName: string, bufferData: ArrayBuffer) => {
   return fileService.parseBuffer(fileName, Buffer.from(bufferData));
 });

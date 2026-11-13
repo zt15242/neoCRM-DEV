@@ -51,6 +51,8 @@ export const neoApi = {
   },
   fileGetPath: (file: File) => webUtils.getPathForFile(file),
   clipboardReadFilePaths: () => ipcRenderer.invoke('clipboard:readFilePaths'),
+  clipboardReadImage: () => ipcRenderer.invoke('clipboard:readImage'),
+  fileSaveBuffer: (fileName: string, bufferData: ArrayBuffer) => ipcRenderer.invoke('file:saveBuffer', fileName, bufferData),
   clipboardWriteText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text),
   shellOpenPath: (targetPath: string) => ipcRenderer.invoke('shell:openPath', targetPath),
   shellShowItemInFolder: (targetPath: string) => ipcRenderer.invoke('shell:showItemInFolder', targetPath),

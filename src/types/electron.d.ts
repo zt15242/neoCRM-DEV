@@ -103,6 +103,8 @@ declare global {
       filePreviewMessage: (request: import('../../shared/messagePreview').MessagePreviewRequest) => Promise<import('../../shared/messagePreview').MessageFilePreview>;
       fileGetPath: (file: File) => string;
       clipboardReadFilePaths: () => Promise<string[]>;
+      clipboardReadImage?: () => Promise<{ dataUrl?: string; isEmpty: boolean }>;
+      fileSaveBuffer?: (fileName: string, bufferData: ArrayBuffer) => Promise<string>;
       clipboardWriteText: (text: string) => Promise<boolean>;
       shellOpenPath: (targetPath: string) => Promise<string>;
       shellShowItemInFolder: (targetPath: string) => Promise<boolean>;

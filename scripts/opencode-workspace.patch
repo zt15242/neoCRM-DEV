@@ -10,6 +10,97 @@ index 43d1204cbf..f6ef6dd367 100644
      "./desktop": "./src/desktop.ts",
      "./desktop-menu": "./src/shell/commands/desktop-menu.ts",
      "./i18n/desktop-native": "./src/runtime/i18n/desktop-native.ts",
+diff --git a/packages/app/src/composer/attachments/attachments.ts b/packages/app/src/composer/attachments/attachments.ts
+index 6547a9aed3..273e1bd240 100644
+--- a/packages/app/src/composer/attachments/attachments.ts
++++ b/packages/app/src/composer/attachments/attachments.ts
+@@ -29,6 +29,7 @@ export type ComposerAttachmentConfig = {
+   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a failed upload is opaque; the host formats it
+   onUploadError: (error: unknown) => void
+   readClipboardImage?: () => Promise<File | null>
++  readClipboardFiles?: () => Promise<string[]>
+   getPathForFile?: (file: File) => string
+   onDragCancel?: (callback: () => void) => () => void
+   store?: (file: File) => Promise<{ id: string; url: string }>
+@@ -179,6 +180,17 @@ export function createComposerAttachments(
+       return
+     }
+ 
++        if (input.readClipboardFiles) {
++      const nativePaths = await input.readClipboardFiles().catch(() => [])
++      if (nativePaths && nativePaths.length > 0) {
++        for (const filePath of nativePaths) {
++          const fileName = filePath.split("/").pop() || filePath
++          addPath(target, { filename: fileName, mime: "application/octet-stream", path: filePath })
++        }
++        return
++      }
++    }
++
+     const plainText = clipboardData.getData("text/plain") ?? ""
+ 
+     if (input.readClipboardImage && !plainText) {
+diff --git a/packages/app/src/composer/attachments/destination.ts b/packages/app/src/composer/attachments/destination.ts
+index 04efe65185..b2c5a18924 100644
+--- a/packages/app/src/composer/attachments/destination.ts
++++ b/packages/app/src/composer/attachments/destination.ts
+@@ -40,15 +40,30 @@ export function useAttachmentDestination(controls: Accessor<ComposerControls>) {
+ // fetch cannot report upload progress and Chromium only streams request bodies over HTTP/2, so
+ // the one request that needs both goes through XMLHttpRequest. The browser streams the File
+ // from disk; nothing is buffered in the renderer.
+-function write(
++async function write(
+   url: URL,
+   file: File,
+   password: string | undefined,
+   report: (loaded: number) => void,
+   signal: AbortSignal,
+ ) {
++  if (signal.aborted) throw new DOMException("Upload aborted", "AbortError")
++  if (url.hostname === "neocrm.local" || location.protocol === "neocrm-ui:") {
++    const headers: Record<string, string> = { "content-type": "application/octet-stream" }
++    if (password) headers["authorization"] = `Basic ${authTokenFromCredentials({ password })}`
++    const res = await fetch(url.toString(), {
++      method: "POST",
++      headers,
++      body: file,
++      signal,
++    })
++    if (!res.ok) throw new Error(`Upload failed with status ${res.status}`)
++    const json = (await res.json()) as { data: { path: string } }
++    report(file.size)
++    return json.data.path
++  }
++
+   return new Promise<string>((resolve, reject) => {
+-    if (signal.aborted) return reject(new DOMException("Upload aborted", "AbortError"))
+     const xhr = new XMLHttpRequest()
+     xhr.open("POST", url)
+     xhr.responseType = "json"
+diff --git a/packages/app/src/composer/editor/interaction.ts b/packages/app/src/composer/editor/interaction.ts
+index fe6f63f9f1..033d329163 100644
+--- a/packages/app/src/composer/editor/interaction.ts
++++ b/packages/app/src/composer/editor/interaction.ts
+@@ -847,6 +847,7 @@ export type ComposerEditorModel = ReturnType<typeof createComposerEditor>
+ 
+ export function shouldHandlePasteAsAttachment(clipboard: DataTransfer | null, readClipboardImage: boolean) {
+   if (Array.from(clipboard?.items ?? []).some((item) => item.kind === "file")) return true
++  if (Array.from(clipboard?.types ?? []).some((type) => /files|filename|file-url|hdrop/i.test(type))) return true
+ 
+   if (Array.from(clipboard?.types ?? []).some((type) => type.startsWith("text/"))) return false
+ 
+diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
+index fca0283ee6..787fbf22a1 100644
+--- a/packages/app/src/composer/model.ts
++++ b/packages/app/src/composer/model.ts
+@@ -488,6 +488,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+           description: error instanceof Error ? error.message : String(error),
+         }),
+       readClipboardImage: platform.readClipboardImage,
++      readClipboardFiles: platform.readClipboardFiles,
+       getPathForFile: platform.getPathForFile,
+       onDragCancel: platform.onDragCancel,
+       store: platform.draftStore?.putBlob,
 diff --git a/packages/app/src/embedded.tsx b/packages/app/src/embedded.tsx
 new file mode 100644
 index 0000000000..a9c9afaa03
@@ -114,11 +205,33 @@ index 969f506c1f..799ba1168c 100644
            </AppBaseProviders>
          </PlatformProvider>
        ),
+diff --git a/packages/app/src/runtime/platform/platform.tsx b/packages/app/src/runtime/platform/platform.tsx
+index 38a12334f2..52c953363d 100644
+--- a/packages/app/src/runtime/platform/platform.tsx
++++ b/packages/app/src/runtime/platform/platform.tsx
+@@ -122,10 +122,17 @@ type PlatformBase = {
+ 
+   /** Read image from clipboard (desktop only) */
+   readClipboardImage?(): Promise<File | null>
++  readClipboardFiles?(): Promise<string[]>
+ 
+   /** Write text to the native clipboard (desktop only) */
+   writeClipboardText?(text: string): Promise<void>
+ 
++  /** Open the current NeoCRM project in its file workspace. */
++  openProjectInWorkspace?(directory: string): void
++
++  /** Open NeoCRM's native project editor for the current workspace. */
++  editProjectInWorkspace?(directory: string): void
++
+   /** Export collected diagnostic logs (desktop only) */
+   exportDebugLogs?(): Promise<string>
+ 
 diff --git a/packages/app/src/runtime/platform/web.ts b/packages/app/src/runtime/platform/web.ts
-index 28944b0657..105a8c759c 100644
+index 28944b0657..02a70fb40f 100644
 --- a/packages/app/src/runtime/platform/web.ts
 +++ b/packages/app/src/runtime/platform/web.ts
-@@ -1,11 +1,14 @@
+@@ -1,11 +1,22 @@
  import { createBrowserDraftStore } from "@/runtime/persistence/drafts"
  import type { Platform } from "./platform"
  
@@ -130,16 +243,129 @@ index 28944b0657..105a8c759c 100644
      draftStore: createBrowserDraftStore(),
      version,
 +    fetch: workspaceOnly ? createBridgeFetch() : undefined,
++    ...(workspaceOnly ? {
++      writeClipboardText: (text: string) => bridgeClipboardWrite(text),
++      openProjectInWorkspace: (directory: string) => window.parent.postMessage({ type: "neo-opencode-project-action", action: "open", directory }, "*"),
++      editProjectInWorkspace: (directory: string) => window.parent.postMessage({ type: "neo-opencode-project-action", action: "edit", directory }, "*"),
++      revealPath: (directory: string) => bridgeRevealPath(directory),
++      readClipboardImage: () => bridgeClipboardReadImage(),
++      readClipboardFiles: () => bridgeClipboardReadFiles(),
++    } : {}),
      openExternal(value) {
        if (!URL.canParse(value)) return
        const url = new URL(value)
-@@ -41,10 +44,102 @@ export function createWebPlatform(version: string) {
+@@ -41,10 +52,207 @@ export function createWebPlatform(version: string) {
  
    return {
      platform,
 -    currentServerUrl: getCurrentServerUrl(),
 +    currentServerUrl: workspaceOnly ? "http://neocrm.local" : getCurrentServerUrl(),
-+  }
+   }
+ }
+ 
++function bridgeClipboardWrite(text: string) {
++  return new Promise<void>((resolve, reject) => {
++    const channel = new MessageChannel()
++    const timer = setTimeout(() => {
++      channel.port1.close()
++      reject(new Error("NeoCRM 剪贴板桥接超时"))
++    }, 2000)
++    channel.port1.onmessage = (event) => {
++      clearTimeout(timer)
++      channel.port1.close()
++      event.data?.copied ? resolve() : reject(new Error("NeoCRM 无法写入系统剪贴板"))
++    }
++    try {
++      window.parent.postMessage({ type: "neo-opencode-clipboard-write", text }, "*", [channel.port2])
++    } catch (error) {
++      clearTimeout(timer)
++      channel.port1.close()
++      reject(error)
++    }
++  })
++}
++
++function bridgeRevealPath(directory: string) {
++  return new Promise<boolean>((resolve, reject) => {
++    const channel = new MessageChannel()
++    const timer = setTimeout(() => {
++      channel.port1.close()
++      reject(new Error("打开项目目录请求超时"))
++    }, 2000)
++    channel.port1.onmessage = (event) => {
++      clearTimeout(timer)
++      channel.port1.close()
++      resolve(event.data?.revealed === true)
++    }
++    try {
++      window.parent.postMessage({ type: "neo-opencode-reveal-path", directory }, "*", [channel.port2])
++    } catch (error) {
++      clearTimeout(timer)
++      channel.port1.close()
++      reject(error)
++    }
++  })
++}
++
++function bridgeClipboardReadImage(): Promise<File | null> {
++  return new Promise((resolve) => {
++    const channel = new MessageChannel()
++    const timer = setTimeout(() => {
++      channel.port1.close()
++      resolve(null)
++    }, 1500)
++    channel.port1.onmessage = (event) => {
++      clearTimeout(timer)
++      channel.port1.close()
++      const data = event.data
++      if (data?.dataUrl) {
++        try {
++          const parts = data.dataUrl.split(",")
++          const mime = parts[0].match(/:(.*?);/)?.[1] || "image/png"
++          const bstr = atob(parts[1])
++          let n = bstr.length
++          const u8arr = new Uint8Array(n)
++          while (n--) u8arr[n] = bstr.charCodeAt(n)
++          const file = new File([u8arr], `pasted-image-${Date.now()}.${mime.split("/")[1] || "png"}`, { type: mime })
++          resolve(file)
++          return
++        } catch {
++          resolve(null)
++          return
++        }
++      }
++      resolve(null)
++    }
++    try {
++      window.parent.postMessage({ type: "neo-opencode-clipboard-read-image" }, "*", [channel.port2])
++    } catch {
++      clearTimeout(timer)
++      channel.port1.close()
++      resolve(null)
++    }
++  })
++}
++
++function bridgeClipboardReadFiles(): Promise<string[]> {
++  return new Promise((resolve) => {
++    const channel = new MessageChannel()
++    const timer = setTimeout(() => {
++      channel.port1.close()
++      resolve([])
++    }, 1500)
++    channel.port1.onmessage = (event) => {
++      clearTimeout(timer)
++      channel.port1.close()
++      resolve(Array.isArray(event.data?.paths) ? event.data.paths : [])
++    }
++    try {
++      window.parent.postMessage({ type: "neo-opencode-clipboard-read-files" }, "*", [channel.port2])
++    } catch {
++      clearTimeout(timer)
++      channel.port1.close()
++      resolve([])
++    }
++  })
 +}
 +
 +function createBridgeFetch(): typeof fetch {
@@ -215,9 +441,9 @@ index 28944b0657..105a8c759c 100644
 +        bodyBase64,
 +      }, "*", [channel.port2])
 +    })
-   }
- }
- 
++  }
++}
++
 +function bytesToBase64(bytes: ArrayBuffer) {
 +  const data = new Uint8Array(bytes)
 +  let binary = ""
@@ -264,10 +490,11 @@ index 4efb1078c9..f07e687fa8 100644
  
    // The desktop sidecar, or a loopback http connection on the same port as the app's own server. Other loopback
 diff --git a/packages/app/src/session/header/session-header-actions.tsx b/packages/app/src/session/header/session-header-actions.tsx
-index 5305229d77..f00b8f0c75 100644
+index 5305229d77..7a4aaa9d18 100644
 --- a/packages/app/src/session/header/session-header-actions.tsx
 +++ b/packages/app/src/session/header/session-header-actions.tsx
-@@ -16,16 +16,32 @@ export function SessionReviewToggle(props: { onToggle: () => void; glyph?: (fill
+@@ -15,17 +15,33 @@ export function SessionReviewToggle(props: { onToggle: () => void; glyph?: (fill
+   const language = useLanguage()
    const { view } = useSessionLayout()
  
 +  if (new URLSearchParams(window.location.search).get("workspace") === "1") return null
@@ -309,6 +536,35 @@ index 5305229d77..f00b8f0c75 100644
 +    </div>
    )
  }
+ 
+diff --git a/packages/app/src/session/session-identity-header.tsx b/packages/app/src/session/session-identity-header.tsx
+index ed7786e278..d01cdcdaf6 100644
+--- a/packages/app/src/session/session-identity-header.tsx
++++ b/packages/app/src/session/session-identity-header.tsx
+@@ -139,7 +139,7 @@ export function SessionLocation(props: {
+ 
+   // Revealing a path only makes sense on the machine the app runs on.
+   const canReveal = () =>
+-    platform.platform === "desktop" && !!platform.revealPath && servers.current(server.conn) && !!props.directory
++    !!platform.revealPath && servers.current(server.conn) && !!props.directory
+ 
+   const onOpenChange = (open: boolean) => {
+     setStore("open", open)
+@@ -185,6 +185,7 @@ export function SessionLocation(props: {
+     const project = props.project
+ 
+     if (!project) return
++    if (platform.openProjectInWorkspace) return platform.openProjectInWorkspace(project.worktree)
+     server.ctx.projects.touch(project.worktree)
+     layout.home.setSelection({ server: server.key, directory: project.worktree })
+     navigate("/")
+@@ -194,6 +195,7 @@ export function SessionLocation(props: {
+     const project = props.project
+ 
+     if (!project) return
++    if (platform.editProjectInWorkspace) return platform.editProjectInWorkspace(project.worktree)
+     settingsSurface.openProject({ server: ServerConnection.key(server.conn), project: project.worktree })
+   }
  
 diff --git a/packages/app/src/settings/servers/machine.test.ts b/packages/app/src/settings/servers/machine.test.ts
 index ee3474e6b8..acfabd7fcf 100644
@@ -411,112 +667,6 @@ index 0000000000..c91b967dd3
 +    <script src="./src/entry.tsx" type="module"></script>
 +  </body>
 +</html>
-diff --git a/packages/app/src/runtime/platform/web.ts b/packages/app/src/runtime/platform/web.ts
---- a/packages/app/src/runtime/platform/web.ts
-+++ b/packages/app/src/runtime/platform/web.ts
-@@ -8,6 +8,12 @@ export function createWebPlatform(version: string) {
-     draftStore: createBrowserDraftStore(),
-     version,
-     fetch: workspaceOnly ? createBridgeFetch() : undefined,
-+    ...(workspaceOnly ? {
-+      writeClipboardText: (text: string) => bridgeClipboardWrite(text),
-+      openProjectInWorkspace: (directory: string) => window.parent.postMessage({ type: "neo-opencode-project-action", action: "open", directory }, "*"),
-+      editProjectInWorkspace: (directory: string) => window.parent.postMessage({ type: "neo-opencode-project-action", action: "edit", directory }, "*"),
-+      revealPath: (directory: string) => bridgeRevealPath(directory),
-+    } : {}),
-     openExternal(value) {
-@@ -42,6 +48,47 @@ export function createWebPlatform(version: string) {
-   }
- }
- 
-+function bridgeClipboardWrite(text: string) {
-+  return new Promise<void>((resolve, reject) => {
-+    const channel = new MessageChannel()
-+    const timer = setTimeout(() => {
-+      channel.port1.close()
-+      reject(new Error("NeoCRM 剪贴板桥接超时"))
-+    }, 2000)
-+    channel.port1.onmessage = (event) => {
-+      clearTimeout(timer)
-+      channel.port1.close()
-+      event.data?.copied ? resolve() : reject(new Error("NeoCRM 无法写入系统剪贴板"))
-+    }
-+    try {
-+      window.parent.postMessage({ type: "neo-opencode-clipboard-write", text }, "*", [channel.port2])
-+    } catch (error) {
-+      clearTimeout(timer)
-+      channel.port1.close()
-+      reject(error)
-+    }
-+  })
-+}
-+
-+function bridgeRevealPath(directory: string) {
-+  return new Promise<boolean>((resolve, reject) => {
-+    const channel = new MessageChannel()
-+    const timer = setTimeout(() => {
-+      channel.port1.close()
-+      reject(new Error("打开项目目录请求超时"))
-+    }, 2000)
-+    channel.port1.onmessage = (event) => {
-+      clearTimeout(timer)
-+      channel.port1.close()
-+      resolve(event.data?.revealed === true)
-+    }
-+    try {
-+      window.parent.postMessage({ type: "neo-opencode-reveal-path", directory }, "*", [channel.port2])
-+    } catch (error) {
-+      clearTimeout(timer)
-+      channel.port1.close()
-+      reject(error)
-+    }
-+  })
-+}
-+
- function createBridgeFetch(): typeof fetch {
-diff --git a/packages/app/src/runtime/platform/platform.tsx b/packages/app/src/runtime/platform/platform.tsx
---- a/packages/app/src/runtime/platform/platform.tsx
-+++ b/packages/app/src/runtime/platform/platform.tsx
-@@ -126,6 +126,12 @@ type PlatformBase = {
-   /** Write text to the native clipboard (desktop only) */
-   writeClipboardText?(text: string): Promise<void>
- 
-+  /** Open the current NeoCRM project in its file workspace. */
-+  openProjectInWorkspace?(directory: string): void
-+
-+  /** Open NeoCRM's native project editor for the current workspace. */
-+  editProjectInWorkspace?(directory: string): void
-+
-   /** Export collected diagnostic logs (desktop only) */
-   exportDebugLogs?(): Promise<string>
-diff --git a/packages/app/src/session/session-identity-header.tsx b/packages/app/src/session/session-identity-header.tsx
---- a/packages/app/src/session/session-identity-header.tsx
-+++ b/packages/app/src/session/session-identity-header.tsx
-@@ -139,7 +139,7 @@ export function SessionLocation(props: {
- 
-   // Revealing a path only makes sense on the machine the app runs on.
-   const canReveal = () =>
--    platform.platform === "desktop" && !!platform.revealPath && servers.current(server.conn) && !!props.directory
-+    !!platform.revealPath && servers.current(server.conn) && !!props.directory
- 
-   const onOpenChange = (open: boolean) => {
-     setStore("open", open)
-@@ -185,6 +185,7 @@ export function SessionLocation(props: {
-     const project = props.project
- 
-     if (!project) return
-+    if (platform.openProjectInWorkspace) return platform.openProjectInWorkspace(project.worktree)
-     server.ctx.projects.touch(project.worktree)
-     layout.home.setSelection({ server: server.key, directory: project.worktree })
-     navigate("/")
-@@ -194,6 +195,7 @@ export function SessionLocation(props: {
-     const project = props.project
- 
-     if (!project) return
-+    if (platform.editProjectInWorkspace) return platform.editProjectInWorkspace(project.worktree)
-     settingsSurface.openProject({ server: ServerConnection.key(server.conn), project: project.worktree })
-   }
- 
 diff --git a/packages/session-ui/src/components/copy.ts b/packages/session-ui/src/components/copy.ts
 index e16df0856a..ad4b0cadae 100644
 --- a/packages/session-ui/src/components/copy.ts
@@ -548,3 +698,5 @@ index e16df0856a..ad4b0cadae 100644
 +    if (copied) return true
 +  }
    // The textarea sits beside the focused element so a focus trap, such as an open menu's, keeps its selection.
+   const active = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+   const host = active && active !== document.body ? (active.parentElement ?? document.body) : document.body
