@@ -598,6 +598,9 @@ export class WorkspaceService {
         const records = this.emailService.getDashboardMailData(widget.accountId, this.clampLimit(widget.limit, 10, 50));
         return { widgetId: widget.id, success: true, records, fields: ['from', 'subject', 'date', 'snippet', 'isRead'], totalSize: records.length, updatedAt };
       }
+      if (widget.type.startsWith('migration-')) {
+        return { widgetId: widget.id, success: true, updatedAt: Date.now() };
+      }
       if (widget.type === 'async-apex-dashboard') {
         const query = widget.query || 'SELECT ApexClassId, ApexClass.Name, CompletedDate, CreatedBy.Name, CreatedDate, CronTriggerId, ExtendedStatus, Id, JobItemsProcessed, JobType, MethodName, NumberOfErrors, ParentJobId, Status, TotalJobItems FROM AsyncApexJob WHERE CreatedDate = YESTERDAY ORDER BY CreatedDate DESC';
         const ordinal = this.nextQueryOrdinal(context.executionId);
@@ -681,7 +684,7 @@ export class WorkspaceService {
   }
 
   private validateWidgetConfig(widget: WorkspaceWidget, projectRoot?: string): WorkspaceWidget {
-    const supportedTypes: WorkspaceWidgetType[] = ['text', 'crm-query', 'mail-list', 'async-apex-dashboard', 'custom-html', 'custom-tsx'];
+    const supportedTypes: WorkspaceWidgetType[] = ['text', 'crm-query', 'mail-list', 'async-apex-dashboard', 'custom-html', 'custom-tsx', 'migration-progress-dashboard', 'migration-object-sequencer', 'migration-topology', 'migration-database', 'migration-field-rules', 'migration-scheduler', 'migration-audit-board'];
     if (!widget?.id || !supportedTypes.includes(widget.type)) throw new Error('页面中包含无效组件');
     const normalized = { ...widget, title: String(widget.title || '').trim().slice(0, 120) || '未命名组件' };
     const columnSpan = Number(normalized.columnSpan);

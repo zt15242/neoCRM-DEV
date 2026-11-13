@@ -2,6 +2,7 @@ import type { AiSkillItem } from '../../../shared/types';
 import { BUILTIN_AI_SKILLS } from '../../../shared/constants';
 import { requiresRoleLicense } from '../../../shared/licensePolicy';
 import { isDiagramDesignSkill, readDiagramDesignSkill } from '../../security/diagramDesignSkill';
+import { isMigrationSkill, readMigrationSkillPackage } from '../../security/migrationSkillPackage';
 import { DOCUMENT_SKILL_ID, getDocumentReadingSkill } from '../../security/documentTools';
 import { isPageCodeSkill, readPageCodeSkill } from '../../security/pageCodeSkill';
 import { getProtectedSkillInstruction, isProtectedBuiltinSkill } from '../../security/protectedHarness';
@@ -110,6 +111,10 @@ export class AgentSkillRegistry {
     if (isPageCodeSkill(resolved)) {
       data = readPageCodeSkill(resolved, input);
       summary = input.resource ? '已读取页面代码管理参考资料' : '已加载页面代码管理技能';
+    } else if (isMigrationSkill(resolved)) {
+      data = readMigrationSkillPackage(resolved, input);
+      summary = input.script ? '已完成受保护迁移算法沙箱执行'
+        : input.resource ? '已按需读取数据迁移参考资料' : '已加载跨系统 CRM 数据迁移与割接架构师技能';
     } else if (isDiagramDesignSkill(resolved)) {
       data = readDiagramDesignSkill(resolved, input);
       summary = input.resource ? '已读取 Diagram Design 图表参考资料' : '已加载 Diagram Design 图表设计技能及资源目录';

@@ -17,6 +17,8 @@ export interface ChatRunParams {
   projectId?: string;
   mode?: AiSessionMode;
   expectedConnector?: string;
+  targetConnectorId?: string;
+  targetConnectorIds?: string[];
 }
 
 export interface AgentRunContext {

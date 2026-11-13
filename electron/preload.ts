@@ -248,6 +248,39 @@ export const neoApi = {
   feishuAddBot: (settings: { name: string; webhookUrl: string }) => ipcRenderer.invoke('feishu:addBot', settings),
   feishuRemoveBot: (botId: string) => ipcRenderer.invoke('feishu:removeBot', botId),
   feishuTestMessage: (botId: string) => ipcRenderer.invoke('feishu:testMessage', botId),
+
+  // 数据迁移引擎
+  migrationListPlans: () => ipcRenderer.invoke('migration:listPlans'),
+  migrationGetPlan: (planId: string) => ipcRenderer.invoke('migration:getPlan', planId),
+  migrationSavePlan: (plan: any) => ipcRenderer.invoke('migration:savePlan', plan),
+  migrationDeletePlan: (planId: string) => ipcRenderer.invoke('migration:deletePlan', planId),
+  migrationTestMongoConnection: (config: any, planId?: string) => ipcRenderer.invoke('migration:testMongoConnection', config, planId),
+  migrationPurgeStagingData: (planId: string) => ipcRenderer.invoke('migration:purgeStagingData', planId),
+  migrationFetchConnectorObjects: (accountId: string) => ipcRenderer.invoke('migration:fetchConnectorObjects', accountId),
+  migrationInspectEntityDescribe: (accountId: string, entityApiKey: string) => ipcRenderer.invoke('migration:inspectEntityDescribe', accountId, entityApiKey),
+  migrationComputeDagSequence: (objectsMetadata: any[]) => ipcRenderer.invoke('migration:computeDagSequence', objectsMetadata),
+  migrationRecommendFieldMappings: (params: any) => ipcRenderer.invoke('migration:recommendFieldMappings', params),
+  migrationPreviewTransformRules: (mappings: any[], sampleRecords: any[]) => ipcRenderer.invoke('migration:previewTransformRules', mappings, sampleRecords),
+  migrationDiagnoseErrors: (failures: any[]) => ipcRenderer.invoke('migration:diagnoseErrors', failures),
+  migrationStartTask: (planId: string, options?: any) => ipcRenderer.invoke('migration:startTask', planId, options),
+  migrationPauseTask: (planId: string) => ipcRenderer.invoke('migration:pauseTask', planId),
+  migrationResumeTask: (planId: string) => ipcRenderer.invoke('migration:resumeTask', planId),
+  migrationStopTask: (planId: string) => ipcRenderer.invoke('migration:stopTask', planId),
+  migrationGetTaskProgress: (planId: string) => ipcRenderer.invoke('migration:getTaskProgress', planId),
+  migrationListLogs: (taskId?: string, limit?: number) => ipcRenderer.invoke('migration:listLogs', taskId, limit),
+  migrationClearLogs: (taskId?: string) => ipcRenderer.invoke('migration:clearLogs', taskId),
+  migrationListAuditFailures: (planId: string, limit?: number) => ipcRenderer.invoke('migration:listAuditFailures', planId, limit),
+  migrationReconcileAudit: (planId: string) => ipcRenderer.invoke('migration:reconcileAudit', planId),
+  onMigrationProgress: (callback: (metrics: any) => void) => {
+    const listener = (_: any, data: any) => callback(data);
+    ipcRenderer.on('migration:progress', listener);
+    return () => ipcRenderer.removeListener('migration:progress', listener);
+  },
+  onMigrationLog: (callback: (log: any) => void) => {
+    const listener = (_: any, data: any) => callback(data);
+    ipcRenderer.on('migration:log', listener);
+    return () => ipcRenderer.removeListener('migration:log', listener);
+  },
   // 飞书妙计风格会议助手
   meetingGetMeetings: () => ipcRenderer.invoke('meeting:getMeetings'),
   meetingGetMeeting: (id: string) => ipcRenderer.invoke('meeting:getMeeting', id),

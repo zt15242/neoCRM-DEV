@@ -3,6 +3,8 @@ import { Check, Copy, Play, Workflow } from 'lucide-react';
 import { WorkflowDeployPlan, type AiToolCallRecord } from '../../../shared/types';
 import { extractWorkflowPlanFromText } from './workflowPlanHelper';
 import { WorkflowPlanCard } from "./WorkflowPlanCard";
+import { MigrationPlanCard } from "./MigrationPlanCard";
+import { extractMigrationPlanFromText } from "./migrationPlanHelper";
 import { ApprovalPlanCard } from "./ApprovalPlanCard";
 import { extractApprovalPlanFromText } from "./approvalPlanHelper";
 import { ApprovalDeployPlan } from "../../../shared/types";
@@ -179,6 +181,28 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, t
                 </span>
               </div>
             );
+          }
+
+                    const isMigrationPlan =
+            part.lang?.toLowerCase() === "json:migration-plan" ||
+            part.lang?.toLowerCase() === "migration-plan" ||
+            ((part.content.includes('"topology"') || part.content.includes('"objects"')) &&
+              (part.content.includes('"twoPassLookup"') || part.content.includes('"sourceEntity"') || part.content.includes('"fieldMappings"')));
+
+          if (isMigrationPlan) {
+            const parsedMigrationPlan = extractMigrationPlanFromText('```json:migration-plan\n' + part.content + '\n```');
+            if (parsedMigrationPlan) {
+              return (
+                <div key={index} className="my-2">
+                  <MigrationPlanCard
+                    plan={parsedMigrationPlan}
+                    onOpenWorkspaceTab={() => {
+                      window.dispatchEvent(new CustomEvent('navigate-app-tab', { detail: 'workspace' }));
+                    }}
+                  />
+                </div>
+              );
+            }
           }
 
           const isWorkflowPlan =

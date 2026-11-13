@@ -1089,7 +1089,9 @@ export class AiService {
   private async runWithAgentContext(params: ChatRunParams, sendEvent: (event: AiStreamEvent) => void, managed = false, snapshot?: AiChatSession | null) {
     const stored = snapshot === undefined ? await this.getSession(params.sessionId) : snapshot;
     const effective = { ...params, projectId: stored?.projectId || params.projectId,
-      mode: params.mode || stored?.mode || 'standard' as AiSessionMode };
+      mode: params.mode || stored?.mode || 'standard' as AiSessionMode,
+      targetConnectorId: params.targetConnectorId || stored?.targetConnectorId,
+      targetConnectorIds: params.targetConnectorIds || stored?.targetConnectorIds };
     const context: AgentRunContext & { skillContext?: () => SkillContextMessage[] } = { params: effective, managed };
     return DshToolService.runInSession(params.sessionId,
       () => this.agentContext.run(context, () => this.runChatStream(effective, sendEvent, stored?.presetId)
@@ -1101,7 +1103,7 @@ export class AiService {
     sendEvent: (event: AiStreamEvent) => void,
     storedPreset?: string
   ): Promise<void> {
-    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode } = params;
+    const { requestId, sessionId, messageId, providerId, modelId, presetPrompt, messages, enableTools, activeSkillIds, activeMcpServerIds, compactionSummary, projectPath, mode, targetConnectorId, targetConnectorIds } = params;
 
     // Check before workspace preparation, compaction, tool discovery or provider requests.
     const hasPrivatePreset = ['neobi-architect', 'autoflow-architect'].some(
@@ -1606,6 +1608,48 @@ declare const tools: {
   1. 当用户询问“查询租户有哪些对象”、“查询实体列表”、字段元数据或数据时，【必须第一时间自动调用 list_entities 工具】拉取租户真实实体列表，严禁凭空臆造！
   2. 当涉及具体实体字段时，必须先自动调用 get_entity_fields 工具核查真实字段元数据；
   3. 当需要查询业务数据时，必须自动调用 execute_sql_query 工具执行 XOQL 查询（遵循严禁 SELECT *，严禁 JOIN，支持点号穿透规范）。`);
+        }
+      }
+
+      
+      // 用户显式指定的额外/协同/目标连接器环境 (与当前默认主连接器互斥，用于数据迁移/跨租户操作)
+      // 用户在对话中显式指定或通过 @ 艾特引用的额外/目标连接器环境 (支持多个，与当前默认主连接器互斥)
+      const allTargetIds = Array.from(new Set([
+        ...(targetConnectorIds || []),
+        ...(targetConnectorId ? [targetConnectorId] : []),
+      ])).filter(Boolean);
+
+      if (allTargetIds.length > 0) {
+        const history = this.sessionStore.getAccountHistory();
+        const targetRecords = allTargetIds
+          .map((tid) => {
+            const resolvedId = this.sessionStore.resolveAccountId(tid);
+            return history.find((r) => r.id === resolvedId);
+          })
+          .filter((r) => !!(r && r.environment));
+
+        if (targetRecords.length > 0) {
+          const lines = targetRecords.map((targetRec, index) => {
+            const tEnv = targetRec.environment;
+            const tToken = targetRec.tokenData;
+            const tProduct = tEnv.productType || 'neocrm';
+            const pName = tProduct === 'salesforce' ? 'Salesforce' : tProduct === 'fxiaoke' ? '纷享销客' : '销售易';
+            return `${index + 1}. 连接器【${targetRec.environmentName || tEnv.name}】(${pName})
+   - 平台: ${tProduct}
+   - 租户/企业: ${targetRec.tenantName || tToken?.userInfo?.tenantName || tToken?.tenant_id || '未命名租户'} (租户 ID: ${targetRec.tenantId || tToken?.tenant_id || '未知'})
+   - 认证用户: ${targetRec.userName || tToken?.userInfo?.name || '未知用户'}
+   - 账号 ID (accountId): "${targetRec.id}"`;
+          });
+
+          systemParts.push(`【用户在对话中显式通过 @ 艾特或下拉指定的额外/目标连接器 (共 ${targetRecords.length} 个)】
+${lines.join('\n')}
+【核心执行约定与指令】：
+1. 当前会话默认的主环境为【${currentSession.environment.name}】(${currentSession.environment.productType || 'neocrm'})，此环境默认生效，用户无需也不可能在指定列表中重复引用它。
+2. 用户在对话框中通过 @ 艾特显式引用了上述 ${targetRecords.length} 个连接器。
+3. 当用户提出数据迁移（N→1 多 Org 合并、1→N 拆分、对等割接）、跨系统元数据对比或多租户数据协同操作时，以此作为目标/协同环境！
+   - 若为多租户合并 (N→1): 上述连接器与当前主环境作为多数据源，或者当前主环境为源、目标为指定的连接器；
+   - 若生成 MigrationPlan 方案: 必须使用上述连接器的真实 accountId 填充 targetConnectorId，严禁编造假 ID！
+4. 当需要核对或查询上述租户的对象时，可调用 workspace_list_entities 或 workspace_query_connector，并在参数中传入对应的 accountId！`);
         }
       }
 

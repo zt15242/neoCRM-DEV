@@ -36,6 +36,9 @@ import { EmailService } from './services/emailService';
 import { MeetingService } from './services/meetingService';
 import { saveMeetingDocument } from './services/meetingDocument';
 import { WorkspaceService } from './services/workspaceService';
+import { MigrationService } from './services/migration/migrationService';
+import { mongoStagingService } from './services/migration/mongoStagingService';
+import { migrationEncryption } from './services/migration/migrationEncryption';
 import { configurePackagedEsbuildBinary } from './services/esbuildRuntime';
 import { FeishuService } from './services/feishuService';
 import { AgentRuntimeHost } from './services/agent/agentRuntimeHost';
@@ -154,7 +157,12 @@ ipcMain.handle('browser-control:status', () => browserBridge.status());
 ipcMain.handle('browser-control:preview', (_, sessionId: string) => browserBridge.previewSession(String(sessionId || '')));
 ipcMain.handle('browser-control:stop', () => { browserBridge.stop(); return browserBridge.status(); });
 ipcMain.handle('browser-control:open-extension', () => shell.openPath(app.isPackaged ? path.join(process.resourcesPath, 'browser-extension') : path.join(app.getAppPath(), 'browser-extension')));
-app.on('before-quit', () => browserBridge.stop(false));
+app.on('before-quit', () => {
+  browserBridge.stop(false);
+  migrationService.stopScheduler();
+  void mongoStagingService.closeAll();
+  migrationEncryption.clearMemoryKeys();
+});
 const aiService = new AiService(sessionStore, metadataService, dataService, envService, dshToolService);
 const agentRuntime = new AgentRuntimeHost(path.join(currentDir, 'agent-runtime-process.js'), {
   onDiagnostic: (message, detail) => loggerService.warn('AgentRuntime', message, detail as any),
@@ -194,6 +202,14 @@ const workspaceService = new WorkspaceService(sessionStore, dataService, emailSe
 aiService.setWorkspaceService(workspaceService);
 const feishuService = new FeishuService(workspaceService);
 const codeSyncService = new CodeSyncService(metadataService, dataService);
+const migrationService = new MigrationService(sessionStore, dataService, metadataService);
+migrationService.onProgress((metrics) => {
+  if (win && !win.isDestroyed()) win.webContents.send('migration:progress', metrics);
+});
+migrationService.onLog((log) => {
+  if (win && !win.isDestroyed()) win.webContents.send('migration:log', log);
+});
+migrationService.startScheduler();
 
 // Renderer catalogs exclude undisclosed assets; internal configuration remains intact.
 const visibleSkills = (skills: any[]) => skills.filter((skill) => restrictedFeatureService.canUseSkill(skill.id));
@@ -1173,6 +1189,29 @@ ipcMain.handle('feishu:getSettings', async () => feishuService.getSettings());
 ipcMain.handle('feishu:addBot', async (_, settings) => feishuService.addBot(settings));
 ipcMain.handle('feishu:removeBot', async (_, botId: string) => feishuService.removeBot(botId));
 ipcMain.handle('feishu:testMessage', async (_, botId: string) => feishuService.testMessage(botId));
+
+// ================= 工作台组件化数据迁移引擎 (MongoDB + 多连接器 + 加密沙箱) =================
+ipcMain.handle('migration:listPlans', async () => migrationService.listPlans());
+ipcMain.handle('migration:getPlan', async (_, planId: string) => migrationService.getPlan(planId));
+ipcMain.handle('migration:savePlan', async (_, plan) => migrationService.savePlan(plan));
+ipcMain.handle('migration:deletePlan', async (_, planId: string) => migrationService.deletePlan(planId));
+ipcMain.handle('migration:testMongoConnection', async (_, config, planId?: string) => migrationService.testMongoConnection(config, planId));
+ipcMain.handle('migration:purgeStagingData', async (_, planId: string) => migrationService.purgeStagingData(planId));
+ipcMain.handle('migration:fetchConnectorObjects', async (_, accountId: string) => migrationService.fetchConnectorObjectsAndFields(accountId));
+ipcMain.handle('migration:inspectEntityDescribe', async (_, accountId: string, entityApiKey: string) => migrationService.inspectEntityDescribe(accountId, entityApiKey));
+ipcMain.handle('migration:computeDagSequence', async (_, objectsMetadata) => migrationService.computeDagSequence(objectsMetadata));
+ipcMain.handle('migration:recommendFieldMappings', async (_, params) => migrationService.recommendFieldMappings(params));
+ipcMain.handle('migration:previewTransformRules', async (_, mappings, sampleRecords) => migrationService.previewTransformRules(mappings, sampleRecords));
+ipcMain.handle('migration:diagnoseErrors', async (_, failures) => migrationService.diagnoseErrors(failures));
+ipcMain.handle('migration:startTask', async (_, planId: string, options) => migrationService.startTask(planId, options));
+ipcMain.handle('migration:pauseTask', async (_, planId: string) => migrationService.pauseTask(planId));
+ipcMain.handle('migration:resumeTask', async (_, planId: string) => migrationService.resumeTask(planId));
+ipcMain.handle('migration:stopTask', async (_, planId: string) => migrationService.stopTask(planId));
+ipcMain.handle('migration:getTaskProgress', async (_, planId: string) => migrationService.getTaskProgress(planId));
+ipcMain.handle('migration:listLogs', async (_, taskId?: string, limit?: number) => migrationService.listLogs(taskId, limit));
+ipcMain.handle('migration:clearLogs', async (_, taskId?: string) => migrationService.clearLogs(taskId));
+ipcMain.handle('migration:listAuditFailures', async (_, planId: string, limit?: number) => migrationService.listAuditFailures(planId, limit));
+ipcMain.handle('migration:reconcileAudit', async (_, planId: string) => migrationService.reconcileAudit(planId));
 
 // ================= 飞书妙计风格会议助手 (Meeting Copilot & Whisper Transcription) =================
 ipcMain.handle('meeting:getMeetings', async () => meetingService.getMeetings());

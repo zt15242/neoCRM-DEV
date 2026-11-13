@@ -1,8 +1,9 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, MessageSquareText } from 'lucide-react';
+import { Code2, MessageSquareText, X } from 'lucide-react';
 import { AI_AGENT_PRESETS, DEFAULT_AI_SETTINGS } from '../../../shared/constants';
 import { requiresRoleLicense } from '../../../shared/licensePolicy';
-import type { AiChatMessage, AiChatSession, AiConfigData, AiFileAttachment, AiProviderConfig, AiStreamEvent, WorkspaceProject } from '../../../shared/types';
+import type { AiChatMessage, AiChatSession, AiConfigData, AiFileAttachment, AiProviderConfig, AiStreamEvent, SessionState, WorkspaceProject } from '../../../shared/types';
+import type { WorkspaceDataSources } from '../../../shared/workspaceTypes';
 import { useRestrictedFeatures } from '../../security/RestrictedFeatures';
 import { OpenCodeStream } from './openCodeStream';
 import { pendingQuestion } from './openCodeQuestion';
@@ -21,6 +22,7 @@ const IMAGE_CONTENT_TYPES: Record<string, string> = {
 };
 
 interface OpenCodeWorkspaceProps {
+  currentSession?: SessionState;
   activeProject?: WorkspaceProject;
   activeSessionId?: string | null;
   sessions: AiChatSession[];
@@ -300,6 +302,7 @@ function bridgeEvent(type: string, data: Record<string, unknown>, directory: str
 }
 
 export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
+  currentSession,
   activeProject,
   activeSessionId,
   sessions,
@@ -321,6 +324,61 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
   const [activeView, setActiveView] = useState<'chat' | 'code'>('chat');
   const [codeViewOpened, setCodeViewOpened] = useState(false);
   const [treeRefreshVersion, setTreeRefreshVersion] = useState(0);
+  const [crmAccounts, setCrmAccounts] = useState<WorkspaceDataSources['crmAccounts']>([]);
+  const [selectedTargetConnectorId, setSelectedTargetConnectorId] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.neoApi?.workspaceGetDataSources?.().then((sources) => {
+      if (!cancelled && sources?.crmAccounts) {
+        setCrmAccounts(sources.crmAccounts);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [currentSession?.activeAccountId, currentSession?.environment?.id]);
+
+  useEffect(() => {
+    const activeSess = sessions.find((s) => s.id === activeSessionId);
+    setSelectedTargetConnectorId(activeSess?.targetConnectorId || '');
+  }, [activeSessionId, sessions]);
+
+  // 严格过滤掉当前正在使用的账号与环境（当前环境是默认使用的）
+  const availableTargetConnectors = useMemo(() => {
+    return crmAccounts.filter((acc) => {
+      if (currentSession?.activeAccountId && acc.accountId === currentSession.activeAccountId) return false;
+      if (currentSession?.environment?.id && acc.connectorId === currentSession.environment.id && !currentSession.activeAccountId) return false;
+      return true;
+    });
+  }, [crmAccounts, currentSession?.activeAccountId, currentSession?.environment?.id]);
+
+  const currentConnectorInfo = useMemo(() => {
+    if (!currentSession?.isLoggedIn) return { name: '未连接 CRM', product: '', tenant: '' };
+    const envName = currentSession.environment?.name || '默认主连接器';
+    const pType = currentSession.environment?.productType || 'neocrm';
+    const pLabel = pType === 'salesforce' ? 'Salesforce' : pType === 'fxiaoke' ? '纷享销客' : '销售易';
+    const tenant = currentSession.tokenData?.userInfo?.tenantName || currentSession.tokenData?.tenant_id || '';
+    return { name: envName, product: pLabel, tenant: String(tenant) };
+  }, [currentSession]);
+
+  const handleSelectTargetConnector = async (accountId: string) => {
+    setSelectedTargetConnectorId(accountId);
+    if (activeSessionId) {
+      const s = await getSession(idToOpenCode(activeSessionId));
+      if (s) {
+        const updated = { ...s, targetConnectorId: accountId || undefined, updatedAt: Date.now() };
+        const saved = await window.neoApi?.aiPersistSession?.(updated);
+        if (saved) {
+          onSessionsChange([saved, ...eventContext.current.sessions.filter((item) => item.id !== saved.id)]);
+        }
+      }
+    }
+    if (accountId) {
+      const matched = availableTargetConnectors.find((a) => a.accountId === accountId);
+      showToast('info', `已在当前对话指定目标连接器：${matched?.connectorName || accountId}`);
+    } else {
+      showToast('info', '已取消指定目标连接器，恢复仅使用默认主租户');
+    }
+  };
   const fileRevisions = useRef(new Map<string, { revision: string; lineEnding: string }>());
   const preparing = useRef(new Set<string>());
   const submittingForms = useRef(new Set<string>());
@@ -412,6 +470,7 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
       messages: [],
       activeSkillIds: [],
       mode: 'standard',
+      targetConnectorId: selectedTargetConnectorId || undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -517,9 +576,32 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
       const config = await getConfig();
       const provider = config.providers.find(item => item.id === previous.providerId && item.enabled);
       if (!provider || !provider.models.some(item => item.id === previous.modelId)) throw new Error('该会话的模型已停用，请重新选择模型');
+      // 提取输入框中通过 @ 艾特出来的多个连接器 (支持名字匹配与 body.skills)
+      const mentionedConnectorIds: string[] = [];
+      for (const acc of crmAccounts) {
+        const cleanName = acc.connectorName.trim().replace(/\s+/g, '_');
+        const slug = `连接器-${cleanName}`;
+        const isMentionedInSkills = Array.isArray(body?.skills) && body.skills.some(
+          (s: any) => s?.id === slug || s?.name === slug || s?.id === acc.connectorName || s?.id === `connector-${acc.accountId}`
+        );
+        const safeName = acc.connectorName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const safeClean = cleanName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = new RegExp(`@(?:连接器[-_]|connector[-_])?(?:${safeName}|${safeClean})\\b`, 'i');
+        if ((isMentionedInSkills || pattern.test(text)) && !mentionedConnectorIds.includes(acc.accountId)) {
+          mentionedConnectorIds.push(acc.accountId);
+        }
+      }
+
+      const allTargetConnectorIds = Array.from(new Set([
+        ...mentionedConnectorIds,
+        ...(selectedTargetConnectorId ? [selectedTargetConnectorId] : []),
+        ...(previous.targetConnectorIds || []),
+        ...(previous.targetConnectorId ? [previous.targetConnectorId] : []),
+      ])).filter(Boolean);
+
       const allowedSkills = new Set((config.skills || []).filter(item => item.category === 'personal' && item.enabled).map(item => item.id));
       const skillIds = [...new Set([...(previous.activeSkillIds || []), ...(Array.isArray(body?.skills) ? body.skills.map((item: any) => String(item?.id || '')) : [])])]
-        .filter(id => allowedSkills.has(id));
+        .filter(id => !id.startsWith('connector-') && allowedSkills.has(id));
       const user: AiChatMessage = {
         id: typeof body?.id === 'string' && body.id.startsWith('msg_') ? body.id : messageId('msg_u_'),
         role: 'user', content: text, createdAt: Date.now(),
@@ -532,12 +614,14 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
       const cleanHistory = visibleSessionMessages(previous).filter(message => message.role === 'user' || message.role === 'system' ||
         (message.role === 'assistant' && (!!message.content.trim() || !!message.toolCalls?.length)));
       const title = cleanHistory.length === 0 && text ? text.slice(0, 22) + (text.length > 22 ? '...' : '') : previous.title;
-      const updated: AiChatSession = {
+            const updated: AiChatSession = {
         ...previous,
         id: sessionId,
         title,
         projectId: activeProject?.id || previous.projectId,
         activeSkillIds: skillIds,
+        targetConnectorId: allTargetConnectorIds[0] || undefined,
+        targetConnectorIds: allTargetConnectorIds.length ? allTargetConnectorIds : undefined,
         messages: [...cleanHistory, user, assistant],
         revert: undefined,
         messagesLoaded: true,
@@ -567,6 +651,8 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
         compactionSummary: saved.compactionSummary,
         projectPath: directory,
         mode: saved.mode || 'standard',
+        targetConnectorId: allTargetConnectorIds[0] || undefined,
+        targetConnectorIds: allTargetConnectorIds.length ? allTargetConnectorIds : undefined,
       });
       return {
         id: user.id,
@@ -724,11 +810,30 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
     if (path === '/api/command' && method === 'GET') { jsonResponse(port, { location, data: [] }); return; }
     if (path === '/api/skill' && method === 'GET') {
       const config = await getConfig();
-      const skills = (config.skills || []).filter(item => item.enabled).map(item => ({
-        id: item.id, name: item.name, description: item.description, autoinvoke: false,
-        path: project?.localPath || '/', content: item.systemInstruction || '',
+      // 动态将其他可用的 CRM 连接器以 @ 艾特候选形式暴露给 OpenCode 提示菜单 (严格排除当前正在使用的默认账号)
+      const connectorMentions = availableTargetConnectors.map((acc) => {
+        const cleanName = acc.connectorName.trim().replace(/\s+/g, '_');
+        const pLabel = acc.productType === 'salesforce' ? 'Salesforce' : acc.productType === 'fxiaoke' ? '纷享销客' : '销售易';
+        return {
+          id: `连接器-${cleanName}`,
+          name: `连接器-${acc.connectorName}`,
+          description: `【CRM 连接器】${pLabel}${acc.tenantName ? ` · ${acc.tenantName}` : ''}`,
+          autoinvoke: false,
+          path: '/',
+          content: `【用户在输入框中通过 @ 艾特指定的 CRM 连接器: ${acc.connectorName}】\n- 平台: ${pLabel}\n- 账号 ID (accountId): "${acc.accountId}"\n- 租户/企业: ${acc.tenantName || '未知'}\n在数据迁移、N→1合并、1→N拆分或跨环境操作时，以此作为协同/目标连接器。\n`,
+        };
+      });
+
+      const personalSkills = (config.skills || []).filter((item) => item.enabled).map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        autoinvoke: false,
+        path: project?.localPath || '/',
+        content: item.systemInstruction || '',
       }));
-      jsonResponse(port, { location, data: skills });
+
+      jsonResponse(port, { location, data: [...connectorMentions, ...personalSkills] });
       return;
     }
     if (path === '/api/agent' && method === 'GET') {
@@ -1123,6 +1228,7 @@ export const OpenCodeWorkspace: React.FC<OpenCodeWorkspaceProps> = ({
           className={`inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 disabled:cursor-not-allowed disabled:opacity-45 ${activeView === 'code' ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`}>
           <Code2 size={14} />代码
         </button>
+        
         <span className="ml-auto truncate text-[11px] text-slate-500" title={activeProject?.localPath || ''}>{activeProject?.name || '未选择项目'}</span>
       </nav>
       <div className={activeView === 'chat' ? 'relative flex min-h-0 flex-1 flex-col' : 'hidden'}>

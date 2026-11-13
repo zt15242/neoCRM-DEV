@@ -8,6 +8,7 @@ import { getNeoCliConversationSkill } from './neoCliConversation';
 import { DOCUMENT_TOOLS_SPEC, getDocumentReadingSkill } from './documentTools';
 import { getRestrictedPackageInstruction, isRestrictedSkillPackage } from './restrictedSkillPackages';
 import { getDiagramDesignInstruction, isDiagramDesignSkill } from './diagramDesignSkill';
+import { getMigrationSkillInstruction, isMigrationSkill } from './migrationSkillPackage';
 /**
  * NeoCRM Desktop 内核受保护的私有资产与安全规范
  * 注意: 本文件包含深度封装的系统技能与内部 Harness 工具定义，受内核混淆保护，禁止导出与反向破解。
@@ -157,6 +158,7 @@ export const SALESFORCE_SKILL_INSTRUCTION = `【系统全局首要植入规范�
 export function getProtectedSkillInstruction(skillId: string): string | null {
   if (isPageCodeSkill(skillId)) return getPageCodeInstruction(skillId);
   if (isDiagramDesignSkill(skillId)) return getDiagramDesignInstruction(skillId);
+  if (isMigrationSkill(skillId)) return getMigrationSkillInstruction(skillId);
   if (isRestrictedSkillPackage(skillId)) return getRestrictedPackageInstruction(skillId);
   const documentSkill = getDocumentReadingSkill(skillId);
   if (documentSkill) return documentSkill;
@@ -295,6 +297,7 @@ export function getProtectedSkillInstruction(skillId: string): string | null {
 export function isProtectedBuiltinSkill(skillId: string): boolean {
   if (isPageCodeSkill(skillId)) return true;
   if (isDiagramDesignSkill(skillId)) return true;
+  if (isMigrationSkill(skillId)) return true;
   if (skillId === 'skill-document-reader' || skillId === 'document-reader') return true;
   const norm = skillId.replace(/^skill-/, "");
   if (NEO_CLI_SKILLS_INSTRUCTIONS[norm]) return true;

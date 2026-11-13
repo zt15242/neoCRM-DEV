@@ -187,6 +187,8 @@ declare global {
         compactionSummary?: any;
         projectPath?: string;
         mode?: "standard" | "ptc" | "minimal" | "plan" | "default";
+        targetConnectorId?: string;
+        targetConnectorIds?: string[];
       }) => Promise<boolean>;
       aiAbortChatStream: (targetId?: string) => Promise<boolean>;
       onAgentSessionUpdated: (callback: (session: AiChatSession) => void) => () => void;
@@ -375,6 +377,30 @@ declare global {
       feishuAddBot?: (settings: { name: string; webhookUrl: string }) => Promise<FeishuWorkspaceSettings>;
       feishuRemoveBot?: (botId: string) => Promise<FeishuWorkspaceSettings>;
       feishuTestMessage?: (botId: string) => Promise<{ success: boolean; message: string }>;
+
+      migrationListPlans?: () => Promise<MigrationPlan[]>;
+      migrationGetPlan?: (planId: string) => Promise<MigrationPlan | null>;
+      migrationSavePlan?: (plan: MigrationPlan) => Promise<MigrationPlan>;
+      migrationDeletePlan?: (planId: string) => Promise<boolean>;
+      migrationTestMongoConnection?: (config: MigrationMongoConfig, planId?: string) => Promise<MigrationMongoStatus>;
+      migrationPurgeStagingData?: (planId: string) => Promise<{ droppedCollections: string[] }>;
+      migrationFetchConnectorObjects?: (accountId: string) => Promise<Array<{ entityApiKey: string; label: string; lookups: Array<{ field: string; targetEntity: string }> }>>;
+      migrationInspectEntityDescribe?: (accountId: string, entityApiKey: string) => Promise<any>;
+      migrationComputeDagSequence?: (objectsMetadata: any[]) => Promise<Array<{ entityApiKey: string; label: string; wave: number; executionOrder: number; twoPassLookup: boolean; primaryLookupFields: string[] }>>;
+      migrationRecommendFieldMappings?: (params: any) => Promise<any>;
+      migrationPreviewTransformRules?: (mappings: any[], sampleRecords: any[]) => Promise<any[]>;
+      migrationDiagnoseErrors?: (failures: any[]) => Promise<any[]>;
+      migrationStartTask?: (planId: string, options?: { incremental?: boolean; trigger?: 'manual' | 'scheduled'; onlyObjectIds?: string[] }) => Promise<MigrationProgressMetrics>;
+      migrationPauseTask?: (planId: string) => Promise<void>;
+      migrationResumeTask?: (planId: string) => Promise<void>;
+      migrationStopTask?: (planId: string) => Promise<void>;
+      migrationGetTaskProgress?: (planId: string) => Promise<MigrationProgressMetrics | null>;
+      migrationListLogs?: (taskId?: string, limit?: number) => Promise<any[]>;
+      migrationClearLogs?: (taskId?: string) => Promise<void>;
+      migrationListAuditFailures?: (planId: string, limit?: number) => Promise<MigrationAuditRecord[]>;
+      migrationReconcileAudit?: (planId: string) => Promise<MigrationReconciliationReport>;
+      onMigrationProgress?: (callback: (metrics: MigrationProgressMetrics) => void) => () => void;
+      onMigrationLog?: (callback: (log: any) => void) => () => void;
       // 飞书妙计风格会议助手 (Meeting Copilot & Whisper Transcription)
       meetingGetMeetings?: () => Promise<MeetingRecord[]>;
       meetingGetMeeting?: (id: string) => Promise<MeetingRecord | null>;

@@ -101,6 +101,17 @@ export const App: React.FC = () => {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const selectionChangedDuringLoad = useRef(false);
   const [workspaceRestored, setWorkspaceRestored] = useState(false);
+
+  useEffect(() => {
+    const handler = (event: CustomEvent<AppNavTab>) => {
+      const targetTab = (event as any).detail;
+      if (['dashboard', 'ai', 'mail', 'meeting', 'workspace', 'metadata', 'data'].includes(targetTab)) {
+        setActiveTab(targetTab);
+      }
+    };
+    window.addEventListener('navigate-app-tab', handler as EventListener);
+    return () => window.removeEventListener('navigate-app-tab', handler as EventListener);
+  }, []);
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<WorkspaceProject | null>(null);
 
@@ -788,6 +799,7 @@ export const App: React.FC = () => {
         {/* Tab 4: AI 对话平台 (Codex 极简三栏全能工作台 · 保持常驻挂载以支持后台流式持续生成与零断点切回) */}
         <div className={`flex-1 h-full w-full min-h-0 flex flex-col ${activeTab === 'ai' ? 'flex' : 'hidden'}`}>
           <OpenCodeWorkspace
+            currentSession={session}
             activeSessionId={activeSessionId}
             onSelectSession={(id) => {
               selectionChangedDuringLoad.current = true;

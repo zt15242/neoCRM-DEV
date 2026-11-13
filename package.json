@@ -1,6 +1,6 @@
 {
   "name": "neocrm-desktop",
-  "version": "1.8.55",
+  "version": "1.8.56",
   "description": "NeoCRM 桌面端开发者工具，支持多环境切换、OAuth2 授权登录与会话管理",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "prepare:neo-cli": "node scripts/prepare-neo-cli.mjs",
     "test:neo-cli": "node scripts/test-bundled-neo-cli.mjs",
     "build:opencode-workspace": "node scripts/build-opencode-workspace.mjs",
-    "test:agent-model": "tsc -p tsconfig.agent.json && node scripts/test-agent-model-gateway.mjs && node scripts/test-agent-runtime-safety.mjs && node scripts/test-workspace-mutation.mjs && node scripts/test-project-editor.mjs && node scripts/test-meeting-minutes.mjs",
+    "test:agent-model": "tsc -p tsconfig.agent.json && node scripts/test-agent-model-gateway.mjs && node scripts/test-agent-runtime-safety.mjs && node scripts/test-workspace-mutation.mjs && node scripts/test-project-editor.mjs && node scripts/test-meeting-minutes.mjs && node scripts/test-data-migration-suite.mjs",
     "dev": "vite",
     "build": "tsc && vite build && npm run build:opencode-workspace",
     "start": "electron .",
@@ -23,7 +23,8 @@
     "release:minor": "node scripts/release.mjs minor",
     "test:agent-storage": "node scripts/test-agent-storage.mjs",
     "test:opencode-workspace": "node scripts/test-opencode-workspace.mjs",
-    "test:agent-runtime": "node scripts/verify-agent-runtime-isolation.mjs dist-electron"
+    "test:agent-runtime": "node scripts/verify-agent-runtime-isolation.mjs dist-electron",
+    "test:migration": "node scripts/test-data-migration-suite.mjs"
   },
   "keywords": [
     "neocrm",
@@ -61,6 +62,7 @@
     "lucide-react": "^1.54.0",
     "mailparser": "^3.12.4",
     "mermaid": "12.3.0",
+    "mongodb": "^6.22.0",
     "nodemailer": "^10.2.1",
     "pdfjs-dist": "6.5.438",
     "postcss": "^8.5.29",

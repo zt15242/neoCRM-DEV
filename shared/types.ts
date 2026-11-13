@@ -427,6 +427,8 @@ export interface AiChatSession {
   createdAt: number;
   updatedAt: number;
   pinned?: boolean;
+  targetConnectorId?: string;
+  targetConnectorIds?: string[];
   agentRun?: AiAgentRun;
 }
 

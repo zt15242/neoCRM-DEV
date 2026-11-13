@@ -1,4 +1,5 @@
 import type { CrmProductType } from './types';
+import type { MigrationPlan } from './migrationTypes';
 
 export type WorkspaceWidgetType =
   | 'text'
@@ -6,7 +7,14 @@ export type WorkspaceWidgetType =
   | 'mail-list'
   | 'async-apex-dashboard'
   | 'custom-html'
-  | 'custom-tsx';
+  | 'custom-tsx'
+  | 'migration-progress-dashboard'
+  | 'migration-object-sequencer'
+  | 'migration-topology'
+  | 'migration-database'
+  | 'migration-field-rules'
+  | 'migration-scheduler'
+  | 'migration-audit-board';
 
 export type WorkspaceWidgetColumnSpan = 1 | 2 | 3 | 4;
 export type WorkspaceWidgetHeight = 320 | 480 | 640 | 800;
@@ -27,6 +35,8 @@ export interface WorkspaceWidget {
   query?: string;
   limit?: number;
   feishuIncludeRecords?: boolean;
+  migrationPlanId?: string;
+  migrationCustomConfig?: Partial<MigrationPlan>;
   subscription?: {
     enabled: boolean;
     intervalMinutes: number;
@@ -86,9 +96,25 @@ export interface WorkspaceWidgetResult {
   buildStatus?: 'ready' | 'error';
   error?: string;
   updatedAt: number;
+  migrationData?: any;
 }
 
-export type WorkspaceExecutionLogStage = 'run' | 'config' | 'load' | 'dependency' | 'build' | 'style' | 'query' | 'render' | 'runtime';
+export type WorkspaceExecutionLogStage =
+  | 'run'
+  | 'config'
+  | 'load'
+  | 'dependency'
+  | 'build'
+  | 'style'
+  | 'query'
+  | 'render'
+  | 'runtime'
+  | 'migration_extract'
+  | 'migration_transform'
+  | 'migration_load'
+  | 'migration_patch'
+  | 'migration_reconcile';
+
 export type WorkspaceExecutionLogStatus = 'info' | 'success' | 'error';
 
 export interface WorkspaceExecutionLog {

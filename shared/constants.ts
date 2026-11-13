@@ -1,5 +1,5 @@
 declare const __APP_VERSION__: string | undefined;
-export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.55';
+export const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `v${__APP_VERSION__}` : 'v1.8.56';
 
 export const DEFAULT_AUTH_CONFIG = {
   clientId: '04c8b45c4dbe36426a660bf70d3fe3e7',
@@ -736,6 +736,12 @@ export const BUILTIN_MCP_SERVERS: McpServerConfig[] = [
  */
 export const BUILTIN_AI_SKILLS: AiSkillItem[] = [
   { id: 'skill-neo-page-code-management', name: '销售易页面代码管理', description: '页面代码包下载、修改、上传及回读流程；需要可用浏览器或用户在后台操作。', category: 'builtin', iconName: 'FileCode', enabled: true, triggerKeywords: ['页面代码', '页面代码包', 'pageCode', '页面安装包'] },
+  {
+    id: 'skill-crm-data-migration', name: '跨系统 CRM 数据迁移与割接 (crm-data-migration)',
+    description: '结合多连接器与 MongoDB 中转缓冲，完成对象拓扑依赖分析、N->1 合并去重与 1->N 拆分路由、字段清洗与脱敏、两阶段外键重装配、增量水位线及错误自愈排查。',
+    category: 'builtin', iconName: 'ArrowLeftRight', enabled: true,
+    triggerKeywords: ['数据迁移', '数据割接', 'Org合并', 'Org拆分', 'MongoDB迁移', '外键装配', '增量同步', 'crm-data-migration'],
+  },
   {
     id: 'skill-diagram-design', name: 'Diagram Design 图表设计',
     description: '基于 Diagram Design 生成架构图、流程图、时序图、ER 图、泳道图等 SVG 图表，按需读取设计参考，支持重绘 draw.io、Mermaid 和 Excalidraw。',

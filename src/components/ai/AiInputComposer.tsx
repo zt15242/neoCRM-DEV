@@ -3,6 +3,7 @@ import { requiresRoleLicense } from '../../../shared/licensePolicy';
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   ArrowUp,
+  ArrowLeftRight,
   LayoutTemplate,
   Cloud,
   Flame,
@@ -188,6 +189,40 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const historyCursorRef = useRef<HistoryCursor>(new HistoryCursor());
+  const [crmAccounts, setCrmAccounts] = useState<Array<{ accountId: string; connectorId: string; connectorName: string; productType: string; tenantName?: string }>>([]);
+  const [mentionedConnectors, setMentionedConnectors] = useState<Array<{ accountId: string; connectorName: string; productType: string; tenantName?: string }>>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.neoApi?.workspaceGetDataSources?.().then((sources) => {
+      if (!cancelled && sources?.crmAccounts) setCrmAccounts(sources.crmAccounts);
+    });
+    return () => { cancelled = true; };
+  }, [crmSessionKey]);
+
+  // 严格过滤排除当前正在使用的账号与环境（当前默认使用的账号已排除）
+  const filteredConnectors = crmAccounts.filter((acc) => {
+    if (crmSessionKey && crmSessionKey.includes(acc.accountId)) return false;
+    if (!mentionQuery.trim()) return true;
+    const q = mentionQuery.toLowerCase();
+    return (
+      acc.connectorName.toLowerCase().includes(q) ||
+      acc.productType.toLowerCase().includes(q) ||
+      Boolean(acc.tenantName && acc.tenantName.toLowerCase().includes(q))
+    );
+  }).slice(0, 10);
+
+  const handleSelectConnectorMention = (acc: (typeof crmAccounts)[0]) => {
+    setMentionMenuOpen(false);
+    const caret = textareaRef.current?.selectionStart || text.length;
+    const textBefore = text.slice(0, caret).replace(/(?:^|\s)@[^\s@]*$/, "");
+    const textAfter = text.slice(caret);
+    const tag = `@连接器-${acc.connectorName} `;
+    setText(`${textBefore} ${tag}${textAfter}`.trimStart());
+    setMentionedConnectors((prev) => (prev.some((c) => c.accountId === acc.accountId) ? prev : [...prev, acc]));
+    showToast?.("success", `已在输入框引用连接器: @连接器-${acc.connectorName}`);
+    focusTextarea();
+  };
 
   const DSH_MODES = [
     {
@@ -1054,7 +1089,7 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       )}
 
       {/* ================= 浮层 B: 文件与实体智能发现菜单 (@ Mentions & Files) ================= */}
-      {mentionMenuOpen && (filteredSkills.length > 0 || matchedFiles.length > 0 || filteredEntities.length > 0) && (
+      {mentionMenuOpen && (filteredConnectors.length > 0 || filteredSkills.length > 0 || matchedFiles.length > 0 || filteredEntities.length > 0) && (
         <div className="absolute left-0 bottom-full mb-2 w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
           <div className="px-3.5 py-2 border-b border-slate-100 bg-slate-50/80 flex items-center justify-between">
             <div className="flex items-center space-x-1.5 font-bold text-slate-800">
@@ -1067,7 +1102,35 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
           </div>
 
           <div className="max-h-72 overflow-y-auto divide-y divide-slate-100/80 p-1">
-            {filteredSkills.length > 0 && <div className="py-1">
+                        {/* 0. CRM 连接器候选 (支持多选，严格排除当前主租户) */}
+            {filteredConnectors.length > 0 && (
+              <div className="py-1">
+                <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 flex items-center gap-1">
+                  <ArrowLeftRight className="w-3 h-3 text-sky-600" />
+                  <span>CRM 连接器 (@Connector) · 仅显示其他租户 (已排除当前主环境)</span>
+                </div>
+                {filteredConnectors.map((acc) => (
+                  <button
+                    type="button"
+                    key={acc.accountId}
+                    onClick={() => handleSelectConnectorMention(acc)}
+                    className="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-left cursor-pointer hover:bg-sky-50 text-slate-700"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 pr-2">
+                      <ArrowLeftRight className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                      <span className="font-semibold text-slate-900 truncate">连接器-{acc.connectorName}</span>
+                      <span className="text-[10px] text-slate-400 font-mono truncate">
+                        ({acc.productType === "salesforce" ? "Salesforce" : acc.productType === "fxiaoke" ? "纷享" : "销售易"}{acc.tenantName ? ` · ${acc.tenantName}` : ""})
+                      </span>
+                    </div>
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-sky-100 text-sky-700 font-mono shrink-0">
+                      目标租户
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+{filteredSkills.length > 0 && <div className="py-1">
               <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 flex items-center gap-1"><Sparkles className="w-3 h-3" /><span>技能 · 仅本次引用</span></div>
               {filteredSkills.map((skill, idx) => <button type="button" key={skill.id} onClick={() => handleSelectSkillMention(skill)}
                 data-testid="skill-mention-option" aria-label={`引用技能 ${skill.name}`} title={skill.description}
@@ -1146,8 +1209,24 @@ export const AiInputComposer: React.FC<AiInputComposerProps> = ({
       )}
 
       {/* 活跃工具胶囊、附件与引用实体 */}
-      {(activeCommand || attachments.length > 0 || entityRefs.length > 0 || mentionedSkillIds.length > 0) && (
+      {(activeCommand || attachments.length > 0 || entityRefs.length > 0 || mentionedSkillIds.length > 0 || mentionedConnectors.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-1 max-h-36 overflow-y-auto">
+          {mentionedConnectors.map((c) => (
+            <span
+              key={c.accountId}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 text-xs border border-sky-200"
+            >
+              <ArrowLeftRight className="w-3 h-3 text-sky-600" />
+              <span className="font-medium">@{c.connectorName}</span>
+              <button
+                type="button"
+                onClick={() => setMentionedConnectors((prev) => prev.filter((item) => item.accountId !== c.accountId))}
+                className="text-sky-400 hover:text-sky-700 rounded p-0.5"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
           {mentionedSkillIds.map(id => { const skill = mentionSkills.find(item => item.id === id); return skill && <span key={id} data-testid="skill-mention-chip" className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs border border-purple-200">
             <Sparkles className="w-3.5 h-3.5" /><span>{skill.name}</span><span className="text-[10px]">本次</span>
             <button type="button" aria-label={`移除技能 ${skill.name}`} onClick={() => setMentionedSkillIds(previous => previous.filter(item => item !== id))}><X className="w-3 h-3" /></button>

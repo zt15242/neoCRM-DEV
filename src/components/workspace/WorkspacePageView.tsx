@@ -4,6 +4,8 @@ import type { FeishuWorkspaceSettings } from '../../../shared/feishuTypes';
 import type { WorkspaceProject } from '../../../shared/types';
 import type { WorkspaceDataSources, WorkspaceExecutionLog, WorkspacePage, WorkspaceWidget, WorkspaceWidgetColumnSpan, WorkspaceWidgetHeight, WorkspaceWidgetResult, WorkspaceWidgetType } from '../../../shared/workspaceTypes';
 import { AsyncApexJobBIDashboard } from '../AsyncApexJobBIDashboard';
+import { MigrationWidgetRenderer, buildFullMigrationSuiteWidgets, createDefaultMigrationPlan } from './migration/MigrationWorkspaceWidgets';
+import { ArrowLeftRight, Database, GitBranch, Sparkles, FileSearch } from 'lucide-react';
 
 interface Props {
   showToast: (type: 'success' | 'error' | 'info', text: string) => void;
@@ -21,13 +23,47 @@ const widgetDefaults: Record<WorkspaceWidgetType, Omit<WorkspaceWidget, 'id'>> =
   'async-apex-dashboard': { type: 'async-apex-dashboard', title: 'Apex 异步作业 BI 看板', columnSpan: 4, height: 640, query: 'SELECT ApexClass.Name, CompletedDate, CreatedBy.Name, CreatedDate, ExtendedStatus, Id, JobItemsProcessed, JobType, MethodName, NumberOfErrors, ParentJobId, Status, TotalJobItems FROM AsyncApexJob WHERE CreatedDate = YESTERDAY ORDER BY CreatedDate DESC', subscription: defaultSubscription() },
   'custom-html': { type: 'custom-html', title: '自定义 HTML', columnSpan: 2, height: 480, relativePath: '', subscription: defaultSubscription() },
   'custom-tsx': { type: 'custom-tsx', title: '自定义代码组件', columnSpan: 2, height: 480, relativePath: '', subscription: defaultSubscription() },
+  'migration-progress-dashboard': { type: 'migration-progress-dashboard', title: '数据迁移进度看板与异步作业监控', columnSpan: 4, height: 480, subscription: defaultSubscription() },
+  'migration-object-sequencer': { type: 'migration-object-sequencer', title: '对象依赖拓扑与波次编排', columnSpan: 2, height: 640, subscription: defaultSubscription() },
+  'migration-topology': { type: 'migration-topology', title: '多连接器拓扑 (N→1 / 1→N)', columnSpan: 2, height: 480, subscription: defaultSubscription() },
+  'migration-database': { type: 'migration-database', title: 'MongoDB 中转存储与安全加密', columnSpan: 2, height: 480, subscription: defaultSubscription() },
+  'migration-field-rules': { type: 'migration-field-rules', title: '字段清洗管道与敏感字段加密', columnSpan: 2, height: 640, subscription: defaultSubscription() },
+  'migration-scheduler': { type: 'migration-scheduler', title: '增量水位线与定时调度控制', columnSpan: 2, height: 480, subscription: defaultSubscription() },
+  'migration-audit-board': { type: 'migration-audit-board', title: '全链路日志与一致性对账审计', columnSpan: 2, height: 480, subscription: defaultSubscription() },
 };
 
-const widgetIcon = (type: WorkspaceWidgetType) => type === 'text' ? AlignLeft : type === 'mail-list' ? Mail : type === 'custom-html' ? Code2 : type === 'custom-tsx' ? FileCode2 : BarChart3;
-const widgetTypeLabel = (type: WorkspaceWidgetType) => ({ text: '文本', 'crm-query': 'CRM 查询', 'mail-list': '邮件列表', 'async-apex-dashboard': 'BI 看板', 'custom-html': '自定义 HTML', 'custom-tsx': '自定义代码组件' })[type];
+const widgetIcon = (type: WorkspaceWidgetType) =>
+  type === 'text' ? AlignLeft :
+  type === 'mail-list' ? Mail :
+  type === 'custom-html' ? Code2 :
+  type === 'custom-tsx' ? FileCode2 :
+  type === 'migration-progress-dashboard' ? Activity :
+  type === 'migration-topology' ? ArrowLeftRight :
+  type === 'migration-database' ? Database :
+  type === 'migration-object-sequencer' ? GitBranch :
+  type === 'migration-field-rules' ? Sparkles :
+  type === 'migration-scheduler' ? Clock3 :
+  type === 'migration-audit-board' ? FileSearch :
+  BarChart3;
+const widgetTypeLabel = (type: WorkspaceWidgetType) => ({
+  text: '文本',
+  'crm-query': 'CRM 查询',
+  'mail-list': '邮件列表',
+  'async-apex-dashboard': 'BI 看板',
+  'custom-html': '自定义 HTML',
+  'custom-tsx': '自定义代码组件',
+  'migration-progress-dashboard': '迁移进度大屏',
+  'migration-topology': '迁移拓扑',
+  'migration-database': 'MongoDB 存储',
+  'migration-object-sequencer': '对象依赖编排',
+  'migration-field-rules': '字段清洗规则',
+  'migration-scheduler': '增量调度',
+  'migration-audit-board': '对账审计',
+})[type] || type;
 const crmProductLabel = (type: string) => ({ neocrm: '销售易', salesforce: 'Salesforce', fxiaoke: '纷享销客', custom: '自定义 CRM' })[type] || type;
 const intervalLabel = (minutes: number) => minutes < 60 ? `每 ${minutes} 分钟` : minutes % 1440 === 0 ? `每 ${minutes / 1440} 天` : minutes % 60 === 0 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`;
-const getWidgetColumnSpan = (widget: WorkspaceWidget): WorkspaceWidgetColumnSpan => widget.columnSpan || (widget.type === 'async-apex-dashboard' ? 4 : 2);
+const getWidgetColumnSpan = (widget: WorkspaceWidget): WorkspaceWidgetColumnSpan =>
+  widget.columnSpan || (widget.type === 'async-apex-dashboard' || widget.type === 'migration-progress-dashboard' ? 4 : 2);
 const getWidgetHeight = (widget: WorkspaceWidget): WorkspaceWidgetHeight => widget.height || (widget.type === 'async-apex-dashboard' ? 640 : 480);
 const widgetColumnClasses: Record<WorkspaceWidgetColumnSpan, string> = { 1: 'sm:col-span-1 xl:col-span-1', 2: 'sm:col-span-2 xl:col-span-2', 3: 'sm:col-span-2 xl:col-span-3', 4: 'sm:col-span-2 xl:col-span-4' };
 const thumbnailColumnClasses: Record<WorkspaceWidgetColumnSpan, string> = { 1: 'col-span-1', 2: 'col-span-2', 3: 'col-span-3', 4: 'col-span-4' };
@@ -265,7 +301,24 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
     return <div className="flex h-full min-h-0 flex-col bg-slate-50">
       <header className="flex min-h-16 items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8">
         <div><h1 className="text-lg font-semibold text-slate-900">自定义工作台</h1><p className="mt-0.5 text-xs text-slate-500">业务页面与数据组件</p></div>
-        <div className="flex items-center gap-2"><button disabled={busy} onClick={() => void importPagePackage()} className="inline-flex items-center gap-1.5 rounded border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"><Upload size={14}/>导入页面包</button><button onClick={() => { setPage(makePage(activeProject?.id)); setEditing(true); setResults({}); }} className="inline-flex items-center gap-2 rounded bg-sky-700 px-3 py-2 text-xs font-medium text-white hover:bg-sky-800"><Plus size={15}/>新建页面</button></div>
+        <div className="flex items-center gap-2"><button disabled={busy} onClick={() => void importPagePackage()} className="inline-flex items-center gap-1.5 rounded border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"><Upload size={14}/>导入页面包</button><button onClick={() => {
+            const p = makePage(activeProject?.id);
+            p.name = "数据迁移与割接工作台";
+            p.description = "多 Org 拓扑、MongoDB 存储、DAG 编排、字段清洗与进度看板";
+            const plan = createDefaultMigrationPlan("生产数据迁移工程");
+            window.neoApi.migrationSavePlan?.(plan).then(() => {
+              p.widgets = buildFullMigrationSuiteWidgets(plan.id, activeProject?.id);
+              setPage(p);
+              setEditing(true);
+              setResults({});
+              showToast("success", "已生成全套组件化数据迁移工作台");
+            }).catch(() => {
+              p.widgets = buildFullMigrationSuiteWidgets(plan.id, activeProject?.id);
+              setPage(p);
+              setEditing(true);
+            });
+          }} className="inline-flex items-center gap-1.5 rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 hover:bg-indigo-100"><ArrowLeftRight size={14}/>新建数据迁移工作台</button>
+          <button onClick={() => { setPage(makePage(activeProject?.id)); setEditing(true); setResults({}); }} className="inline-flex items-center gap-2 rounded bg-sky-700 px-3 py-2 text-xs font-medium text-white hover:bg-sky-800"><Plus size={15}/>新建页面</button></div>
       </header>
       <div className="flex-1 overflow-y-auto p-5 md:p-8">
         {pages.length ? <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{pages.map((item) => <article key={item.id} className="group overflow-hidden rounded border border-slate-200 bg-white transition-colors hover:border-sky-400">
@@ -293,6 +346,13 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
         <button onClick={() => addWidget('async-apex-dashboard')} title="添加 Apex BI 看板" className="rounded p-2 text-slate-600 hover:bg-slate-100"><Activity size={16}/></button>
         <button onClick={() => addWidget('custom-html')} title="挂载应用组件库中的 HTML" className="rounded p-2 text-slate-600 hover:bg-slate-100"><Code2 size={16}/></button>
         <button onClick={() => addWidget('custom-tsx')} title="挂载应用组件库中的 TSX / TS / JS / JSX" className="rounded p-2 text-slate-600 hover:bg-slate-100"><FileCode2 size={16}/></button>
+        <button onClick={() => addWidget('migration-progress-dashboard')} title="添加数据迁移进度看板" className="rounded p-2 text-indigo-600 hover:bg-indigo-50"><Activity size={16}/></button>
+        <button onClick={() => addWidget('migration-topology')} title="添加迁移拓扑连接器" className="rounded p-2 text-sky-600 hover:bg-sky-50"><ArrowLeftRight size={16}/></button>
+        <button onClick={() => addWidget('migration-database')} title="添加 MongoDB 存储配置" className="rounded p-2 text-emerald-600 hover:bg-emerald-50"><Database size={16}/></button>
+        <button onClick={() => addWidget('migration-object-sequencer')} title="添加对象依赖编排" className="rounded p-2 text-violet-600 hover:bg-violet-50"><GitBranch size={16}/></button>
+        <button onClick={() => addWidget('migration-field-rules')} title="添加字段清洗规则" className="rounded p-2 text-amber-600 hover:bg-amber-50"><Sparkles size={16}/></button>
+        <button onClick={() => addWidget('migration-scheduler')} title="添加定时增量调度" className="rounded p-2 text-teal-600 hover:bg-teal-50"><Clock3 size={16}/></button>
+        <button onClick={() => addWidget('migration-audit-board')} title="添加对账审计看板" className="rounded p-2 text-rose-600 hover:bg-rose-50"><FileSearch size={16}/></button>
       </div>}
       <button disabled={busy} onClick={() => void run()} title="刷新所有组件" className="inline-flex items-center gap-1.5 rounded border border-slate-200 px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"><Play size={14}/>运行</button>
       <button disabled={busy} onClick={() => void sharePage(page)} title="导出页面和全部组件文件" className="inline-flex items-center gap-1.5 rounded border border-slate-200 px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"><Download size={14}/>导出包</button>
@@ -323,7 +383,16 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
               {editing && <button onClick={() => setPage({ ...page, widgets: page.widgets.filter((item) => item.id !== widget.id) })} title="移除组件" className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"><X size={15}/></button>}
             </div>
             <div className={isFullscreen ? 'min-h-0 flex-1 overflow-auto' : undefined}>
-              {widget.type === 'async-apex-dashboard' ? widget.accountId ? <div style={{ height }} className="min-h-0"><AsyncApexJobBIDashboard accountId={widget.accountId}/></div> : <div style={{ height }} className="flex items-center justify-center p-6 text-center text-sm text-slate-500">请在组件设置中绑定 Salesforce 账号。</div> : widget.type === 'text' ? <div style={{ height }} className="overflow-auto p-5">{renderWidgetResult(widget, height)}</div> : widget.type === 'custom-html' || widget.type === 'custom-tsx' ? renderWidgetResult(widget, height) : <div style={{ height }} className="min-h-0 overflow-auto">{renderWidgetResult(widget, height)}</div>}
+              {widget.type.startsWith('migration-') ? (
+                <div style={{ height }} className="min-h-0">
+                  <MigrationWidgetRenderer
+                    widget={widget}
+                    sources={sources}
+                    showToast={showToast}
+                    onUpdateWidget={(w) => void saveWidgetSettings(w)}
+                  />
+                </div>
+              ) : widget.type === 'async-apex-dashboard' ? widget.accountId ? <div style={{ height }} className="min-h-0"><AsyncApexJobBIDashboard accountId={widget.accountId}/></div> : <div style={{ height }} className="flex items-center justify-center p-6 text-center text-sm text-slate-500">请在组件设置中绑定 Salesforce 账号。</div> : widget.type === 'text' ? <div style={{ height }} className="overflow-auto p-5">{renderWidgetResult(widget, height)}</div> : widget.type === 'custom-html' || widget.type === 'custom-tsx' ? renderWidgetResult(widget, height) : <div style={{ height }} className="min-h-0 overflow-auto">{renderWidgetResult(widget, height)}</div>}
             </div>
             {settingWidgetId === widget.id && <WidgetSettingsModal
               key={settingWidgetId}
@@ -351,7 +420,21 @@ export const WorkspacePageView: React.FC<Props> = ({ showToast, activeProject })
 };
 
 const PageThumbnail: React.FC<{ page: WorkspacePage }> = ({ page }) => {
-  const colors: Record<WorkspaceWidgetType, string> = { text: 'bg-emerald-100', 'crm-query': 'bg-sky-100', 'mail-list': 'bg-amber-100', 'async-apex-dashboard': 'bg-indigo-100', 'custom-html': 'bg-cyan-100', 'custom-tsx': 'bg-violet-100' };
+  const colors: Record<WorkspaceWidgetType, string> = {
+    text: 'bg-emerald-100',
+    'crm-query': 'bg-sky-100',
+    'mail-list': 'bg-amber-100',
+    'async-apex-dashboard': 'bg-indigo-100',
+    'custom-html': 'bg-cyan-100',
+    'custom-tsx': 'bg-violet-100',
+    'migration-progress-dashboard': 'bg-indigo-100',
+    'migration-object-sequencer': 'bg-violet-100',
+    'migration-topology': 'bg-sky-100',
+    'migration-database': 'bg-emerald-100',
+    'migration-field-rules': 'bg-amber-100',
+    'migration-scheduler': 'bg-teal-100',
+    'migration-audit-board': 'bg-rose-100',
+  };
   return <div className="relative h-40 overflow-hidden bg-slate-100 p-3 transition-colors group-hover:bg-slate-50">
     <div className="pointer-events-none absolute inset-x-6 top-4 bottom-3 rounded border border-slate-200 bg-white p-2 shadow-sm">
       <div className="mb-2 flex h-3 items-center gap-1 border-b border-slate-100 pb-1"><span className="h-1.5 w-1.5 rounded-full bg-slate-300"/><span className="h-1.5 w-1.5 rounded-full bg-slate-200"/><span className="ml-2 h-1 w-16 rounded bg-slate-200"/></div>
@@ -482,7 +565,7 @@ const executionStageLabel: Record<WorkspaceExecutionLog['stage'], string> = {
   style: '样式',
   query: '数据查询',
   render: '页面渲染',
-  runtime: '运行时',
+  runtime: '运行时', migration_extract: '迁移抽取', migration_transform: '迁移清洗', migration_load: '迁移写入', migration_patch: '外键装配', migration_reconcile: '对账核验',
 };
 
 const ExecutionLogsModal: React.FC<{
